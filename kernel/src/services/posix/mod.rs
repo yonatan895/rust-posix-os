@@ -24,6 +24,12 @@ use posix_abi::*;
 use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::services::process::get_current_process;
 
+#[allow(unsafe_code)]
+#[no_mangle]
+pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
+    crate::ostd::mm::with_syscall_regs(regs, dispatch_syscall)
+}
+
 pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
     let syscall_nr = r.rax;
     let a1 = r.rdi;

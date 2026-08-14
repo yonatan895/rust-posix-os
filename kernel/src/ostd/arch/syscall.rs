@@ -116,10 +116,3 @@ pub unsafe fn syscall_init(kernel_stack_top: u64) {
     let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
     wrmsr(IA32_FMASK, fmask);
 }
-
-#[unsafe(no_mangle)]
-pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
-    crate::ostd::mm::with_syscall_regs(regs, |r| {
-        crate::services::posix::dispatch_syscall(r)
-    })
-}
