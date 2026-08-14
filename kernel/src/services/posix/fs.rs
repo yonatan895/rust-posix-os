@@ -23,10 +23,10 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let handle = {
+    let (handle, calling_pid) = {
         let proc = proc_lock.lock();
         match proc.get_fd(fd) {
-            Some(h) => h,
+            Some(h) => (h, proc.pid),
             None => return -(EBADF as isize),
         }
     };
@@ -41,7 +41,7 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     }
 
     let mut kbuf = alloc::vec![0u8; count];
-    match handle.read(&mut kbuf) {
+    match handle.read(&mut kbuf, calling_pid) {
         Ok(n) => {
             let out = match UserSlice::from_raw(buf as usize, n) {
                 Ok(s) => s,
@@ -61,10 +61,10 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let handle = {
+    let (handle, calling_pid) = {
         let proc = proc_lock.lock();
         match proc.get_fd(fd) {
-            Some(h) => h,
+            Some(h) => (h, proc.pid),
             None => return -(EBADF as isize),
         }
     };
@@ -82,7 +82,7 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
     if let Err(e) = uslice.copy_from_user(&mut kbuf) {
         return -(map_user_error(e) as isize);
     }
-    match handle.write(&kbuf) {
+    match handle.write(&kbuf, calling_pid) {
         Ok(n) => n as isize,
         Err(err) => -(err as isize),
     }

@@ -49,6 +49,27 @@ pub fn set_current_process(proc: Arc<SpinLock<Process>>) {
     *curr_guard = Some(proc);
 }
 
+/// Unblocks a list of task PIDs, transitioning their state from `Blocked` to `Ready`
+/// and enqueuing them into the scheduler's ready queue.
+///
+/// Follows ADR-0002 lock ordering: acquires `PROCESS_TABLE` then `SCHEDULER`.
+pub fn wake_tasks(pids: &[i32]) {
+    if pids.is_empty() {
+        return;
+    }
+    let table = crate::services::process::PROCESS_TABLE.lock();
+    let mut sched = SCHEDULER.lock();
+    for &pid in pids {
+        if let Some(proc_arc) = table.get(&pid) {
+            let mut proc = proc_arc.lock();
+            if proc.state == ProcessState::Blocked {
+                proc.state = ProcessState::Ready;
+                sched.add_task(proc_arc.clone());
+            }
+        }
+    }
+}
+
 /// Invoked from the timer interrupt service routine to perform round-robin preemptive scheduling.
 ///
 /// Returns the kernel stack pointer of the task selected to run next.

@@ -42,11 +42,23 @@ pub trait Inode: Send + Sync {
     fn readdir(&self) -> Result<Vec<Dirent64>, i32>;
     fn stat(&self) -> Result<Stat, i32>;
 
-    fn read_with_flags(&self, offset: usize, buf: &mut [u8], _flags: i32) -> Result<usize, i32> {
+    fn read_with_flags(
+        &self,
+        offset: usize,
+        buf: &mut [u8],
+        _flags: i32,
+        _caller_pid: i32,
+    ) -> Result<usize, i32> {
         self.read(offset, buf)
     }
 
-    fn write_with_flags(&self, offset: usize, buf: &[u8], _flags: i32) -> Result<usize, i32> {
+    fn write_with_flags(
+        &self,
+        offset: usize,
+        buf: &[u8],
+        _flags: i32,
+        _caller_pid: i32,
+    ) -> Result<usize, i32> {
         self.write(offset, buf)
     }
 
@@ -99,23 +111,25 @@ impl FileHandle {
         }
     }
 
-    pub fn read(&self, buf: &mut [u8]) -> Result<usize, i32> {
+    pub fn read(&self, buf: &mut [u8], caller_pid: i32) -> Result<usize, i32> {
         let mut offset_guard = self.offset.lock();
-        let bytes_read = self.inode.read_with_flags(*offset_guard, buf, self.flags)?;
+        let bytes_read = self
+            .inode
+            .read_with_flags(*offset_guard, buf, self.flags, caller_pid)?;
         *offset_guard += bytes_read;
         Ok(bytes_read)
     }
 
-    pub fn write(&self, buf: &[u8]) -> Result<usize, i32> {
+    pub fn write(&self, buf: &[u8], caller_pid: i32) -> Result<usize, i32> {
         let mut offset_guard = self.offset.lock();
         if self.flags & O_APPEND != 0
             && let Ok(st) = self.inode.stat()
         {
             *offset_guard = st.st_size as usize;
         }
-        let bytes_written = self
-            .inode
-            .write_with_flags(*offset_guard, buf, self.flags)?;
+        let bytes_written =
+            self.inode
+                .write_with_flags(*offset_guard, buf, self.flags, caller_pid)?;
         *offset_guard += bytes_written;
         Ok(bytes_written)
     }

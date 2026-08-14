@@ -267,8 +267,10 @@ fn test_waitpid_wnohang_semantics() {
     );
 }
 
+/// Reference specification test for pipe blocking, non-blocking (O_NONBLOCK),
+/// EOF on writer close, and -EPIPE on reader close semantics.
 fn test_pipe_blocking_and_eof_semantics() {
-    struct MockPipe {
+    struct SpecPipe {
         data: Vec<u8>,
         readers_open: usize,
         writers_open: usize,
@@ -277,7 +279,7 @@ fn test_pipe_blocking_and_eof_semantics() {
         capacity: usize,
     }
 
-    impl MockPipe {
+    impl SpecPipe {
         fn new(cap: usize) -> Self {
             Self {
                 data: Vec::new(),
@@ -302,14 +304,21 @@ fn test_pipe_blocking_and_eof_semantics() {
                 if is_nonblock {
                     return Err("EAGAIN");
                 }
-                self.read_waiters.push(caller_pid);
-                return Err("BLOCK");
+                // Blocking wait placeholder: register on read_waiters and return EAGAIN
+                if !self.read_waiters.contains(&caller_pid) {
+                    self.read_waiters.push(caller_pid);
+                }
+                return Err("EAGAIN_BLOCKING_PLACEHOLDER");
             }
+            let was_full = self.data.len() == self.capacity;
             let to_read = buf.len().min(self.data.len());
             for (i, byte) in self.data.drain(0..to_read).enumerate() {
                 buf[i] = byte;
             }
-            self.write_waiters.clear(); // Wakes writers
+            // Gated wakeup: wake a writer only if the pipe was full and gained space
+            if was_full && self.data.len() < self.capacity && !self.write_waiters.is_empty() {
+                self.write_waiters.remove(0);
+            }
             Ok(to_read)
         }
 
@@ -327,12 +336,19 @@ fn test_pipe_blocking_and_eof_semantics() {
                 if is_nonblock {
                     return Err("EAGAIN");
                 }
-                self.write_waiters.push(caller_pid);
-                return Err("BLOCK");
+                // Blocking wait placeholder: register on write_waiters and return EAGAIN
+                if !self.write_waiters.contains(&caller_pid) {
+                    self.write_waiters.push(caller_pid);
+                }
+                return Err("EAGAIN_BLOCKING_PLACEHOLDER");
             }
+            let was_empty = self.data.is_empty();
             let to_write = buf.len().min(space);
             self.data.extend_from_slice(&buf[..to_write]);
-            self.read_waiters.clear(); // Wakes readers
+            // Gated wakeup: wake readers only if the pipe was empty and gained data
+            if was_empty && !self.data.is_empty() {
+                self.read_waiters.clear();
+            }
             Ok(to_write)
         }
 
@@ -351,17 +367,20 @@ fn test_pipe_blocking_and_eof_semantics() {
         }
     }
 
-    let mut pipe = MockPipe::new(4);
+    let mut pipe = SpecPipe::new(4);
     let mut buf = [0u8; 8];
 
     // 1. Empty read with nonblock -> EAGAIN
     assert_eq!(pipe.read(&mut buf, true, 1), Err("EAGAIN"));
 
-    // 2. Empty read without nonblock -> BLOCK (adds to read_waiters)
-    assert_eq!(pipe.read(&mut buf, false, 1), Err("BLOCK"));
+    // 2. Empty read without nonblock -> EAGAIN_BLOCKING_PLACEHOLDER (registers on read_waiters)
+    assert_eq!(
+        pipe.read(&mut buf, false, 1),
+        Err("EAGAIN_BLOCKING_PLACEHOLDER")
+    );
     assert_eq!(pipe.read_waiters, vec![1]);
 
-    // 3. Write data -> unblocks readers and fills buffer
+    // 3. Write data -> gated wakeup clears read_waiters and fills buffer
     assert_eq!(pipe.write(b"abcd", false, 2), Ok(4));
     assert!(
         pipe.read_waiters.is_empty(),
@@ -371,16 +390,27 @@ fn test_pipe_blocking_and_eof_semantics() {
     // 4. Full write with nonblock -> EAGAIN
     assert_eq!(pipe.write(b"e", true, 2), Err("EAGAIN"));
 
-    // 5. Read data -> gets 4 bytes, unblocks write_waiters
+    // 5. Full write without nonblock -> EAGAIN_BLOCKING_PLACEHOLDER (registers on write_waiters)
+    assert_eq!(
+        pipe.write(b"e", false, 2),
+        Err("EAGAIN_BLOCKING_PLACEHOLDER")
+    );
+    assert_eq!(pipe.write_waiters, vec![2]);
+
+    // 6. Read data -> gets 4 bytes, gated wakeup drains one write waiter
     assert_eq!(pipe.read(&mut buf, false, 1), Ok(4));
     assert_eq!(&buf[..4], b"abcd");
+    assert!(
+        pipe.write_waiters.is_empty(),
+        "Reader failed to unblock writer"
+    );
 
-    // 6. Close writer -> reader gets EOF 0
+    // 7. Close writer -> reader gets EOF 0
     pipe.close_writer();
     assert_eq!(pipe.read(&mut buf, false, 1), Ok(0));
 
-    // 7. Close reader on new pipe -> writer gets EPIPE
-    let mut pipe2 = MockPipe::new(4);
+    // 8. Close reader on new pipe -> writer gets EPIPE
+    let mut pipe2 = SpecPipe::new(4);
     pipe2.close_reader();
     assert_eq!(pipe2.write(b"a", false, 2), Err("EPIPE"));
 }
