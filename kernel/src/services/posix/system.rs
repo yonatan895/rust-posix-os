@@ -1,14 +1,21 @@
 //! POSIX System Information and Working Directory System Calls.
+//!
+//! ADR-0001 R2: no raw user-pointer derefs here. Raw pointers arrive from
+//! the dispatcher and are converted via `super::{copy_user_path, map_user_error}`
+//! and `ostd::mm::{UserPtr, UserSlice}`.
 
 use posix_abi::*;
 use crate::services::process::get_current_process;
 use crate::services::vfs::*;
 use crate::services::audit::log_audit_event;
+use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
+use super::{copy_user_path, map_user_error};
 
 pub fn sys_uname(buf: *mut Utsname) -> isize {
-    if buf.is_null() {
-        return -(EFAULT as isize);
-    }
+    let out = match UserPtr::<Utsname>::from_raw(buf as usize) {
+        Ok(p) => p,
+        Err(e) => return -(map_user_error(e) as isize),
+    };
     let mut uts = Utsname::default();
     let sysname = b"RustPOSIX\0";
     let release = b"1.0.0-framekernel\0";
@@ -20,14 +27,17 @@ pub fn sys_uname(buf: *mut Utsname) -> isize {
     uts.version[..version.len()].copy_from_slice(version);
     uts.machine[..machine.len()].copy_from_slice(machine);
 
-    unsafe { *buf = uts; }
-    0
+    match out.write(uts) {
+        Ok(()) => 0,
+        Err(e) => -(map_user_error(e) as isize),
+    }
 }
 
 pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
-    if info.is_null() {
-        return -(EFAULT as isize);
-    }
+    let out = match UserPtr::<Sysinfo>::from_raw(info as usize) {
+        Ok(p) => p,
+        Err(e) => return -(map_user_error(e) as isize),
+    };
     crate::services::monitor::update_system_metrics();
     let mon = crate::services::monitor::SYSTEM_MONITOR.lock();
 
@@ -40,8 +50,10 @@ pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
     si.procs = mon.total_processes as u16;
     si.mem_unit = 1;
 
-    unsafe { *info = si; }
-    0
+    match out.write(si) {
+        Ok(()) => 0,
+        Err(e) => -(map_user_error(e) as isize),
+    }
 }
 
 pub fn sys_getcwd(buf: *mut u8, size: usize) -> isize {
@@ -53,20 +65,28 @@ pub fn sys_getcwd(buf: *mut u8, size: usize) -> isize {
     if cwd_bytes.len() + 1 > size {
         return -(ERANGE as isize);
     }
-    unsafe {
-        core::ptr::copy_nonoverlapping(cwd_bytes.as_ptr(), buf, cwd_bytes.len());
-        *buf.add(cwd_bytes.len()) = 0;
+    let mut kbuf = [0u8; USER_STR_MAX];
+    if cwd_bytes.len() + 1 > kbuf.len() {
+        return -(ERANGE as isize);
     }
-    buf as isize
+    kbuf[..cwd_bytes.len()].copy_from_slice(cwd_bytes);
+    kbuf[cwd_bytes.len()] = 0;
+
+    let out = match UserSlice::from_raw(buf as usize, cwd_bytes.len() + 1) {
+        Ok(s) => s,
+        Err(e) => return -(map_user_error(e) as isize),
+    };
+    match out.copy_to_user(&kbuf[..cwd_bytes.len() + 1]) {
+        Ok(_) => buf as isize,
+        Err(e) => -(map_user_error(e) as isize),
+    }
 }
 
 pub fn sys_chdir(path_ptr: *const u8) -> isize {
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_user_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let proc_lock = match get_current_process() {

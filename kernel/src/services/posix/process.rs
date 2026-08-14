@@ -4,6 +4,8 @@ use alloc::sync::Arc;
 use posix_abi::*;
 use crate::services::process::*;
 use crate::services::ipc::SIGNALS;
+use crate::ostd::mm::{UserPtr, USER_STR_MAX};
+use super::{copy_user_path, map_user_error};
 
 pub fn sys_fork() -> isize {
     let parent_lock = match get_current_process() {
@@ -30,12 +32,10 @@ pub fn sys_fork() -> isize {
 }
 
 pub fn sys_execve(path_ptr: *const u8) -> isize {
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_user_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let proc_lock = match get_current_process() {
@@ -75,7 +75,13 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, _options: i32) -> isize {
             drop(proc);
             table.remove(&target_pid);
             if !status_ptr.is_null() {
-                unsafe { *status_ptr = (exit_code & 0xff) << 8; }
+                let out = match UserPtr::<i32>::from_raw(status_ptr as usize) {
+                    Ok(p) => p,
+                    Err(e) => return -(map_user_error(e) as isize),
+                };
+                if let Err(e) = out.write((exit_code & 0xff) << 8) {
+                    return -(map_user_error(e) as isize);
+                }
             }
             return target_pid as isize;
         }

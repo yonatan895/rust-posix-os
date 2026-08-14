@@ -1,0 +1,23 @@
+name: TCB Boundary
+
+on: [push, pull_request]
+
+jobs:
+  unsafe-boundary:
+    name: No unsafe code in de-privileged services
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Enforce ADR-0001 R1 (kernel/src/services is 100% safe Rust)
+        run: |
+          set -euo pipefail
+          # Matches actual unsafe usage, not prose: `unsafe {`, `unsafe fn`,
+          # `unsafe impl`, `unsafe extern`. Doc text like
+          # `#![deny(unsafe_code)]` does not match.
+          pattern='unsafe[[:space:]]*\{|unsafe[[:space:]]+(fn|impl|extern)'
+          if grep -RnE --include='*.rs' "$pattern" kernel/src/services/; then
+            echo "::error::unsafe code in kernel/src/services violates ADR-0001 R1."
+            echo "::error::Move it behind a safe ostd API — see docs/adr/0001-tcb-boundary.md"
+            exit 1
+          fi
+          echo "TCB boundary intact: no unsafe in kernel/src/services."
