@@ -52,6 +52,7 @@ ADR-0001:
 - R5. Every `unsafe` block has `// SAFETY:` stating why it is sound.
 
 ADR-0002: locking rules (hierarchy, IRQ discipline, no user memory under spinlock) live in docs/adr/0002-locking.md.
+ADR-0003: task model (1:1 process mapping, kernel stack & TSS discipline, preemption) lives in docs/adr/0003-task-model.md.
 
 A change that needs two layers is two PRs (ostd primitive first).
 
@@ -105,7 +106,7 @@ Still open (order):
 2. `VmSpace`: `Vec<Vma>`; mmap/munmap/exit/fork.
 3. `sys_fork` only after (2).
 4. SysV stack is done; coreutils argv is a separate userland PR.
-5. One task model documented in `ostd/task`.
+5. Task model documented in docs/adr/0003-task-model.md.
 
 ## Checklist
 
