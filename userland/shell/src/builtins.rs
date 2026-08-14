@@ -405,6 +405,10 @@ pub unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
 }
 
 pub unsafe fn get_basename(path: *const u8) -> *const u8 {
+    if path.is_null() {
+        return b"\0".as_ptr();
+    }
+
     let mut last_slash = path;
     let mut ptr = path;
     while *ptr != 0 {

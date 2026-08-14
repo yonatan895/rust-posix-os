@@ -56,6 +56,10 @@ pub unsafe fn parse_stage(stage_str: *mut u8) -> Stage {
     let mut i = 0;
     while i < raw_argc {
         let token = raw_argv[i];
+        if token.is_null() {
+            i += 1;
+            continue;
+        }
         let (b0, b1) = unsafe {
             let b0 = *token;
             let b1 = if b0 != 0 { *token.add(1) } else { 0 };
