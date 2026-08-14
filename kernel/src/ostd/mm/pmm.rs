@@ -145,6 +145,35 @@ impl PhysicalMemoryManager {
         None
     }
 
+    pub fn alloc_contiguous_frames(&mut self, count: usize) -> Option<usize> {
+        if count == 0 {
+            return None;
+        }
+        if count == 1 {
+            return self.alloc_frame();
+        }
+        let mut run_start = 1;
+        let mut run_len = 0;
+        for f in 1..self.total_frames {
+            if !self.test_bit(f) {
+                if run_len == 0 {
+                    run_start = f;
+                }
+                run_len += 1;
+                if run_len == count {
+                    for idx in run_start..(run_start + count) {
+                        self.set_bit(idx, true);
+                    }
+                    self.free_frames = self.free_frames.saturating_sub(count);
+                    return Some(run_start * PAGE_SIZE);
+                }
+            } else {
+                run_len = 0;
+            }
+        }
+        None
+    }
+
     pub fn free_frame(&mut self, phys_addr: usize) {
         let frame_idx = phys_addr / PAGE_SIZE;
         if frame_idx < self.total_frames && self.test_bit(frame_idx) {
@@ -159,6 +188,10 @@ impl PhysicalMemoryManager {
 
 pub fn alloc_frame() -> Option<usize> {
     PMM.lock().as_mut().and_then(|pmm| pmm.alloc_frame())
+}
+
+pub fn alloc_contiguous_frames(count: usize) -> Option<usize> {
+    PMM.lock().as_mut().and_then(|pmm| pmm.alloc_contiguous_frames(count))
 }
 
 pub fn free_frame(phys_addr: usize) {

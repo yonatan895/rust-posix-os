@@ -7,7 +7,7 @@ pub mod user;
 pub mod pod;
 pub mod boot;
 
-pub use pmm::{alloc_frame, free_frame, get_pmm_stats, PAGE_SIZE};
+pub use pmm::{alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats, PAGE_SIZE};
 pub use vmm::{phys_to_virt, virt_to_phys, zero_phys_frame, VmSpace, PAGE_PRESENT, PAGE_WRITABLE, PAGE_USER, PAGE_NX};
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
 pub use user::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SPACE_END, USER_STR_MAX};
@@ -23,12 +23,10 @@ pub unsafe fn mm_init(
     pmm::pmm_init(memmap_response, hhdm_offset);
     vmm::vmm_init(hhdm_offset);
 
-    // Allocate initial kernel heap pages
+    // Allocate contiguous physical frames for the kernel heap
     let heap_pages = heap::HEAP_SIZE / PAGE_SIZE;
-    let heap_phys_start = alloc_frame().expect("Failed to allocate heap start frame");
-    for _ in 1..heap_pages {
-        alloc_frame().expect("Failed to allocate heap frame");
-    }
+    let heap_phys_start = alloc_contiguous_frames(heap_pages)
+        .expect("Failed to allocate contiguous frames for kernel heap");
     let heap_virt_start = phys_to_virt(heap_phys_start);
     HEAP_ALLOCATOR.init(heap_virt_start, heap::HEAP_SIZE);
 }
