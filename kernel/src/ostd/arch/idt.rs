@@ -2,7 +2,7 @@
 
 use super::gdt::KERNEL_CODE_SEL;
 use super::read_cr2;
-use core::arch::asm;
+use core::arch::{asm, naked_asm};
 use core::mem::size_of;
 
 #[repr(C, packed)]
@@ -66,6 +66,33 @@ pub struct InterruptFrame {
     pub ss: u64,
 }
 
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct TrapFrame {
+    // General Purpose Registers pushed by ISR stub
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub r11: u64,
+    pub r10: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub rbp: u64,
+    pub rdi: u64,
+    pub rsi: u64,
+    pub rdx: u64,
+    pub rcx: u64,
+    pub rbx: u64,
+    pub rax: u64,
+    // Hardware InterruptFrame pushed by CPU
+    pub rip: u64,
+    pub cs: u64,
+    pub rflags: u64,
+    pub rsp: u64,
+    pub ss: u64,
+}
+
 // Handlers in Rust
 
 /// Rust handler for Page Fault (#PF) exceptions.
@@ -109,25 +136,116 @@ pub unsafe extern "C" fn rust_general_protection_fault(
 
 pub static mut TIMER_TICKS: u64 = 0;
 
+/// Rust timer tick handler called by `timer_interrupt_stub`.
+///
+/// Increments system ticks, acknowledges the interrupt controller (EOI),
+/// and delegates to the scheduler for preemptive multitasking.
+///
+/// Returns the kernel stack pointer for the process that should resume execution.
 #[unsafe(no_mangle)]
-pub extern "C" fn rust_timer_handler() {
+pub extern "C" fn rust_timer_tick_handler(current_rsp: usize) -> usize {
     unsafe {
         TIMER_TICKS = TIMER_TICKS.wrapping_add(1);
+        crate::ostd::irq::send_eoi(0);
     }
+    crate::services::scheduler::timer_tick_schedule(current_rsp)
 }
 
-/// Loads the Interrupt Descriptor Table (IDT) register into the CPU.
+/// Naked assembly ISR entry stub for the timer interrupt (vector 0x20).
+///
+/// # Safety
+///
+/// Must only be jumped to directly by the CPU hardware during interrupt vector 0x20 handling.
+#[unsafe(naked)]
+pub unsafe extern "C" fn timer_interrupt_stub() {
+    naked_asm!(
+        // Push GPRs in reverse order of TrapFrame
+        "push rax",
+        "push rbx",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // rdi = current stack pointer (pointing to TrapFrame)
+        "mov rdi, rsp",
+        "call rust_timer_tick_handler",
+        // Switch to returned stack pointer (handles preemptive process switch)
+        "mov rsp, rax",
+        // Pop GPRs
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
+        "iretq",
+    );
+}
+
+/// Naked assembly entry stub for the General Protection Fault (#GP, vector 0x0D).
+///
+/// # Safety
+///
+/// Must only be jumped to directly by CPU hardware during exception vector 0x0D handling.
+#[unsafe(naked)]
+pub unsafe extern "C" fn gp_fault_stub() {
+    naked_asm!(
+        "mov rsi, [rsp]",     // error code
+        "lea rdi, [rsp + 8]", // InterruptFrame pointer
+        "call rust_general_protection_fault",
+        "iretq",
+    );
+}
+
+/// Naked assembly entry stub for the Page Fault (#PF, vector 0x0E).
+///
+/// # Safety
+///
+/// Must only be jumped to directly by CPU hardware during exception vector 0x0E handling.
+#[unsafe(naked)]
+pub unsafe extern "C" fn page_fault_stub() {
+    naked_asm!(
+        "mov rsi, [rsp]",     // error code
+        "lea rdi, [rsp + 8]", // InterruptFrame pointer
+        "call rust_page_fault_handler",
+        "iretq",
+    );
+}
+
+/// Loads the Interrupt Descriptor Table (IDT) register into the CPU and arms exception & timer vectors.
 ///
 /// # Safety
 ///
 /// Must be invoked during single-threaded boot initialization.
 pub unsafe fn idt_init() {
-    let descriptor = IdtDescriptor {
-        limit: (size_of::<Idt>() - 1) as u16,
-        base: &raw const GLOBAL_IDT as u64,
-    };
-
     unsafe {
+        GLOBAL_IDT.entries[0x0D].set_handler(gp_fault_stub as *const () as usize, 0, 0); // #GP
+        GLOBAL_IDT.entries[0x0E].set_handler(page_fault_stub as *const () as usize, 0, 0); // #PF
+        GLOBAL_IDT.entries[0x20].set_handler(timer_interrupt_stub as *const () as usize, 0, 0); // PIT Timer IRQ0
+
+        let descriptor = IdtDescriptor {
+            limit: (size_of::<Idt>() - 1) as u16,
+            base: &raw const GLOBAL_IDT as u64,
+        };
+
         asm!("lidt [{}]", in(reg) &descriptor, options(nostack));
     }
 }

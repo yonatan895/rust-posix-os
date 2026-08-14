@@ -31,12 +31,17 @@ pub struct Process {
     pub entry_point: usize,
     pub user_stack_top: usize,
     pub mmap_next_vaddr: usize,
+    pub kernel_stack: Vec<u8>,
+    pub saved_kernel_rsp: usize,
+    pub has_started: bool,
 }
 
 pub const DEFAULT_MMAP_BASE: usize = 0x6000_0000;
 
 impl Process {
     pub fn new(pid: i32, ppid: i32, cwd: String) -> Self {
+        let kernel_stack = alloc::vec![0u8; crate::ostd::task::KERNEL_STACK_SIZE];
+        let saved_kernel_rsp = kernel_stack.as_ptr() as usize + kernel_stack.len();
         Self {
             pid,
             ppid,
@@ -48,7 +53,14 @@ impl Process {
             entry_point: 0,
             user_stack_top: 0,
             mmap_next_vaddr: DEFAULT_MMAP_BASE,
+            kernel_stack,
+            saved_kernel_rsp,
+            has_started: false,
         }
+    }
+
+    pub fn kernel_stack_top(&self) -> u64 {
+        self.kernel_stack.as_ptr() as u64 + self.kernel_stack.len() as u64
     }
 
     pub fn alloc_fd(&mut self, handle: Arc<FileHandle>) -> Result<i32, i32> {
@@ -94,6 +106,13 @@ impl Process {
         self.entry_point = loaded.entry_point;
         self.user_stack_top = loaded.user_stack_top;
         self.mmap_next_vaddr = DEFAULT_MMAP_BASE;
+
+        self.saved_kernel_rsp = crate::ostd::task::init_user_kernel_stack(
+            &mut self.kernel_stack,
+            self.entry_point,
+            self.user_stack_top,
+        );
+        self.has_started = true;
 
         Ok(())
     }

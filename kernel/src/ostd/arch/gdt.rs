@@ -130,7 +130,7 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
     }
 }
 
-/// Sets the privilege level 0 stack pointer (RSP0) in the active TSS.
+/// Sets the privilege level 0 stack pointer (RSP0) in the active TSS and syscall MSR context.
 ///
 /// # Safety
 ///
@@ -138,5 +138,6 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
 pub unsafe fn set_kernel_stack(stack_top: u64) {
     unsafe {
         GLOBAL_TSS.rsp0 = stack_top;
+        super::syscall::set_syscall_kernel_stack(stack_top);
     }
 }
