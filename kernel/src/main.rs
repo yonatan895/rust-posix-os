@@ -5,6 +5,7 @@
 extern crate alloc;
 
 pub mod ostd;
+#[deny(unsafe_code)]
 pub mod services;
 
 use core::panic::PanicInfo;

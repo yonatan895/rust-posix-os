@@ -1,4 +1,6 @@
-//! De-Privileged OS Services - 100% Safe Rust (#![deny(unsafe_code)]).
+#![deny(unsafe_code)]
+
+//! De-Privileged OS Services - 100% Safe Rust.
 //!
 //! All high-level operating system functionality is implemented in this module
 //! in safe Rust, using only the safe abstractions exposed by the OSTD framework.
