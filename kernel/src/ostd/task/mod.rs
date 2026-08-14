@@ -39,6 +39,25 @@ pub fn switch_cpu_context(prev_ctx: &mut CpuContext, next_ctx: &CpuContext) {
     }
 }
 
+/// Safely performs a task switch from `prev_saved_rsp` to `next_saved_rsp` under interrupt masking.
+pub fn switch_tasks(prev_saved_rsp: &mut usize, next_saved_rsp: usize) {
+    unsafe {
+        crate::ostd::arch::cli();
+        voluntary_task_switch(prev_saved_rsp as *mut usize, next_saved_rsp);
+        crate::ostd::arch::sti();
+    }
+}
+
+/// Kernel idle loop running with interrupts enabled.
+pub extern "C" fn kernel_idle_loop() -> ! {
+    loop {
+        unsafe {
+            crate::ostd::arch::sti();
+            crate::ostd::arch::hlt();
+        }
+    }
+}
+
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 3 userland entry.
 pub fn init_user_kernel_stack(
     stack: &mut [u8],
@@ -106,6 +125,70 @@ pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
         };
     }
     frame_ptr as usize
+}
+
+/// Performs a voluntary task switch by creating a kernel-mode `TrapFrame` on the outgoing stack
+/// and restoring the incoming task's stack via standard `TrapFrame` / `iretq` execution.
+///
+/// # Safety
+///
+/// `prev_saved_rsp` must be a valid pointer to store the outgoing RSP.
+/// `next_saved_rsp` must point to a valid `TrapFrame` on the incoming task's kernel stack.
+#[unsafe(naked)]
+pub unsafe extern "C" fn voluntary_task_switch(
+    _prev_saved_rsp: *mut usize,
+    _next_saved_rsp: usize,
+) {
+    naked_asm!(
+        // Push synthetic TrapFrame for returning to kernel mode (CS = 0x08, SS = 0x10)
+        // Hardware frame: [SS, RSP, RFLAGS, CS, RIP]
+        "push 0x10", // SS = KERNEL_DATA_SEL (0x10)
+        "lea rax, [rsp + 8]",
+        "push rax",  // RSP (stack before push)
+        "pushfq",    // RFLAGS
+        "push 0x08", // CS = KERNEL_CODE_SEL (0x08)
+        "lea rax, [1f + rip]",
+        "push rax", // RIP (resume point at label 1)
+        // 15 GPRs: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15
+        "push 0", // rax
+        "push rbx",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // Save current RSP into *prev_saved_rsp (rdi)
+        "mov [rdi], rsp",
+        // Load next_saved_rsp (rsi) into RSP
+        "mov rsp, rsi",
+        // Resume next task via unified TrapFrame pop + iretq
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
+        "pop rax",
+        "iretq",
+        "1:",
+        "ret",
+    );
 }
 
 /// Performs an architectural CPU register context switch between two threads.

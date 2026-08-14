@@ -9,6 +9,7 @@ use core::sync::atomic::Ordering;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WakeReason {
     Woken,
+    // TODO(signals): WakeReason::Interrupted for EINTR delivery
     Interrupted,
 }
 
@@ -48,11 +49,41 @@ impl Default for Scheduler {
 
 pub static SCHEDULER: SpinLock<Scheduler> = SpinLock::new(Scheduler::new());
 pub static CURRENT_PROCESS: SpinLock<Option<Arc<SpinLock<Process>>>> = SpinLock::new(None);
+pub static IDLE_TASK: SpinLock<Option<Arc<SpinLock<Process>>>> = SpinLock::new(None);
 
 /// Sets the initial running process on the CPU.
 pub fn set_current_process(proc: Arc<SpinLock<Process>>) {
     let mut curr_guard = CURRENT_PROCESS.lock();
     *curr_guard = Some(proc);
+}
+
+/// Registers the PID 0 idle task descriptor.
+pub fn set_idle_task(idle: Arc<SpinLock<Process>>) {
+    *IDLE_TASK.lock() = Some(idle);
+}
+
+/// Marks the current running task as `Blocked` (unless it is already in a terminal state like `Zombie`).
+///
+/// Used in mark-then-recheck sequences to prevent lost wakeup race conditions.
+pub fn mark_current_blocked() {
+    let curr_guard = CURRENT_PROCESS.lock();
+    if let Some(ref proc_arc) = *curr_guard {
+        let mut proc = proc_arc.lock();
+        if proc.state == ProcessState::Running {
+            proc.state = ProcessState::Blocked;
+        }
+    }
+}
+
+/// Restores the current task's state to `Running` if a condition check succeeded after marking blocked.
+pub fn mark_current_running() {
+    let curr_guard = CURRENT_PROCESS.lock();
+    if let Some(ref proc_arc) = *curr_guard {
+        let mut proc = proc_arc.lock();
+        if proc.state == ProcessState::Blocked {
+            proc.state = ProcessState::Running;
+        }
+    }
 }
 
 /// Unblocks a list of task PIDs, transitioning their state from `Blocked` to `Ready`
@@ -76,14 +107,11 @@ pub fn wake_tasks(pids: &[i32]) {
     }
 }
 
-/// Voluntarily blocks the current process, transitioning its state to `Blocked`
-/// and switching CPU context to the next ready task (or PID 0 Idle task).
+/// Switches CPU execution away from the current task to the next ready task.
 ///
-/// # Concurrency & Lock Ordering (ADR-0002)
-///
-/// Callers MUST release all lower-tier locks (e.g. Inode, VFS, RamFs) BEFORE calling `block_current()`.
-/// `block_current()` only acquires `SCHEDULER` and individual process locks in strict D1 order.
-pub fn block_current() -> WakeReason {
+/// Assumes `mark_current_blocked()` has already been called if the task is blocking.
+/// Operates strictly within Scheduler tier locks (ADR-0002).
+pub fn switch_out_current() -> WakeReason {
     let mut sched = SCHEDULER.lock();
     let mut curr_guard = CURRENT_PROCESS.lock();
 
@@ -92,20 +120,16 @@ pub fn block_current() -> WakeReason {
         None => return WakeReason::Woken,
     };
 
-    // Transition current task to Blocked state (do not re-add to ready_queue)
-    {
-        let mut prev_proc = prev_proc_arc.lock();
-        prev_proc.state = ProcessState::Blocked;
-    }
-
-    // Pick next ready task, or fall back to PID 0 (Idle task)
+    // Pick next ready task, or fall back to PID 0 (Idle task) without querying PROCESS_TABLE
     let next_proc_arc = match sched.ready_queue.pop_front() {
         Some(p) => p,
-        None => match crate::services::process::PROCESS_TABLE.lock().get(&0) {
+        None => match IDLE_TASK.lock().as_ref() {
             Some(idle) => idle.clone(),
             None => {
                 let mut prev_proc = prev_proc_arc.lock();
-                prev_proc.state = ProcessState::Running;
+                if prev_proc.state == ProcessState::Blocked {
+                    prev_proc.state = ProcessState::Running;
+                }
                 drop(prev_proc);
                 *curr_guard = Some(prev_proc_arc);
                 return WakeReason::Woken;
@@ -113,31 +137,36 @@ pub fn block_current() -> WakeReason {
         },
     };
 
-    let (mut prev_ctx, next_ctx) = {
-        let prev_proc = prev_proc_arc.lock();
+    let mut prev_saved_rsp = 0usize;
+    let next_saved_rsp = {
         let mut next_proc = next_proc_arc.lock();
-
         next_proc.state = ProcessState::Running;
         crate::ostd::task::switch_active_kernel_stack(next_proc.kernel_stack_top());
         if let Some(ref vm) = next_proc.vm_space {
             vm.activate();
         }
         crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
-
-        (prev_proc.cpu_context, next_proc.cpu_context)
+        next_proc.saved_kernel_rsp
     };
 
-    *curr_guard = Some(next_proc_arc.clone());
+    *curr_guard = Some(next_proc_arc);
 
     drop(curr_guard);
     drop(sched);
 
-    // Architectural CPU register context switch
-    crate::ostd::task::switch_cpu_context(&mut prev_ctx, &next_ctx);
+    // Architectural task switch via unified TrapFrame / iretq
+    crate::ostd::task::switch_tasks(&mut prev_saved_rsp, next_saved_rsp);
 
-    prev_proc_arc.lock().cpu_context = prev_ctx;
+    // Write back saved stack pointer on the outgoing task PCB
+    prev_proc_arc.lock().saved_kernel_rsp = prev_saved_rsp;
 
     WakeReason::Woken
+}
+
+/// Voluntarily blocks the current process and switches CPU context to the next ready task.
+pub fn block_current() -> WakeReason {
+    mark_current_blocked();
+    switch_out_current()
 }
 
 /// Voluntarily yields the CPU quantum to the next ready task.
@@ -165,22 +194,22 @@ pub fn schedule_yield() {
 
     {
         let mut prev_proc = prev_proc_arc.lock();
-        prev_proc.state = ProcessState::Ready;
+        if prev_proc.state == ProcessState::Running {
+            prev_proc.state = ProcessState::Ready;
+        }
         sched.ready_queue.push_back(prev_proc_arc.clone());
     }
 
-    let (mut prev_ctx, next_ctx) = {
-        let prev_proc = prev_proc_arc.lock();
+    let mut prev_saved_rsp = 0usize;
+    let next_saved_rsp = {
         let mut next_proc = next_proc_arc.lock();
-
         next_proc.state = ProcessState::Running;
         crate::ostd::task::switch_active_kernel_stack(next_proc.kernel_stack_top());
         if let Some(ref vm) = next_proc.vm_space {
             vm.activate();
         }
         crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
-
-        (prev_proc.cpu_context, next_proc.cpu_context)
+        next_proc.saved_kernel_rsp
     };
 
     *curr_guard = Some(next_proc_arc);
@@ -188,8 +217,8 @@ pub fn schedule_yield() {
     drop(curr_guard);
     drop(sched);
 
-    crate::ostd::task::switch_cpu_context(&mut prev_ctx, &next_ctx);
-    prev_proc_arc.lock().cpu_context = prev_ctx;
+    crate::ostd::task::switch_tasks(&mut prev_saved_rsp, next_saved_rsp);
+    prev_proc_arc.lock().saved_kernel_rsp = prev_saved_rsp;
 }
 
 /// Invoked from the timer interrupt service routine to perform round-robin preemptive scheduling.
@@ -216,7 +245,9 @@ pub fn timer_tick_schedule(current_rsp: usize) -> usize {
     if let Some(ref prev_proc_arc) = prev_proc_opt {
         let mut prev_proc = prev_proc_arc.lock();
         prev_proc.saved_kernel_rsp = current_rsp;
-        prev_proc.state = ProcessState::Ready;
+        if prev_proc.state == ProcessState::Running {
+            prev_proc.state = ProcessState::Ready;
+        }
         drop(prev_proc);
         sched.ready_queue.push_back(prev_proc_arc.clone());
     }

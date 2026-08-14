@@ -59,6 +59,7 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
         let mut has_children = false;
         let mut reaped_pid = None;
         let mut exit_code = 0;
+        let mut should_switch = false;
 
         {
             let mut table = PROCESS_TABLE.lock();
@@ -98,8 +99,37 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
 
             if let Some(target) = reaped_pid {
                 table.remove(&target);
+            } else if has_children {
+                if options & WNOHANG != 0 {
+                    return 0;
+                }
+                // Mark current process as Blocked under table lock
+                crate::services::scheduler::mark_current_blocked();
+
+                // Re-check to close lost-wakeup race with sys_exit
+                let mut zombie_found = false;
+                for (&p, proc_arc) in table.iter() {
+                    let proc = proc_arc.lock();
+                    if proc.ppid == calling_pid && proc.state == ProcessState::Zombie {
+                        zombie_found = true;
+                        reaped_pid = Some(p);
+                        exit_code = proc.exit_code;
+                        break;
+                    }
+                }
+
+                if zombie_found {
+                    crate::services::scheduler::mark_current_running();
+                    if let Some(target) = reaped_pid {
+                        table.remove(&target);
+                    }
+                } else {
+                    should_switch = true;
+                }
+            } else {
+                return -(ECHILD as isize);
             }
-        } // PROCESS_TABLE lock dropped before writing to user memory or blocking
+        } // PROCESS_TABLE lock dropped before writing to user memory or switching
 
         if let Some(target) = reaped_pid {
             if !status_ptr.is_null() {
@@ -114,19 +144,8 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
             return target as isize;
         }
 
-        // No zombie child found
-        if has_children {
-            if options & WNOHANG != 0 {
-                // POSIX WNOHANG: Children exist but none have changed state -> return 0
-                return 0;
-            } else {
-                // Blocking wait: sleep until woken by child exit
-                crate::services::scheduler::block_current();
-                // Woken! Loop back to re-check PROCESS_TABLE
-            }
-        } else {
-            // No unwaited children exist -> -ECHILD
-            return -(ECHILD as isize);
+        if should_switch {
+            crate::services::scheduler::switch_out_current();
         }
     }
 }
@@ -161,8 +180,12 @@ pub fn sys_exit(code: i32) -> isize {
         crate::services::scheduler::wake_tasks(&[ppid]);
     }
 
-    crate::services::scheduler::block_current();
-    0
+    crate::services::scheduler::switch_out_current();
+
+    // Exited process never returns to userland
+    loop {
+        crate::services::scheduler::schedule_yield();
+    }
 }
 
 pub fn sys_kill(pid: i32, sig: i32) -> isize {
