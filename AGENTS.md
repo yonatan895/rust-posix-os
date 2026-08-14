@@ -50,6 +50,7 @@ ADR-0001:
 - R3. Boot protocol only in `ostd::limine`. Services take `BootBlob`, never `Limine*`.
 - R4. Address-space / context switch only in `ostd`.
 - R5. Every `unsafe` block has `// SAFETY:` stating why it is sound.
+- R6. A change that touches scheduler, context switch, IDT, or return-to-user paths is not mergeable on host-side tests alone. The QEMU smoke job must run and pass; do not merge on a skipped QEMU job.
 
 ADR-0002: locking rules (hierarchy, IRQ discipline, no user memory under spinlock) live in docs/adr/0002-locking.md.
 ADR-0003: task model (1:1 process mapping, kernel stack & TSS discipline, preemption) lives in docs/adr/0003-task-model.md.
@@ -86,6 +87,15 @@ git push -u origin HEAD
 # open PR → main
 ```
 
+## Bug patterns seen in review (do not reintroduce)
+
+- P1. Calling up the lock hierarchy from a lower tier (e.g. PROCESS_TABLE under an Inode lock). Smell: `wake_*` or `get_current_process()` called with any lock held.
+- P2. Saving resumption state into a stack local, written back to the PCB after resume. Circular: resume needs the PCB value first. Store into the PCB directly.
+- P3. `if state == X { state = Y; }` followed by an unconditional queue push. The push belongs inside the guard.
+- P4. User-stack frame protocols where the return path pops bytes the restore code doesn't account for (ret pops the restorer → frame base is rsp-8, not rsp).
+- P5. Waking a blocked task without the woken syscall checking why it woke (EINTR). Every wake must be matched by a pending-condition check at the resume site.
+- P6. Cleanup walking a metadata list (VMAs) instead of ground truth (page tables).
+
 ## Architecture
 
 ```
@@ -118,3 +128,12 @@ Still open (order):
 - [ ] Real test (not an xtask `[PASS]` string); QEMU string if user-visible
 - [ ] `unsafe` only in `ostd/`; `ostd` does not import `services`
 - [ ] Caps + fail-closed on user lengths and boot responses
+- [ ] Lock discipline: for every `.lock()` you wrote or moved, listed what is already held and named the tier; acquisition follows ADR-0002 D1 order
+- [ ] State machines: every state transition is guarded (never overwrite terminal states like Zombie); the guard and ALL its side effects (requeue, wake, notify) live in the same conditional block
+- [ ] Blocking paths use mark → register → re-check → sleep; every wake site has a corresponding blocked-state producer (grepped for both halves)
+- [ ] Save/restore and frame protocols: traced the full round trip in BOTH directions with exact arithmetic (rsp deltas, popped slots, offsets); resumption state read by another path is stored in shared state BEFORE the switch point, never in a stack local written back after
+- [ ] Implicit state at every context-switch boundary: enumerated RFLAGS, CR3, TLB, held locks; documented who restores each and when
+- [ ] Resource lifecycle: cleanup driven by ground truth (page tables, allocator bookkeeping), not auxiliary metadata (VMA lists, caches); every alloc has a verified free; partial-construction failure paths traced
+- [ ] POSIX semantics: checked the man page for every branch (error codes, default signal actions, edge cases); cited the section in a comment
+- [ ] No silent contract violations: a deferred path returns an honest -ENOSYS or the PR is retitled to its actual scope; a blocking fd never returns -EAGAIN
+- [ ] Tests: spec/mock tests mirror the real control flow (loops, re-checks, retries); a behavior change is a SEMANTIC test change, not a label rename; switching / return-to-user / IDT changes have a green QEMU run, not a skipped one
