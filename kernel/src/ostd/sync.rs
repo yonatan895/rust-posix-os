@@ -66,6 +66,15 @@ impl<T> SpinLock<T> {
     }
 }
 
+impl<T> SpinLockGuard<'_, T> {
+    /// Unlocks the spinlock without restoring the CPU RFLAGS interrupt flag (leaves interrupts masked).
+    pub fn unlock_without_restoring_interrupts(mut self) {
+        self.lock.lock.store(false, Ordering::Release);
+        self.rflags = 0;
+        core::mem::forget(self);
+    }
+}
+
 impl<T> Deref for SpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {

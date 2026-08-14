@@ -180,11 +180,9 @@ pub fn sys_exit(code: i32) -> isize {
         crate::services::scheduler::wake_tasks(&[ppid]);
     }
 
-    crate::services::scheduler::switch_out_current();
-
-    // Exited process never returns to userland
+    // Exited process never returns to userland and never re-enters the ready queue
     loop {
-        crate::services::scheduler::schedule_yield();
+        crate::services::scheduler::switch_out_current();
     }
 }
 

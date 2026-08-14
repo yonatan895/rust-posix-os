@@ -121,8 +121,8 @@ pub fn wake_tasks(pids: &[i32]) {
 
 /// Switches CPU execution away from the current task to the next ready task.
 ///
-/// Assumes `mark_current_blocked()` has already been called if the task is blocking.
-/// Operates strictly within Scheduler tier locks (ADR-0002).
+/// Caller must have set the outgoing state (Blocked via mark_current_blocked, or a terminal state like Zombie)
+/// before calling. Operates strictly within Scheduler tier locks (ADR-0002).
 pub fn switch_out_current() -> WakeReason {
     let mut sched = SCHEDULER.lock();
     let mut curr_guard = CURRENT_PROCESS.lock();
@@ -162,10 +162,15 @@ pub fn switch_out_current() -> WakeReason {
 
     *curr_guard = Some(next_proc_arc);
 
-    let prev_proc = prev_proc_arc.lock();
-
     drop(curr_guard);
-    drop(sched);
+
+    // Lock handoff: release SCHEDULER spinlock without restoring interrupt enable flag.
+    // Interrupts remain disabled across the switch until the incoming task's iretq/sti restores them.
+    sched.unlock_without_restoring_interrupts();
+
+    // UP/SMP invariant: prev_proc lock is held across the switch purely to pass the field reference;
+    // since the outgoing task is not in the ready queue, no concurrent task will contest its lock while suspended.
+    let prev_proc = prev_proc_arc.lock();
 
     // Architectural task switch via unified TrapFrame / iretq (writes directly to PCB saved_kernel_rsp)
     crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
@@ -223,11 +228,12 @@ pub fn schedule_yield() {
 
     *curr_guard = Some(next_proc_arc);
 
-    let prev_proc = prev_proc_arc.lock();
-
     drop(curr_guard);
-    drop(sched);
 
+    // Lock handoff: release SCHEDULER spinlock without restoring interrupt enable flag.
+    sched.unlock_without_restoring_interrupts();
+
+    let prev_proc = prev_proc_arc.lock();
     crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
 }
 
