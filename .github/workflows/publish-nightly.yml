@@ -1,0 +1,132 @@
+name: Publish nightly
+
+on:
+  push:
+    branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE*"
+  workflow_dispatch:
+
+concurrency:
+  group: publish-nightly
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  publish:
+    name: Build, smoke, publish
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: Cache Limine BOOTX64.EFI
+        uses: actions/cache@v4
+        with:
+          path: BOOTX64.EFI
+          key: limine-bootx64-v8
+      - name: Build kernel and UEFI image
+        run: cargo xtask build
+      - name: Install QEMU and OVMF
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-x86 ovmf zip
+      - name: QEMU smoke test
+        run: |
+          set -euo pipefail
+          OVMF_PATH=/usr/share/OVMF/OVMF_CODE_4M.fd
+          if [ ! -f "$OVMF_PATH" ]; then
+            OVMF_PATH=/usr/share/OVMF/OVMF_CODE.fd
+          fi
+          qemu-system-x86_64 \
+            -machine q35 -cpu qemu64 -m 512 -display none \
+            -serial file:serial.log -no-reboot -nic none \
+            -drive "if=pflash,format=raw,readonly=on,file=$OVMF_PATH" \
+            -drive "file=fat:rw:target/iso_root,format=raw,media=disk" &
+          QEMU_PID=$!
+          trap 'kill $QEMU_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 80); do
+            if grep -q "Rust POSIX OS - Init Daemon (PID 1) Running" serial.log 2>/dev/null \
+              && grep -q "Rust POSIX Shell" serial.log 2>/dev/null; then
+              echo "[CI] smoke passed"
+              exit 0
+            fi
+            if ! kill -0 $QEMU_PID 2>/dev/null; then
+              cat serial.log || true
+              echo "FAILED: QEMU exited before the shell banner"
+              exit 1
+            fi
+            sleep 0.5
+          done
+          cat serial.log || true
+          echo "FAILED: QEMU timed out"
+          exit 1
+      - name: Stage run package
+        run: |
+          set -euo pipefail
+          rm -rf dist
+          mkdir -p dist/run/image dist/run/firmware
+          cp -a target/iso_root/. dist/run/image/
+          if [ -f /usr/share/OVMF/OVMF_CODE_4M.fd ]; then
+            cp /usr/share/OVMF/OVMF_CODE_4M.fd dist/run/firmware/OVMF_CODE.fd
+          else
+            cp /usr/share/OVMF/OVMF_CODE.fd dist/run/firmware/OVMF_CODE.fd
+          fi
+          cp packaging/run.sh packaging/run.ps1 dist/run/
+          chmod +x dist/run/run.sh
+          cat > dist/run/README.txt <<'EOF'
+          Rust POSIX OS nightly run package
+          =================================
+          Local (QEMU installed):
+            Linux/macOS: ./run.sh
+            Windows:     .\run.ps1
+
+          No QEMU install:
+            docker run --rm -it ghcr.io/yonatan895/rust-posix-os:nightly
+
+          Contains: UEFI image (Limine + kernel + initramfs), OVMF firmware,
+          and launch scripts. QEMU itself is only inside the container image.
+          EOF
+          (cd dist && zip -r rust-posix-os-nightly.zip run)
+      - name: Publish GitHub Release (nightly)
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: nightly
+          name: Nightly
+          target_commitish: ${{ github.sha }}
+          prerelease: true
+          make_latest: false
+          generate_release_notes: false
+          body: |
+            Runnable snapshot from `${{ github.sha }}`.
+            Download `rust-posix-os-nightly.zip` and run `./run.sh` or `.\run.ps1` (needs QEMU),
+            or `docker run --rm -it ghcr.io/yonatan895/rust-posix-os:nightly`.
+          files: dist/rust-posix-os-nightly.zip
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push container
+        uses: docker/build-push-action@v6
+        with:
+          context: dist/run
+          file: packaging/Dockerfile
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:nightly
+            ghcr.io/${{ github.repository }}:${{ github.sha }}
