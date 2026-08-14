@@ -3,13 +3,13 @@
 all: build
 
 build:
-	cargo build --workspace --exclude xtask --target x86_64-rust-posix-os.json -Zbuild-std=core,compiler_builtins,alloc -Zbuild-std-features=compiler-builtins-mem
+	cargo xtask build
 
 run:
-	cargo run --manifest-path tools/xtask/Cargo.toml -- run
+	cargo xtask run
 
 test:
-	cargo run --manifest-path tools/xtask/Cargo.toml -- test
+	cargo xtask test
 
 clean:
 	cargo clean

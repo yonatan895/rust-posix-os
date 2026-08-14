@@ -11,10 +11,6 @@ use core::panic::PanicInfo;
 use ostd::limine::*;
 use ostd::*;
 
-// ============================================================================
-// Limine Boot Protocol Requests & Markers
-// ============================================================================
-
 #[used]
 #[link_section = ".requests_start"]
 static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
@@ -66,36 +62,26 @@ static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
     id: [0xadc0e0531bb10d03, 0x9572709f31764c62],
 };
 
-// ============================================================================
-// Kernel Stack
-// ============================================================================
 #[repr(C, align(4096))]
-struct KernelStack([u8; 64 * 1024]); // 64 KiB stack
+struct KernelStack([u8; 64 * 1024]);
 
 static mut BOOT_STACK: KernelStack = KernelStack([0; 64 * 1024]);
 
-// ============================================================================
-// Kernel Entry Point
-// ============================================================================
 #[no_mangle]
 pub unsafe extern "C" fn _start() -> ! {
-    // 1. Initialize Serial Port & Logger (OSTD)
     serial_init();
     log::info!("=====================================================");
     log::info!("  Rust POSIX Operating System (Framekernel Model)   ");
     log::info!("  Target: x86_64 | Standard: POSIX.1-2024 (IEEE)     ");
     log::info!("=====================================================");
 
-    // 2. Initialize GDT & TSS with 64 KiB stack top
     let stack_top = (&raw const BOOT_STACK as u64) + (64 * 1024);
     gdt_init(stack_top);
     log::info!("[OSTD] GDT and 64-bit TSS loaded successfully.");
 
-    // 3. Initialize IDT & CPU Exceptions
     idt_init();
     log::info!("[OSTD] IDT and exception vectors configured.");
 
-    // 4. Extract Limine Boot Information
     let hhdm_resp = *HHDM_REQUEST.response.get();
     let memmap_resp = *MEMMAP_REQUEST.response.get();
     let module_resp = *MODULE_REQUEST.response.get();
@@ -106,11 +92,9 @@ pub unsafe extern "C" fn _start() -> ! {
         0xFFFF_8000_0000_0000
     };
 
-    // 5. Initialize Memory Management (PMM, VMM, Kernel Heap)
     mm_init(memmap_resp, hhdm_offset);
     log::info!("[OSTD] Memory management initialized (PMM, 4-Level Paging, 16MiB Kernel Heap).");
 
-    // 6. Initialize Graphical Framebuffer if available
     let fb_resp = *FRAMEBUFFER_REQUEST.response.get();
     if !fb_resp.is_null() && (*fb_resp).framebuffer_count > 0 {
         let fb = **(*fb_resp).framebuffers;
@@ -118,24 +102,15 @@ pub unsafe extern "C" fn _start() -> ! {
         log::info!("[OSTD] Framebuffer initialized ({}x{} @ {}bpp).", fb.width, fb.height, fb.bpp);
     }
 
-    // 7. Initialize Fast Syscall MSRs (LSTAR)
     syscall_init(stack_top);
     log::info!("[OSTD] Fast system call MSRs (LSTAR/STAR/FMASK) armed.");
 
-    // 8. Initialize Interrupt Controller
     irq_init();
     log::info!("[OSTD] IRQ controllers prepared.");
 
-    // 9. Initialize De-Privileged Safe Services (VFS, DevFS, Init Process, Initramfs)
     services::services_init(module_resp);
 
-    // 10. Initialize Kernel Asynchronous Task Runtime
     ostd::task::executor::async_init();
-    ostd::task::executor::spawn(async {
-        log::info!("[ASYNC] Kernel Background Task Alpha started.");
-        ostd::task::async_task::yield_now().await;
-        log::info!("[ASYNC] Kernel Background Task Alpha resumed and completed.");
-    });
     ostd::task::executor::spawn(services::monitor::system_resource_monitor_task());
     let executed_steps = ostd::task::executor::run_async_tasks();
     log::info!("[ASYNC] Kernel async executor initialized (executed {} task steps).", executed_steps);
@@ -144,7 +119,6 @@ pub unsafe extern "C" fn _start() -> ! {
     log::info!("  Kernel Initialization Complete. Kernel running!   ");
     log::info!("=====================================================");
 
-    // 11. Switch to User Mode (PID 1 Init Process)
     if let Some(init_proc_lock) = services::process::get_current_process() {
         let (entry, stack, pml4) = {
             let proc = init_proc_lock.lock();
@@ -160,7 +134,6 @@ pub unsafe extern "C" fn _start() -> ! {
         }
     }
 
-    // Kernel idle loop
     loop {
         arch::hlt();
     }
