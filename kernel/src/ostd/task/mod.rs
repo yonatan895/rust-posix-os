@@ -76,6 +76,48 @@ pub fn init_user_kernel_stack(
     frame_ptr as usize
 }
 
+/// Initializes a child process kernel stack with a synthetic `TrapFrame` cloned from the parent `SyscallRegisters`.
+/// Initializes a child process kernel stack with a synthetic `TrapFrame` cloned from the parent `SyscallRegisters`.
+///
+/// Under the x86_64 fast syscall contract, `syscall` saves user RIP into `RCX` and user RFLAGS into `R11`.
+/// Thus `TrapFrame.rip` receives `parent_regs.rcx` and `TrapFrame.rflags` receives `parent_regs.r11`,
+/// while the GPR save slots `TrapFrame.rcx` and `TrapFrame.r11` are set to 0.
+/// Returns the initial `saved_kernel_rsp` pointing to the TrapFrame with `rax = 0` (child return value).
+pub fn init_fork_child_stack(
+    stack: &mut [u8],
+    parent_regs: &crate::ostd::arch::syscall::SyscallRegisters,
+) -> usize {
+    assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
+    let offset = stack.len() - core::mem::size_of::<TrapFrame>();
+    let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
+    // SAFETY: `frame_ptr` points inside the valid `stack` slice.
+    unsafe {
+        *frame_ptr = TrapFrame {
+            r15: parent_regs.r15 as u64,
+            r14: parent_regs.r14 as u64,
+            r13: parent_regs.r13 as u64,
+            r12: parent_regs.r12 as u64,
+            r11: 0, // Saved GPR slot (clobbered by syscall)
+            r10: parent_regs.r10 as u64,
+            r9: parent_regs.r9 as u64,
+            r8: parent_regs.r8 as u64,
+            rbp: parent_regs.rbp as u64,
+            rdi: parent_regs.rdi as u64,
+            rsi: parent_regs.rsi as u64,
+            rdx: parent_regs.rdx as u64,
+            rcx: 0, // Saved GPR slot (clobbered by syscall)
+            rbx: parent_regs.rbx as u64,
+            rax: 0,                      // Child return value from sys_fork = 0
+            rip: parent_regs.rcx as u64, // Return RIP in userland right after syscall
+            cs: USER_CODE_SEL as u64,
+            rflags: parent_regs.r11 as u64, // User RFLAGS
+            rsp: parent_regs.rsp as u64,    // User RSP
+            ss: USER_DATA_SEL as u64,
+        };
+    }
+    frame_ptr as usize
+}
+
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 0 kernel task entry.
 pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
     let stack_top = stack.as_ptr() as usize + stack.len();

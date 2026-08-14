@@ -42,6 +42,7 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_FSTAT => sys_fstat(a1 as i32, a2 as *mut Stat),
         SYS_LSEEK => sys_lseek(a1 as i32, a2 as i64, a3 as i32),
         SYS_MMAP => sys_mmap(a1, a2, a3 as i32, a4 as i32),
+        SYS_MPROTECT => sys_mprotect(a1, a2, a3 as i32),
         SYS_MUNMAP => sys_munmap(a1, a2),
         SYS_RT_SIGACTION => {
             sys_rt_sigaction(a1 as i32, a2 as *const SigAction, a3 as *mut SigAction, a4)
@@ -53,7 +54,7 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_PIPE => sys_pipe(a1 as *mut [i32; 2]),
         SYS_DUP => sys_dup(a1 as i32),
         SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
-        SYS_FORK => sys_fork(),
+        SYS_FORK => sys_fork(r),
         SYS_EXECVE => {
             let res = sys_execve(
                 a1 as *const u8,

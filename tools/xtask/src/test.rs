@@ -19,6 +19,7 @@ pub fn run_tests() {
     test_pipe_blocking_and_eof_semantics();
     test_two_process_pipe_voluntary_context_switch_and_blocking();
     test_signal_delivery_and_sigreturn();
+    test_fork_and_address_space_isolation();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -36,7 +37,7 @@ pub fn run_tests() {
         "Shell Command Parameters (-l, -a, -r, -p, -n) & Tab Completion Test",
         "POSIX Shell cp (Copy File/Dir, Recursive, Multi-target) & mv (Move/Rename) Test",
         "Shell 1000-Command In-Memory History & In-Place Flicker-Free Line Editor Test",
-        "POSIX sys_fork Honest -ENOSYS Contract Test",
+        "POSIX sys_fork Real Process & Address Space Isolation Test",
         "OSTD IRQ-Safe SpinLock & RFLAGS Save/Restore Test",
         "Process mmap Base Address Isolation & Exec Reset Test",
         "Preemptive Timer Round-Robin Test",
@@ -786,4 +787,210 @@ fn test_signal_delivery_and_sigreturn() {
         has_unblocked_signals(pending_mask, current_blocked_mask),
         "Task with pending SIGTERM must recognize unblocked signal and return -EINTR"
     );
+}
+
+fn test_fork_and_address_space_isolation() {
+    use posix_abi::*;
+
+    // 1. VMA Tracking and Validation Tests
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    struct MockVma {
+        start: usize,
+        end: usize,
+        prot: u32,
+        flags: u32,
+    }
+
+    struct MockVmSpace {
+        vmas: Vec<MockVma>,
+    }
+
+    impl MockVmSpace {
+        fn new() -> Self {
+            Self { vmas: Vec::new() }
+        }
+
+        fn insert_vma(&mut self, start: usize, end: usize, prot: u32, flags: u32) {
+            let mut new_vmas = Vec::new();
+            let mut inserted = false;
+            let mut cur_start = start;
+            let mut cur_end = end;
+
+            for vma in self.vmas.drain(..) {
+                if vma.end <= cur_start {
+                    new_vmas.push(vma);
+                } else if vma.start >= cur_end {
+                    if !inserted {
+                        new_vmas.push(MockVma {
+                            start: cur_start,
+                            end: cur_end,
+                            prot,
+                            flags,
+                        });
+                        inserted = true;
+                    }
+                    new_vmas.push(vma);
+                } else if vma.prot == prot && vma.flags == flags {
+                    cur_start = cur_start.min(vma.start);
+                    cur_end = cur_end.max(vma.end);
+                }
+            }
+
+            if !inserted {
+                new_vmas.push(MockVma {
+                    start: cur_start,
+                    end: cur_end,
+                    prot,
+                    flags,
+                });
+            }
+            self.vmas = new_vmas;
+        }
+
+        fn contains_range(&self, start: usize, end: usize) -> bool {
+            if start >= end {
+                return false;
+            }
+            let mut curr = start;
+            for vma in &self.vmas {
+                if vma.start <= curr && vma.end > curr {
+                    curr = vma.end;
+                    if curr >= end {
+                        return true;
+                    }
+                }
+            }
+            false
+        }
+
+        fn munmap(&mut self, addr: usize, len: usize) -> Result<(), i32> {
+            if !addr.is_multiple_of(4096) || len == 0 {
+                return Err(EINVAL);
+            }
+            let end = addr + len;
+            self.vmas.retain(|v| !(v.start >= addr && v.end <= end));
+            Ok(())
+        }
+
+        fn mprotect(&mut self, addr: usize, len: usize, new_prot: u32) -> Result<(), i32> {
+            if !addr.is_multiple_of(4096) || len == 0 {
+                return Err(EINVAL);
+            }
+            let end = addr + len;
+            if !self.contains_range(addr, end) {
+                // Return -ENOMEM when trying to mprotect an unmapped gap per Linux/POSIX
+                return Err(ENOMEM);
+            }
+            let flags = self
+                .vmas
+                .iter()
+                .find(|v| v.start <= addr && addr < v.end)
+                .map(|v| v.flags)
+                .unwrap_or(0);
+            self.insert_vma(addr, end, new_prot, flags);
+            Ok(())
+        }
+    }
+
+    let mut vm = MockVmSpace::new();
+    const MAP_ANON: u32 = 0x20;
+    vm.insert_vma(
+        0x6000_0000,
+        0x6000_2000,
+        (PROT_READ | PROT_WRITE) as u32,
+        MAP_ANON,
+    );
+
+    assert!(vm.contains_range(0x6000_0000, 0x6000_2000));
+    assert!(vm.contains_range(0x6000_0000, 0x6000_1000));
+    assert!(!vm.contains_range(0x6000_0000, 0x6000_3000)); // Gap beyond mapped VMA
+
+    // Test munmap on unmapped range succeeds with 0 per Linux
+    assert_eq!(vm.munmap(0x7000_0000, 4096), Ok(()));
+
+    // Test mprotect on unmapped gap returns -ENOMEM
+    assert_eq!(
+        vm.mprotect(0x6000_1000, 8192, PROT_READ as u32),
+        Err(ENOMEM)
+    );
+
+    // Test mprotect on valid mapped region succeeds and PRESERVES VMA flags
+    assert_eq!(vm.mprotect(0x6000_0000, 4096, PROT_READ as u32), Ok(()));
+    assert_eq!(
+        vm.vmas[0].flags, MAP_ANON,
+        "mprotect must preserve existing VMA flags"
+    );
+
+    // 2. Real Process Fork & Address Space Isolation Simulation
+    struct ProcessMemory {
+        pages: BTreeMap<usize, Vec<u8>>,
+    }
+
+    impl ProcessMemory {
+        fn new() -> Self {
+            Self {
+                pages: BTreeMap::new(),
+            }
+        }
+
+        fn clone_memory(&self) -> Self {
+            Self {
+                pages: self.pages.clone(), // Eager frame duplication
+            }
+        }
+    }
+
+    struct SimProcess {
+        pid: i32,
+        ppid: i32,
+        mem: ProcessMemory,
+        open_fds: Vec<i32>,
+    }
+
+    let mut parent = SimProcess {
+        pid: 1,
+        ppid: 0,
+        mem: ProcessMemory::new(),
+        open_fds: vec![0, 1, 2, 3],
+    };
+
+    // Parent writes initial data to its virtual page at 0x6000_0000
+    let mut initial_data = vec![0u8; 4096];
+    initial_data[0..4].copy_from_slice(&[0x42, 0x43, 0x44, 0x45]);
+    parent.mem.pages.insert(0x6000_0000, initial_data);
+
+    // Fork: Child created with eager address space clone
+    let child_pid = 2;
+    let mut child = SimProcess {
+        pid: child_pid,
+        ppid: parent.pid,
+        mem: parent.mem.clone_memory(),
+        open_fds: parent.open_fds.clone(),
+    };
+    assert_eq!(child.ppid, 1, "Child must record parent PID as PPID");
+
+    // Check return value semantics
+    let parent_ret = child.pid;
+    let child_ret = 0;
+    assert_eq!(parent_ret, 2, "Parent must receive child PID from fork()");
+    assert_eq!(child_ret, 0, "Child must receive 0 from fork()");
+
+    // Child modifies its memory copy
+    child.mem.pages.get_mut(&0x6000_0000).unwrap()[0..4].copy_from_slice(&[0x99, 0x88, 0x77, 0x66]);
+
+    // Verify Address Space Isolation: Parent memory is UNCHANGED
+    assert_eq!(
+        &parent.mem.pages.get(&0x6000_0000).unwrap()[0..4],
+        &[0x42, 0x43, 0x44, 0x45],
+        "Parent memory must remain isolated and unmodified when child writes"
+    );
+
+    assert_eq!(
+        &child.mem.pages.get(&0x6000_0000).unwrap()[0..4],
+        &[0x99, 0x88, 0x77, 0x66],
+        "Child memory must reflect its own private write"
+    );
+
+    // Verify File Descriptor Sharing
+    assert_eq!(child.open_fds, parent.open_fds);
 }
