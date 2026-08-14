@@ -11,8 +11,9 @@ use posix_abi::*;
 pub unsafe extern "C" fn _start() -> ! {
     let sp: *const usize;
     core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack));
-    let argc = if !sp.is_null() { *sp } else { 0 };
-    let argv = if !sp.is_null() { sp.add(1) as *const *const u8 } else { core::ptr::null() };
+    let raw_argc = *sp;
+    let argc = if raw_argc > 256 { 256 } else { raw_argc };
+    let argv = sp.add(1) as *const *const u8;
 
     let code = coreutils_main(argc, argv);
     exit(code);
@@ -40,14 +41,14 @@ pub unsafe fn print_usage() {
 pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
     if argc == 0 || argv.is_null() || (*argv).is_null() {
         print_usage();
-        return 0;
+        return 1;
     }
 
     let prog_name = get_basename(*argv);
     let (applet, sub_argv, sub_argc) = if strcmp(prog_name, b"coreutils\0".as_ptr()) == 0 {
         if argc <= 1 || (*argv.add(1)).is_null() {
             print_usage();
-            return 0;
+            return 1;
         }
         let app = get_basename(*argv.add(1));
         (app, argv.add(1), argc - 1)
@@ -58,7 +59,8 @@ pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
     if strcmp(applet, b"help\0".as_ptr()) == 0 || strcmp(applet, b"--help\0".as_ptr()) == 0 {
         print_usage();
         0
-    } else if strcmp(applet, b"ls\0".as_ptr()) == 0 {
+    }
+ else if strcmp(applet, b"ls\0".as_ptr()) == 0 {
         cmd_ls(sub_argc, sub_argv)
     } else if strcmp(applet, b"cat\0".as_ptr()) == 0 {
         cmd_cat(sub_argc, sub_argv)
