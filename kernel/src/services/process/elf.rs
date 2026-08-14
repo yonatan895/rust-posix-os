@@ -1,5 +1,6 @@
-//! ELF64 Executable Loader - De-privileged Safe Service.
+//! ELF64 Executable Loader & System V AMD64 ABI User Stack Setup.
 
+use posix_abi::*;
 use crate::ostd::mm::{read_pod, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, PAGE_NX, VmSpace};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
@@ -52,7 +53,12 @@ pub struct LoadedElf {
     pub user_stack_top: usize,
 }
 
-pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &'static str> {
+pub fn load_elf(
+    elf_bytes: &[u8],
+    vm_space: &mut VmSpace,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<LoadedElf, &'static str> {
     let header: Elf64Header = read_pod(elf_bytes, 0).ok_or("ELF file too small for header")?;
 
     if header.e_ident[0..4] != ELF_MAGIC {
@@ -71,6 +77,7 @@ pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &
     let phoff = header.e_phoff as usize;
     let phentsize = header.e_phentsize as usize;
     let phnum = header.e_phnum as usize;
+    let mut phdr_vaddr = 0usize;
 
     for i in 0..phnum {
         let offset = phoff + i * phentsize;
@@ -100,14 +107,137 @@ pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &
                 let segment_data = &elf_bytes[file_offset..file_offset + filesz];
                 vm_space.write_bytes_to_space(vaddr, segment_data)?;
             }
+
+            if phoff >= file_offset && phoff < file_offset + filesz && phdr_vaddr == 0 {
+                phdr_vaddr = vaddr + (phoff - file_offset);
+            }
         }
     }
 
     let stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
     vm_space.alloc_and_map_range(stack_bottom, USER_STACK_SIZE, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE)?;
 
+    let initial_rsp = setup_user_stack(
+        vm_space,
+        header.e_entry as usize,
+        phdr_vaddr,
+        phentsize,
+        phnum,
+        argv,
+        envp,
+    )?;
+
     Ok(LoadedElf {
         entry_point: header.e_entry as usize,
-        user_stack_top: USER_STACK_TOP,
+        user_stack_top: initial_rsp,
     })
+}
+
+/// Sets up the initial user stack below `USER_STACK_TOP` in conformance with the
+/// System V AMD64 ABI:
+///
+///   High Address
+///   +---------------------------------------+
+///   | Environment strings (envp[0..M])      |
+///   | Argument strings (argv[0..N])         |
+///   +---------------------------------------+
+///   | 16-byte stack alignment padding       |
+///   +---------------------------------------+
+///   | Auxiliary Vector (AT_NULL, ..., AT_*) |
+///   | NULL (envp terminator)                |
+///   | envp[M-1..0] pointers                 |
+///   | NULL (argv terminator)                |
+///   | argv[N-1..0] pointers                 |
+///   | argc (u64)                            | <-- rsp (16-byte aligned)
+///   +---------------------------------------+
+///   Low Address
+pub fn setup_user_stack(
+    vm_space: &mut VmSpace,
+    entry_point: usize,
+    phdr_vaddr: usize,
+    phentsize: usize,
+    phnum: usize,
+    argv: &[&str],
+    envp: &[&str],
+) -> Result<usize, &'static str> {
+    let mut sp = USER_STACK_TOP;
+
+    // 1. Write environment strings to the stack
+    let mut envp_ptrs = alloc::vec::Vec::new();
+    for env in envp.iter() {
+        let bytes = env.as_bytes();
+        sp -= bytes.len() + 1;
+        vm_space.write_bytes_to_space(sp, bytes)?;
+        vm_space.write_bytes_to_space(sp + bytes.len(), &[0u8])?;
+        envp_ptrs.push(sp);
+    }
+
+    // 2. Write argument strings to the stack
+    let mut argv_ptrs = alloc::vec::Vec::new();
+    for arg in argv.iter() {
+        let bytes = arg.as_bytes();
+        sp -= bytes.len() + 1;
+        vm_space.write_bytes_to_space(sp, bytes)?;
+        vm_space.write_bytes_to_space(sp + bytes.len(), &[0u8])?;
+        argv_ptrs.push(sp);
+    }
+
+    // 3. Align sp to 8-byte pointer boundary
+    sp &= !0x7;
+
+    // 4. Auxiliary vector definition
+    let auxv: [(u64, u64); 6] = [
+        (AT_PAGESZ, 4096),
+        (AT_ENTRY, entry_point as u64),
+        (AT_PHDR, phdr_vaddr as u64),
+        (AT_PHENT, phentsize as u64),
+        (AT_PHNUM, phnum as u64),
+        (AT_NULL, 0),
+    ];
+
+    // Calculate total pointer/auxv words:
+    // argc (1) + argv_ptrs (N) + NULL (1) + envp_ptrs (M) + NULL (1) + auxv (6 * 2)
+    let total_words = 1 + (argv_ptrs.len() + 1) + (envp_ptrs.len() + 1) + (auxv.len() * 2);
+    let total_bytes = total_words * 8;
+
+    // Align final stack pointer so that rsp % 16 == 0
+    let target_sp = sp - total_bytes;
+    let aligned_sp = target_sp & !0xF;
+    let padding = target_sp - aligned_sp;
+    sp -= padding;
+
+    // 5. Write auxiliary vector entries (in reverse order for downwards growth)
+    for &(key, val) in auxv.iter().rev() {
+        sp -= 8;
+        vm_space.write_bytes_to_space(sp, &val.to_ne_bytes())?;
+        sp -= 8;
+        vm_space.write_bytes_to_space(sp, &key.to_ne_bytes())?;
+    }
+
+    // 6. Write envp pointers
+    sp -= 8;
+    vm_space.write_bytes_to_space(sp, &0u64.to_ne_bytes())?; // envp NULL terminator
+    for &env_ptr in envp_ptrs.iter().rev() {
+        sp -= 8;
+        vm_space.write_bytes_to_space(sp, &(env_ptr as u64).to_ne_bytes())?;
+    }
+
+    // 7. Write argv pointers
+    sp -= 8;
+    vm_space.write_bytes_to_space(sp, &0u64.to_ne_bytes())?; // argv NULL terminator
+    for &arg_ptr in argv_ptrs.iter().rev() {
+        sp -= 8;
+        vm_space.write_bytes_to_space(sp, &(arg_ptr as u64).to_ne_bytes())?;
+    }
+
+    // 8. Write argc
+    sp -= 8;
+    let argc = argv.len() as u64;
+    vm_space.write_bytes_to_space(sp, &argc.to_ne_bytes())?;
+
+    if sp != aligned_sp {
+        return Err("Stack alignment computation mismatch");
+    }
+
+    Ok(sp)
 }

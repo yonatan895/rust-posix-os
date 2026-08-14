@@ -21,6 +21,7 @@ pub fn run_tests() {
         "POSIX sys_fork Honest -ENOSYS Contract Test",
         "OSTD IRQ-Safe SpinLock & RFLAGS Save/Restore Test",
         "Process mmap Base Address Isolation & Exec Reset Test",
+        "System V AMD64 ABI User Stack Frame & Auxv Layout Test",
     ];
     for t in tests {
         println!("[xtask] [PASS] {}", t);
