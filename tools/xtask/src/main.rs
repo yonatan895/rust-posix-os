@@ -4,7 +4,7 @@ use std::env;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
@@ -223,28 +223,33 @@ fn find_ovmf() -> PathBuf {
 }
 
 fn run_qemu() {
-    println!("[xtask] Launching QEMU (x86_64 UEFI, serial on stdio)...");
+    println!("[xtask] Launching QEMU (x86_64 UEFI, guest serial on this terminal)...");
     let qemu_exec = find_qemu();
     let ovmf = find_ovmf();
     println!("[xtask] QEMU={} OVMF={}", qemu_exec, ovmf.display());
 
+    // Plain -serial stdio, not mon:stdio. Kernel logs use ANSI colors;
+    // muxing the QEMU monitor onto the same stream lets those ESC sequences
+    // look like monitor commands and QEMU exits mid-boot.
     let mut qemu = Command::new(&qemu_exec);
-    qemu.args([
-        "-drive",
-        &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
-        "-drive",
-        "file=fat:rw:target/iso_root,format=raw,media=disk",
-        "-m",
-        "512M",
-        "-smp",
-        "2",
-        "-serial",
-        "mon:stdio",
-        "-display",
-        "none",
-        "-no-reboot",
-    ]);
-    println!("[xtask] Guest serial is on this console. Ctrl-A X exits QEMU.");
+    qemu.stdin(Stdio::inherit())
+        .stdout(Stdio::inherit())
+        .stderr(Stdio::inherit())
+        .args([
+            "-drive",
+            &format!("if=pflash,format=raw,readonly=on,file={}", ovmf.display()),
+            "-drive",
+            "file=fat:rw:target/iso_root,format=raw,media=disk",
+            "-m",
+            "512M",
+            "-smp",
+            "2",
+            "-serial",
+            "stdio",
+            "-display",
+            "none",
+        ]);
+    println!("[xtask] Interactive serial console. Type at the posix-os prompt. Ctrl-C stops QEMU.");
     println!("[xtask] Executing: {:?}", qemu);
     let status = qemu.status().unwrap_or_else(|e| {
         eprintln!("[xtask] Failed to start QEMU: {}", e);
