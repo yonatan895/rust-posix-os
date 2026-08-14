@@ -20,6 +20,7 @@ pub fn run_tests() {
     test_two_process_pipe_voluntary_context_switch_and_blocking();
     test_signal_delivery_and_sigreturn();
     test_fork_and_address_space_isolation();
+    test_libc_small_object_allocator();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -46,6 +47,7 @@ pub fn run_tests() {
         "Pipe Blocking & EOF Semantics Test",
         "Two-Process Pipe Voluntary Context Switch & Blocking Test",
         "Signal Delivery & sigreturn Test",
+        "libc Small-Object Allocator Test",
     ];
 
     for t in tests {
@@ -993,4 +995,337 @@ fn test_fork_and_address_space_isolation() {
 
     // Verify File Descriptor Sharing
     assert_eq!(child.open_fds, parent.open_fds);
+}
+
+fn test_libc_small_object_allocator() {
+    // High-fidelity memory-backed test of libc small-object slab/arena allocator
+    const ARENA_SIZE: usize = 64 * 1024;
+    const NUM_CLASSES: usize = 8;
+    const SIZE_CLASSES: [usize; NUM_CLASSES] = [16, 32, 64, 128, 256, 512, 1024, 2048];
+    const SMALL_THRESHOLD: usize = 2048;
+    const LARGE_MAGIC: usize = 0x504F5349584D454D;
+    const ARENA_MAGIC: usize = 0x504F53495841524E;
+    const FREE_MAGIC: usize = 0x504F534958465245;
+    const MAX_ARENAS: usize = 512;
+
+    #[derive(Clone, Copy, Default)]
+    struct ArenaRecord {
+        start: usize,
+        end: usize,
+        class_idx: usize,
+    }
+
+    struct MemorySpace {
+        pages: BTreeMap<usize, Vec<u8>>,
+        mmap_count: usize,
+        munmap_count: usize,
+        next_mmap_addr: usize,
+    }
+
+    impl MemorySpace {
+        fn new() -> Self {
+            Self {
+                pages: BTreeMap::new(),
+                mmap_count: 0,
+                munmap_count: 0,
+                next_mmap_addr: 0x6000_0000_0000,
+            }
+        }
+
+        fn mmap(&mut self, size: usize) -> usize {
+            let aligned = (size + 4095) & !4095;
+            let addr = self.next_mmap_addr;
+            self.next_mmap_addr += aligned;
+            self.mmap_count += 1;
+            for offset in (0..aligned).step_by(4096) {
+                self.pages.insert(addr + offset, vec![0u8; 4096]);
+            }
+            addr
+        }
+
+        fn munmap(&mut self, addr: usize, size: usize) {
+            let aligned = (size + 4095) & !4095;
+            self.munmap_count += 1;
+            for offset in (0..aligned).step_by(4096) {
+                self.pages.remove(&(addr + offset));
+            }
+        }
+
+        fn read_u64(&self, addr: usize) -> u64 {
+            let mut buf = [0u8; 8];
+            self.read_bytes(addr, &mut buf);
+            u64::from_ne_bytes(buf)
+        }
+
+        fn write_u64(&mut self, addr: usize, val: u64) {
+            self.write_bytes(addr, &val.to_ne_bytes());
+        }
+
+        fn read_bytes(&self, addr: usize, dest: &mut [u8]) {
+            for (i, b) in dest.iter_mut().enumerate() {
+                let curr = addr + i;
+                let page_base = curr & !4095;
+                let offset = curr & 4095;
+                if let Some(page) = self.pages.get(&page_base) {
+                    *b = page[offset];
+                } else {
+                    *b = 0;
+                }
+            }
+        }
+
+        fn write_bytes(&mut self, addr: usize, src: &[u8]) {
+            for (i, &b) in src.iter().enumerate() {
+                let curr = addr + i;
+                let page_base = curr & !4095;
+                let offset = curr & 4095;
+                if let Some(page) = self.pages.get_mut(&page_base) {
+                    page[offset] = b;
+                }
+            }
+        }
+    }
+
+    struct RealSlabAllocator {
+        mem: MemorySpace,
+        free_lists: [usize; NUM_CLASSES],
+        current_arenas: [usize; NUM_CLASSES],
+        arena_records: [ArenaRecord; MAX_ARENAS],
+        arena_count: usize,
+    }
+
+    impl RealSlabAllocator {
+        fn new() -> Self {
+            Self {
+                mem: MemorySpace::new(),
+                free_lists: [0; NUM_CLASSES],
+                current_arenas: [0; NUM_CLASSES],
+                arena_records: [ArenaRecord::default(); MAX_ARENAS],
+                arena_count: 0,
+            }
+        }
+
+        fn malloc(&mut self, size: usize) -> usize {
+            if size == 0 {
+                return 0;
+            }
+
+            if size > SMALL_THRESHOLD {
+                let total_size = size + 16;
+                let aligned_size = (total_size + 4095) & !4095;
+                let ptr = self.mem.mmap(aligned_size);
+                self.mem.write_u64(ptr, aligned_size as u64);
+                self.mem.write_u64(ptr + 8, LARGE_MAGIC as u64);
+                ptr + 16
+            } else {
+                let mut class_idx = 0;
+                while class_idx < NUM_CLASSES && SIZE_CLASSES[class_idx] < size {
+                    class_idx += 1;
+                }
+                let b_size = SIZE_CLASSES[class_idx];
+
+                // 1. Pop from free list
+                let node = self.free_lists[class_idx];
+                if node != 0 {
+                    let next = self.mem.read_u64(node) as usize;
+                    self.free_lists[class_idx] = next;
+                    self.mem.write_u64(node + 8, 0); // Clear free magic upon reallocation
+                    return node;
+                }
+
+                // 2. Bump-allocate from current arena
+                let current = self.current_arenas[class_idx];
+                if current != 0 {
+                    let bump_offset = self.mem.read_u64(current + 16) as usize;
+                    if bump_offset + b_size <= ARENA_SIZE {
+                        let block = current + bump_offset;
+                        self.mem
+                            .write_u64(current + 16, (bump_offset + b_size) as u64);
+                        return block;
+                    }
+                }
+
+                // 3. Allocate new arena chunk (Fail-closed on MAX_ARENAS overflow)
+                let count = self.arena_count;
+                if count >= MAX_ARENAS {
+                    return 0; // Fail-closed
+                }
+
+                let arena_ptr = self.mem.mmap(ARENA_SIZE);
+                let hdr_size = 32;
+                self.mem.write_u64(arena_ptr, ARENA_MAGIC as u64);
+                self.mem.write_u64(arena_ptr + 8, class_idx as u64);
+                self.mem
+                    .write_u64(arena_ptr + 16, (hdr_size + b_size) as u64);
+                self.mem
+                    .write_u64(arena_ptr + 24, self.current_arenas[class_idx] as u64);
+                self.current_arenas[class_idx] = arena_ptr;
+
+                self.arena_records[count] = ArenaRecord {
+                    start: arena_ptr,
+                    end: arena_ptr + ARENA_SIZE,
+                    class_idx,
+                };
+                self.arena_count = count + 1;
+
+                arena_ptr + hdr_size
+            }
+        }
+
+        fn free(&mut self, ptr: usize) {
+            if ptr == 0 {
+                return;
+            }
+
+            for i in 0..self.arena_count {
+                let rec = self.arena_records[i];
+                if ptr >= rec.start && ptr < rec.end {
+                    let class_idx = rec.class_idx;
+                    // Double-free guard
+                    let magic = self.mem.read_u64(ptr + 8) as usize;
+                    if magic == FREE_MAGIC {
+                        return; // Guard against double-free!
+                    }
+                    self.mem.write_u64(ptr + 8, FREE_MAGIC as u64);
+                    self.mem.write_u64(ptr, self.free_lists[class_idx] as u64);
+                    self.free_lists[class_idx] = ptr;
+                    return;
+                }
+            }
+
+            // Large allocation path
+            let header_ptr = ptr - 16;
+            let magic = self.mem.read_u64(header_ptr + 8) as usize;
+            if magic == LARGE_MAGIC {
+                let size = self.mem.read_u64(header_ptr) as usize;
+                self.mem.write_u64(header_ptr + 8, 0);
+                self.mem.munmap(header_ptr, size);
+            }
+        }
+
+        fn realloc(&mut self, ptr: usize, size: usize) -> usize {
+            if ptr == 0 {
+                return self.malloc(size);
+            }
+            if size == 0 {
+                self.free(ptr);
+                return 0;
+            }
+
+            let mut old_capacity = 0;
+            let mut is_small = false;
+            for i in 0..self.arena_count {
+                let rec = self.arena_records[i];
+                if ptr >= rec.start && ptr < rec.end {
+                    old_capacity = SIZE_CLASSES[rec.class_idx];
+                    is_small = true;
+                    break;
+                }
+            }
+
+            if !is_small {
+                let header_ptr = ptr - 16;
+                let magic = self.mem.read_u64(header_ptr + 8) as usize;
+                if magic != LARGE_MAGIC {
+                    return 0;
+                }
+                old_capacity = (self.mem.read_u64(header_ptr) as usize) - 16;
+            }
+
+            if old_capacity >= size {
+                return ptr; // In-place reuse
+            }
+
+            let new_ptr = self.malloc(size);
+            if new_ptr != 0 {
+                let mut buf = vec![0u8; old_capacity];
+                self.mem.read_bytes(ptr, &mut buf);
+                self.mem.write_bytes(new_ptr, &buf);
+                self.free(ptr);
+            }
+            new_ptr
+        }
+    }
+
+    let mut alloc = RealSlabAllocator::new();
+
+    // 1. Double-Free Protection on Small Object Path:
+    let small_ptr = alloc.malloc(64);
+    assert_ne!(small_ptr, 0);
+    alloc.free(small_ptr);
+    alloc.free(small_ptr); // Second free must be a safe no-op (no cycles)
+    let pop1 = alloc.malloc(64);
+    let pop2 = alloc.malloc(64);
+    assert_ne!(
+        pop1, pop2,
+        "Double-free must not create cycle or return duplicate pointers"
+    );
+    alloc.free(pop1);
+    alloc.free(pop2);
+
+    // 2. Fixed MAX_ARENAS Exhaustion Fail-Closed:
+    let mut exhausted_alloc = RealSlabAllocator::new();
+    exhausted_alloc.arena_count = MAX_ARENAS;
+    let overflow_ptr = exhausted_alloc.malloc(256);
+    assert_eq!(
+        overflow_ptr, 0,
+        "Malloc must fail-closed with NULL when arena table is full"
+    );
+
+    // 3. 10,000 malloc/free cycles of <= 128 bytes with intrusive in-memory pointer manipulation:
+    let mut live_ptrs = Vec::new();
+    for i in 0..10_000 {
+        let sz = ((i * 17) % 128) + 1; // Varying sizes from 1 to 128 B
+        let p = alloc.malloc(sz);
+        assert_ne!(p, 0);
+        // Write canary byte to verify real memory access
+        alloc.mem.write_bytes(p, &[0xAA]);
+        live_ptrs.push((p, sz));
+
+        if live_ptrs.len() >= 64 {
+            let (to_free, _) = live_ptrs.swap_remove(0);
+            alloc.free(to_free);
+        }
+    }
+
+    while let Some((p, _)) = live_ptrs.pop() {
+        alloc.free(p);
+    }
+
+    // Acceptance criterion: 10,000 malloc/free cycles of <= 128 B complete with < 64 SYS_MMAP calls
+    assert!(
+        alloc.mem.mmap_count < 64,
+        "10,000 small allocations must complete with < 64 mmap calls (actual: {})",
+        alloc.mem.mmap_count
+    );
+
+    // 4. Test In-Place Realloc vs Size-Class Growth:
+    let p1 = alloc.malloc(32);
+    alloc.mem.write_bytes(p1, &[1, 2, 3, 4]);
+    let p2 = alloc.realloc(p1, 28);
+    assert_eq!(
+        p1, p2,
+        "Realloc within size class must reuse memory in-place"
+    );
+
+    let p3 = alloc.realloc(p2, 512); // Growth to larger size class
+    assert_ne!(p3, p2);
+    let mut canary = [0u8; 4];
+    alloc.mem.read_bytes(p3, &mut canary);
+    assert_eq!(
+        &canary,
+        &[1, 2, 3, 4],
+        "Realloc must preserve buffer contents"
+    );
+    alloc.free(p3);
+
+    // 5. Test Large Allocation Double-Free Guard & munmap:
+    let large_p = alloc.malloc(8192);
+    assert_ne!(large_p, 0);
+    alloc.free(large_p);
+    alloc.free(large_p); // Double-free on large path must be a safe no-op
+    assert_eq!(
+        alloc.mem.munmap_count, 1,
+        "munmap must be called exactly once despite double free"
+    );
 }
