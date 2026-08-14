@@ -56,13 +56,11 @@ pub fn find_qemu() -> String {
     }
     if let Ok(home) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
         let qemu_dir = PathBuf::from(&home).join("scoop/apps/qemu");
-        if qemu_dir.exists() {
-            if let Ok(entries) = fs::read_dir(qemu_dir) {
-                for entry in entries.flatten() {
-                    let exe = entry.path().join("qemu-system-x86_64.exe");
-                    if exe.exists() {
-                        return exe.to_string_lossy().to_string();
-                    }
+        if let Ok(entries) = fs::read_dir(qemu_dir) {
+            for entry in entries.flatten() {
+                let exe = entry.path().join("qemu-system-x86_64.exe");
+                if exe.exists() {
+                    return exe.to_string_lossy().to_string();
                 }
             }
         }
@@ -95,11 +93,9 @@ pub fn find_ovmf() -> PathBuf {
             PathBuf::from(&home).join("scoop/apps/qemu/current/share/edk2-x86_64-secure-code.fd"),
         );
         let qemu_dir = PathBuf::from(&home).join("scoop/apps/qemu");
-        if qemu_dir.exists() {
-            if let Ok(entries) = fs::read_dir(qemu_dir) {
-                for entry in entries.flatten() {
-                    candidates.push(entry.path().join("share/edk2-x86_64-code.fd"));
-                }
+        if let Ok(entries) = fs::read_dir(qemu_dir) {
+            for entry in entries.flatten() {
+                candidates.push(entry.path().join("share/edk2-x86_64-code.fd"));
             }
         }
     }

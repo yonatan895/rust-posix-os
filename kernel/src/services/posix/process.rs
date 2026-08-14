@@ -555,9 +555,14 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
                 rsp: frame.rsp,
             };
 
-            if let Ok(user_ptr) = UserPtr::<SignalFrame>::from_raw(new_rsp as usize)
-                && user_ptr.write(sig_frame).is_ok()
-            {
+            let frame_write_ok =
+                if let Ok(user_ptr) = UserPtr::<SignalFrame>::from_raw(new_rsp as usize) {
+                    user_ptr.write(sig_frame).is_ok()
+                } else {
+                    false
+                };
+
+            if frame_write_ok {
                 frame.rsp = new_rsp;
                 frame.rip = action.sa_handler as u64;
                 frame.rdi = sig as u64;
@@ -573,9 +578,24 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
                 if (action.sa_flags & SA_RESETHAND) != 0 {
                     let _ = SIGNALS.set_action(pid, sig, SigAction::default());
                 }
+                return false;
+            } else {
+                // Frame write failed: terminate with SIGSEGV matching syscall path
+                let ppid = if let Some(proc_lock) = get_current_process() {
+                    let mut proc = proc_lock.lock();
+                    proc.state = ProcessState::Zombie;
+                    proc.exit_code = SIGSEGV & 0x7f;
+                    proc.killed_by_sig = Some(SIGSEGV);
+                    proc.ppid
+                } else {
+                    0
+                };
+                if ppid > 0 {
+                    crate::services::scheduler::wake_tasks(&[ppid]);
+                }
+                SIGNALS.cleanup_process(pid);
+                return true;
             }
-
-            return false;
         }
     }
 
