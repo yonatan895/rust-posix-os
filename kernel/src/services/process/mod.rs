@@ -104,10 +104,16 @@ impl Process {
         let loaded =
             load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
 
-        self.vm_space = Some(new_vm);
+        let old_vm = self.vm_space.replace(new_vm);
         self.entry_point = loaded.entry_point;
         self.user_stack_top = loaded.user_stack_top;
         self.mmap_next_vaddr = DEFAULT_MMAP_BASE;
+
+        // Activate the new address space in CR3 before dropping the old address space
+        if let Some(ref vm) = self.vm_space {
+            vm.activate();
+        }
+        drop(old_vm);
 
         let initial_rsp = crate::ostd::task::init_user_kernel_stack(
             &mut self.kernel_stack,
