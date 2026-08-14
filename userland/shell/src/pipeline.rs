@@ -9,6 +9,9 @@ pub unsafe fn tokenize_line(line: *mut u8, argv: &mut [*const u8; 16]) -> usize 
     for slot in argv.iter_mut() {
         *slot = core::ptr::null();
     }
+    if ptr.is_null() {
+        return 0;
+    }
     unsafe {
         while *ptr != 0 && argc < 16 {
             while *ptr != 0 && (*ptr == b' ' || *ptr == b'\t' || *ptr == b'\r' || *ptr == b'\n') {
