@@ -52,7 +52,11 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
                 let res = sys_execve(a1 as *const u8);
                 if res == 0 {
                     if let Some(proc_lock) = get_current_process() {
-                        if let Some(ref vm) = proc_lock.lock().vm_space {
+                        let proc = proc_lock.lock();
+                        // sysretq returns to RCX; trampoline also restores RSP.
+                        r.rcx = proc.entry_point;
+                        r.rsp = proc.user_stack_top;
+                        if let Some(ref vm) = proc.vm_space {
                             vm.activate();
                         }
                     }
@@ -85,7 +89,6 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         };
 
         // The trampoline restores rax from this frame after we return.
-        // If we leave the syscall number here, getpid() prints 39 (SYS_GETPID).
         r.rax = ret as usize;
         r.rax
     })
