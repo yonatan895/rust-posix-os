@@ -21,7 +21,7 @@ ADR-0001 established the TCB boundary but deliberately left locking undecided. C
 
 Locks are only ever acquired in this order:
 
-    PROCESS_TABLE → Scheduler → VFS mount/table → individual Inode → device locks
+    PROCESS_TABLE → Scheduler → IPC (SignalManager) → VFS mount/table → individual Inode → device locks
 
 A lock may never be acquired while holding a lock from a later tier. New locks are slotted into this hierarchy by amending this ADR in the same PR that introduces the lock.
 

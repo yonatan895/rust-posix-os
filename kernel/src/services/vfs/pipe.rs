@@ -124,6 +124,10 @@ impl Inode for PipeReadEnd {
             if should_switch {
                 crate::services::scheduler::switch_out_current();
                 crate::services::scheduler::mark_current_running();
+                if crate::services::ipc::SIGNALS.has_unblocked_signals(caller_pid) {
+                    self.buf.lock().read_waiters.remove_waiter(caller_pid);
+                    return Err(EINTR);
+                }
             } else {
                 crate::services::scheduler::mark_current_running();
             }
@@ -236,6 +240,10 @@ impl Inode for PipeWriteEnd {
             if should_switch {
                 crate::services::scheduler::switch_out_current();
                 crate::services::scheduler::mark_current_running();
+                if crate::services::ipc::SIGNALS.has_unblocked_signals(caller_pid) {
+                    self.buf.lock().write_waiters.remove_waiter(caller_pid);
+                    return Err(EINTR);
+                }
             } else {
                 crate::services::scheduler::mark_current_running();
             }

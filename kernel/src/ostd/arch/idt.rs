@@ -148,7 +148,17 @@ pub extern "C" fn rust_timer_tick_handler(current_rsp: usize) -> usize {
         TIMER_TICKS = TIMER_TICKS.wrapping_add(1);
         crate::ostd::irq::send_eoi(0);
     }
-    crate::services::scheduler::timer_tick_schedule(current_rsp)
+    let mut next_rsp = crate::services::scheduler::timer_tick_schedule(current_rsp);
+    let target_pid =
+        crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::SeqCst);
+    if target_pid > 0 && crate::services::ipc::SIGNALS.has_unblocked_signals(target_pid) {
+        let frame = unsafe { &mut *(next_rsp as *mut TrapFrame) };
+        let terminated = crate::services::posix::check_and_deliver_signals_irq(frame, target_pid);
+        if terminated {
+            next_rsp = crate::services::scheduler::timer_tick_schedule(next_rsp);
+        }
+    }
+    next_rsp
 }
 
 /// Naked assembly ISR entry stub for the timer interrupt (vector 0x20).

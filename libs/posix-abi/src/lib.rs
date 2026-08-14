@@ -54,4 +54,27 @@ mod tests {
         assert_eq!(WUNTRACED, 2);
         assert_eq!(WCONTINUED, 8);
     }
+
+    #[test]
+    fn test_signal_constants() {
+        assert_eq!(SIG_MIN, 1);
+        assert_eq!(SIG_MAX, 31);
+        assert_eq!(SIGHUP, 1);
+        assert_eq!(SIGINT, 2);
+        assert_eq!(SIGKILL, 9);
+        assert_eq!(SIGUSR1, 10);
+        assert_eq!(SIGTERM, 15);
+        assert_eq!(SIGSTOP, 19);
+        assert_eq!(SIGSYS, 31);
+
+        assert_eq!(SIG_DFL, 0);
+        assert_eq!(SIG_IGN, 1);
+
+        assert_eq!(SIG_BLOCK, 0);
+        assert_eq!(SIG_UNBLOCK, 1);
+        assert_eq!(SIG_SETMASK, 2);
+
+        assert_eq!(SA_RESTORER, 0x04000000);
+        assert_eq!(SA_NODEFER, 0x40000000);
+    }
 }

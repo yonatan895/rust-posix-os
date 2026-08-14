@@ -43,6 +43,13 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_LSEEK => sys_lseek(a1 as i32, a2 as i64, a3 as i32),
         SYS_MMAP => sys_mmap(a1, a2, a3 as i32, a4 as i32),
         SYS_MUNMAP => sys_munmap(a1, a2),
+        SYS_RT_SIGACTION => {
+            sys_rt_sigaction(a1 as i32, a2 as *const SigAction, a3 as *mut SigAction, a4)
+        }
+        SYS_RT_SIGPROCMASK => {
+            sys_rt_sigprocmask(a1 as i32, a2 as *const SigSet, a3 as *mut SigSet, a4)
+        }
+        SYS_RT_SIGRETURN => sys_rt_sigreturn(r),
         SYS_PIPE => sys_pipe(a1 as *mut [i32; 2]),
         SYS_DUP => sys_dup(a1 as i32),
         SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
@@ -87,7 +94,12 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         _ => -(ENOSYS as isize),
     };
 
-    // The trampoline restores rax from this frame after we return.
-    r.rax = ret as usize;
+    if syscall_nr != SYS_RT_SIGRETURN {
+        // Set return value in rax
+        r.rax = ret as usize;
+        // Check and deliver any pending unblocked signals before sysretq
+        check_and_deliver_signals(r);
+    }
+
     r.rax
 }
