@@ -161,11 +161,15 @@ pub fn setup_user_stack(
     envp: &[&str],
 ) -> Result<usize, &'static str> {
     let mut sp = USER_STACK_TOP;
+    let stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
 
     // 1. Write environment strings to the stack
     let mut envp_ptrs = alloc::vec::Vec::new();
     for env in envp.iter() {
         let bytes = env.as_bytes();
+        if sp < stack_bottom + bytes.len() + 1 {
+            return Err("Environment list exceeds user stack limit (E2BIG)");
+        }
         sp -= bytes.len() + 1;
         vm_space.write_bytes_to_space(sp, bytes)?;
         vm_space.write_bytes_to_space(sp + bytes.len(), &[0u8])?;
@@ -176,6 +180,9 @@ pub fn setup_user_stack(
     let mut argv_ptrs = alloc::vec::Vec::new();
     for arg in argv.iter() {
         let bytes = arg.as_bytes();
+        if sp < stack_bottom + bytes.len() + 1 {
+            return Err("Argument list exceeds user stack limit (E2BIG)");
+        }
         sp -= bytes.len() + 1;
         vm_space.write_bytes_to_space(sp, bytes)?;
         vm_space.write_bytes_to_space(sp + bytes.len(), &[0u8])?;
@@ -201,8 +208,11 @@ pub fn setup_user_stack(
     let total_bytes = total_words * 8;
 
     // Align final stack pointer so that rsp % 16 == 0
-    let target_sp = sp - total_bytes;
+    let target_sp = sp.checked_sub(total_bytes).ok_or("Stack pointer underflow")?;
     let aligned_sp = target_sp & !0xF;
+    if aligned_sp < stack_bottom {
+        return Err("User stack frame exceeds user stack limit (E2BIG)");
+    }
     let padding = target_sp - aligned_sp;
     sp -= padding;
 

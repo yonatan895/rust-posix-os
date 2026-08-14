@@ -49,11 +49,13 @@ pub fn copy_user_str_array(
 
     let mut result = alloc::vec::Vec::new();
     let mut curr_ptr = arr_ptr as usize;
+    let mut terminated = false;
 
     for _ in 0..max_count {
         let uptr = crate::ostd::mm::UserPtr::<usize>::from_raw(curr_ptr).map_err(map_user_error)?;
         let str_addr = uptr.read().map_err(map_user_error)?;
         if str_addr == 0 {
+            terminated = true;
             break;
         }
 
@@ -63,6 +65,10 @@ pub fn copy_user_str_array(
         result.push(alloc::string::ToString::to_string(s));
 
         curr_ptr = curr_ptr.checked_add(core::mem::size_of::<usize>()).ok_or(EFAULT)?;
+    }
+
+    if !terminated {
+        return Err(E2BIG);
     }
 
     Ok(result)

@@ -34,11 +34,7 @@ pub fn sys_execve(
         Err(e) => return -(e as isize),
     };
 
-    let argv_refs: alloc::vec::Vec<&str> = if argv_vec.is_empty() {
-        alloc::vec![path]
-    } else {
-        argv_vec.iter().map(|s| s.as_str()).collect()
-    };
+    let argv_refs: alloc::vec::Vec<&str> = argv_vec.iter().map(|s| s.as_str()).collect();
     let envp_refs: alloc::vec::Vec<&str> = envp_vec.iter().map(|s| s.as_str()).collect();
 
     let proc_lock = match get_current_process() {
