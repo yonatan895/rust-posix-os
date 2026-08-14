@@ -88,7 +88,16 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
     }
 }
 
-pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
+pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let (pid, uid, gid, umask) = {
+        let proc = proc_lock.lock();
+        (proc.pid, proc.uid, proc.gid, proc.umask)
+    };
+
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
@@ -108,7 +117,8 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
                 Ok(res) => res,
                 Err(err) => return -(err as isize),
             };
-            match parent.create_file(&basename) {
+            let creation_mode = ((mode as u16) & 0o777) & !(umask as u16);
+            match parent.create_file(&basename, creation_mode, uid, gid) {
                 Ok(new_inode) => {
                     is_created = true;
                     new_inode
@@ -119,23 +129,40 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
         Err(err) => return -(err as isize),
     };
 
+    // Permission enforcement for existing files (root uid == 0 bypasses)
+    if !is_created
+        && uid != 0
+        && let Ok(st) = inode.stat()
+    {
+        let imode = st.st_mode;
+        let req_write = (flags & O_WRONLY != 0) || (flags & O_RDWR != 0);
+        let req_read = flags & O_WRONLY == 0;
+
+        let (can_read, can_write) = if uid == st.st_uid {
+            (imode & S_IRUSR != 0, imode & S_IWUSR != 0)
+        } else if gid == st.st_gid {
+            (imode & S_IRGRP != 0, imode & S_IWGRP != 0)
+        } else {
+            (imode & S_IROTH != 0, imode & S_IWOTH != 0)
+        };
+
+        if (req_read && !can_read) || (req_write && !can_write) {
+            return -(EACCES as isize);
+        }
+    }
+
     if !is_created && (flags & O_TRUNC != 0) && ((flags & O_WRONLY != 0) || (flags & O_RDWR != 0)) {
         let _ = inode.truncate();
     }
 
     let handle = Arc::new(FileHandle::new(inode, flags));
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
     let mut proc = proc_lock.lock();
-    let pid = proc.pid;
     match proc.alloc_fd(handle) {
         Ok(fd) => {
             if is_created {
                 log_audit_event(
                     pid,
-                    0,
+                    uid,
                     AUDIT_TYPE_FILE_CREATE,
                     0,
                     path,
@@ -319,10 +346,13 @@ pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
     newfd as isize
 }
 
-pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
-    let pid = match get_current_process() {
-        Some(p) => p.lock().pid,
-        None => 0,
+pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
+    let (pid, uid, gid, umask) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.pid, proc.uid, proc.gid, proc.umask)
+        }
+        None => (0, 0, 0, 0o022),
     };
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -335,7 +365,7 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
         Err(err) => {
             log_audit_event(
                 pid,
-                0,
+                uid,
                 AUDIT_TYPE_DIR_CREATE,
                 -err,
                 path,
@@ -345,15 +375,23 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
         }
     };
 
-    match parent.create_dir(&basename) {
+    let effective_mode = ((mode as u16) & 0o777) & !(umask as u16);
+    match parent.create_dir(&basename, effective_mode, uid, gid) {
         Ok(_) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, 0, path, "Directory created");
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_DIR_CREATE,
+                0,
+                path,
+                "Directory created",
+            );
             0
         }
         Err(err) => {
             log_audit_event(
                 pid,
-                0,
+                uid,
                 AUDIT_TYPE_DIR_CREATE,
                 -err,
                 path,
@@ -365,9 +403,12 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
 }
 
 pub fn sys_unlink(path_ptr: *const u8) -> isize {
-    let pid = match get_current_process() {
-        Some(p) => p.lock().pid,
-        None => 0,
+    let (pid, uid) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.pid, proc.uid)
+        }
+        None => (0, 0),
     };
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -380,7 +421,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
         Err(err) => {
             log_audit_event(
                 pid,
-                0,
+                uid,
                 AUDIT_TYPE_FILE_UNLINK,
                 -err,
                 path,
@@ -394,7 +435,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
         Ok(()) => {
             log_audit_event(
                 pid,
-                0,
+                uid,
                 AUDIT_TYPE_FILE_UNLINK,
                 0,
                 path,
@@ -403,16 +444,26 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
             0
         }
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -err, path, "Unlink failed");
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_UNLINK,
+                -err,
+                path,
+                "Unlink failed",
+            );
             -(err as isize)
         }
     }
 }
 
 pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
-    let pid = match get_current_process() {
-        Some(p) => p.lock().pid,
-        None => 0,
+    let (pid, uid) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.pid, proc.uid)
+        }
+        None => (0, 0),
     };
     let mut kold = [0u8; USER_STR_MAX];
     let oldpath = match copy_user_path(oldpath_ptr, &mut kold) {
@@ -461,7 +512,7 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
 
     log_audit_event(
         pid,
-        0,
+        uid,
         AUDIT_TYPE_FILE_MODIFY,
         0,
         newpath,

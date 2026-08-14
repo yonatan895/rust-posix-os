@@ -68,6 +68,36 @@ pub unsafe extern "C" fn getppid() -> i32 {
 }
 
 #[unsafe(no_mangle)]
+pub unsafe extern "C" fn getuid() -> u32 {
+    unsafe { syscall0(SYS_GETUID) as u32 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn geteuid() -> u32 {
+    unsafe { syscall0(SYS_GETEUID) as u32 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getgid() -> u32 {
+    unsafe { syscall0(SYS_GETGID) as u32 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getegid() -> u32 {
+    unsafe { syscall0(SYS_GETEGID) as u32 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setuid(uid: u32) -> i32 {
+    unsafe { syscall1(SYS_SETUID, uid as usize) as i32 }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setgid(gid: u32) -> i32 {
+    unsafe { syscall1(SYS_SETGID, gid as usize) as i32 }
+}
+
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
     let mut term = Termios::default();
     let res = unsafe {

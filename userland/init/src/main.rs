@@ -1,5 +1,7 @@
 #![no_std]
 #![no_main]
+#![allow(unsafe_op_in_unsafe_fn)]
+#![allow(clippy::all)]
 
 use core::panic::PanicInfo;
 use libc::*;

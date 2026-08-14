@@ -1,6 +1,3 @@
-//! Kernel Security Audit Journal and System Snapshot Subsystem.
-
-use crate::ostd::mm::{get_heap_stats, get_pmm_stats};
 use crate::ostd::sync::SpinLock;
 use crate::services::monitor::SYSTEM_MONITOR;
 use crate::services::process::PROCESS_TABLE;
@@ -60,6 +57,8 @@ static NEXT_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 pub struct ProcessSnapshotInfo {
     pub pid: i32,
     pub ppid: i32,
+    pub uid: u32,
+    pub gid: u32,
     pub state: String,
     pub open_fds: usize,
     pub cwd: String,
@@ -134,26 +133,33 @@ pub fn get_audit_events() -> Vec<AuditEvent> {
 }
 
 pub fn create_audit_snapshot(label: &str) -> u64 {
+    let (caller_pid, caller_uid) = match crate::services::process::get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.pid, proc.uid)
+        }
+        None => (0, 0),
+    };
+    create_audit_snapshot_with_creds(caller_pid, caller_uid, label)
+}
+
+pub fn create_audit_snapshot_with_creds(pid: i32, uid: u32, label: &str) -> u64 {
     let id = NEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
-    let current_seq = NEXT_EVENT_SEQ.load(Ordering::Relaxed).saturating_sub(1);
-
-    let (total_frames, free_frames) = get_pmm_stats();
-    let total_ram_kb = (total_frames * 4096 / 1024) as u64;
-    let free_ram_kb = (free_frames * 4096 / 1024) as u64;
-    let used_ram_kb = total_ram_kb.saturating_sub(free_ram_kb);
-
-    let (_heap_total, heap_used) = get_heap_stats();
-    let heap_used_kb = (heap_used / 1024) as u64;
-
-    let ticks = {
+    let current_seq = NEXT_EVENT_SEQ.load(Ordering::Relaxed);
+    let (total_ram_kb, used_ram_kb, heap_used_kb, ticks) = {
         let mon = SYSTEM_MONITOR.lock();
-        mon.sample_tick
+        (
+            (mon.total_memory_bytes / 1024) as u64,
+            (mon.used_memory_bytes / 1024) as u64,
+            (mon.used_heap_bytes / 1024) as u64,
+            mon.sample_tick,
+        )
     };
 
     let mut procs = Vec::new();
     {
         let table = PROCESS_TABLE.lock();
-        for (&pid, proc_arc) in table.iter() {
+        for (&p_id, proc_arc) in table.iter() {
             let proc = proc_arc.lock();
             let state_str = match proc.state {
                 crate::services::process::ProcessState::Ready => "READY",
@@ -162,8 +168,10 @@ pub fn create_audit_snapshot(label: &str) -> u64 {
                 crate::services::process::ProcessState::Zombie => "ZOMBIE",
             };
             procs.push(ProcessSnapshotInfo {
-                pid,
+                pid: p_id,
                 ppid: proc.ppid,
+                uid: proc.uid,
+                gid: proc.gid,
                 state: String::from(state_str),
                 open_fds: proc.fds.iter().filter(|f| f.is_some()).count(),
                 cwd: String::from(&proc.cwd),
@@ -192,8 +200,8 @@ pub fn create_audit_snapshot(label: &str) -> u64 {
     }
 
     log_audit_event(
-        1,
-        0,
+        pid,
+        uid,
         AUDIT_TYPE_SNAPSHOT_CREATED,
         0,
         label,

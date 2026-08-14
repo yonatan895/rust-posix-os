@@ -23,6 +23,11 @@ pub enum ProcessState {
 pub struct Process {
     pub pid: i32,
     pub ppid: i32,
+    pub uid: u32,
+    pub gid: u32,
+    pub euid: u32,
+    pub egid: u32,
+    pub umask: u32,
     pub state: ProcessState,
     pub cwd: String,
     pub fds: Vec<Option<Arc<FileHandle>>>,
@@ -46,6 +51,11 @@ impl Process {
         Self {
             pid,
             ppid,
+            uid: 0,
+            gid: 0,
+            euid: 0,
+            egid: 0,
+            umask: 0o022,
             state: ProcessState::Ready,
             cwd,
             fds: Vec::new(),

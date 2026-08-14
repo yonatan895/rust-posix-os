@@ -115,7 +115,7 @@ pub const SIG_UNBLOCK: i32 = 1;
 pub const SIG_SETMASK: i32 = 2;
 
 // ============================================================================
-// POSIX File Mode Types (S_IF*)
+// POSIX File Mode Types (S_IF*) and Permissions
 // ============================================================================
 pub const S_IFMT: u32 = 0o170000;
 pub const S_IFSOCK: u32 = 0o140000;
@@ -125,6 +125,22 @@ pub const S_IFBLK: u32 = 0o060000;
 pub const S_IFDIR: u32 = 0o040000;
 pub const S_IFCHR: u32 = 0o020000;
 pub const S_IFIFO: u32 = 0o010000;
+
+// Permission Bits
+pub const S_IRWXU: u32 = 0o700;
+pub const S_IRUSR: u32 = 0o400;
+pub const S_IWUSR: u32 = 0o200;
+pub const S_IXUSR: u32 = 0o100;
+
+pub const S_IRWXG: u32 = 0o070;
+pub const S_IRGRP: u32 = 0o040;
+pub const S_IWGRP: u32 = 0o020;
+pub const S_IXGRP: u32 = 0o010;
+
+pub const S_IRWXO: u32 = 0o007;
+pub const S_IROTH: u32 = 0o004;
+pub const S_IWOTH: u32 = 0o002;
+pub const S_IXOTH: u32 = 0o001;
 
 // ============================================================================
 // Directory Entry Types (DT_*)

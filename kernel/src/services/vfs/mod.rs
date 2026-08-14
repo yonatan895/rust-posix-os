@@ -74,11 +74,23 @@ pub trait Inode: Send + Sync {
         self.write(offset, buf)
     }
 
-    fn create_file(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+    fn create_file(
+        &self,
+        _name: &str,
+        _mode: u16,
+        _uid: u32,
+        _gid: u32,
+    ) -> Result<Arc<dyn Inode>, i32> {
         Err(ENOTDIR)
     }
 
-    fn create_dir(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+    fn create_dir(
+        &self,
+        _name: &str,
+        _mode: u16,
+        _uid: u32,
+        _gid: u32,
+    ) -> Result<Arc<dyn Inode>, i32> {
         Err(ENOTDIR)
     }
 

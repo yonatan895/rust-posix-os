@@ -77,4 +77,21 @@ mod tests {
         assert_eq!(SA_RESTORER, 0x04000000);
         assert_eq!(SA_NODEFER, 0x40000000);
     }
+
+    #[test]
+    fn test_credentials_and_mode_constants() {
+        assert_eq!(SYS_UMASK, 95);
+        assert_eq!(SYS_GETUID, 102);
+        assert_eq!(SYS_GETGID, 104);
+        assert_eq!(SYS_SETUID, 105);
+        assert_eq!(SYS_SETGID, 106);
+        assert_eq!(SYS_GETEUID, 107);
+        assert_eq!(SYS_GETEGID, 108);
+
+        assert_eq!(S_IFREG, 0o100000);
+        assert_eq!(S_IFDIR, 0o040000);
+        assert_eq!(S_IRUSR, 0o400);
+        assert_eq!(S_IWUSR, 0o200);
+        assert_eq!(S_IXUSR, 0o100);
+    }
 }

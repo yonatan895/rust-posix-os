@@ -113,11 +113,12 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
     let mut proc = proc_lock.lock();
     proc.cwd = target_norm.clone();
     let pid = proc.pid;
+    let uid = proc.uid;
     drop(proc);
 
     log_audit_event(
         pid,
-        0,
+        uid,
         AUDIT_TYPE_DIR_CHANGE,
         0,
         &target_norm,
