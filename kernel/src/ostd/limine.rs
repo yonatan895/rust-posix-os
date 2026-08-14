@@ -179,20 +179,20 @@ unsafe impl Send for LimineModuleRequest {}
 
 #[used]
 #[link_section = ".requests_start"]
-pub static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
+static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
     id: [0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9],
 };
 
 #[used]
 #[link_section = ".requests"]
-pub static BASE_REVISION: LimineBaseRevision = LimineBaseRevision {
+static BASE_REVISION: LimineBaseRevision = LimineBaseRevision {
     id: [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc],
     revision: 3,
 };
 
 #[used]
 #[link_section = ".requests"]
-pub static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: LIMINE_HHDM_REQUEST,
     revision: 0,
     response: UnsafeCell::new(core::ptr::null_mut()),
@@ -200,7 +200,7 @@ pub static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
 
 #[used]
 #[link_section = ".requests"]
-pub static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
+static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
     id: LIMINE_MEMMAP_REQUEST,
     revision: 0,
     response: UnsafeCell::new(core::ptr::null_mut()),
@@ -208,7 +208,7 @@ pub static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
 
 #[used]
 #[link_section = ".requests"]
-pub static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
+static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
     id: LIMINE_FRAMEBUFFER_REQUEST,
     revision: 0,
     response: UnsafeCell::new(core::ptr::null_mut()),
@@ -216,7 +216,7 @@ pub static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequ
 
 #[used]
 #[link_section = ".requests"]
-pub static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
+static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
     id: LIMINE_MODULE_REQUEST,
     revision: 0,
     response: UnsafeCell::new(core::ptr::null_mut()),
@@ -224,27 +224,30 @@ pub static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
 
 #[used]
 #[link_section = ".requests_end"]
-pub static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
+static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
     id: [0xadc0e0531bb10d03, 0x9572709f31764c62],
 };
 
 /// Get the higher-half direct map (HHDM) virtual offset provided by Limine.
 pub fn hhdm_offset() -> usize {
     let resp = unsafe { *HHDM_REQUEST.response.get() };
-    if !resp.is_null() {
-        unsafe { (*resp).offset as usize }
-    } else {
-        0xFFFF_8000_0000_0000
+    if resp.is_null() {
+        panic!("Limine HHDM response missing");
     }
+    unsafe { (*resp).offset as usize }
 }
 
 /// Get the physical memory map response pointer.
-pub fn memmap_response() -> *mut LimineMemmapResponse {
-    unsafe { *MEMMAP_REQUEST.response.get() }
+pub(crate) fn memmap_response() -> *mut LimineMemmapResponse {
+    let resp = unsafe { *MEMMAP_REQUEST.response.get() };
+    if resp.is_null() {
+        panic!("Limine memory map response missing");
+    }
+    resp
 }
 
 /// Get the bootloader module response pointer.
-pub fn module_response() -> *mut LimineModuleResponse {
+pub(crate) fn module_response() -> *mut LimineModuleResponse {
     unsafe { *MODULE_REQUEST.response.get() }
 }
 
