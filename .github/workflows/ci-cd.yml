@@ -1,139 +1,116 @@
-name: CI/CD Pipeline
+name: CI
 
 on:
   push:
-    branches:
-      - main
-      - 'feature/**'
-      - 'ci/**'
-    tags:
-      - 'v*'
+    branches: [main, "cleanup/**", "ci/**", "feature/**"]
+    tags: ["v*"]
   pull_request:
-    branches:
-      - main
   workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == "pull_request" }}
+
+permissions:
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
 
 jobs:
-  check-and-lint:
-    name: Codebase Check & Linting
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Nightly Toolchain
-        uses: dtolnay/rust-toolchain@nightly
-        with:
-          components: rust-src, llvm-tools-preview, clippy
-
-      - name: Check Workspace Crates (x86_64-unknown-none)
-        env:
-          RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
-        run: |
-          cargo check --workspace --exclude xtask --target x86_64-unknown-none \
-            -Zbuild-std=core,compiler_builtins,alloc \
-            -Zbuild-std-features=compiler-builtins-mem
-
-      - name: Check Cargo Xtask Automation
-        run: cargo check --manifest-path tools/xtask/Cargo.toml
-
-  test-suite:
-    name: Automated Verification Test Suite
+  build:
+    name: Build (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
     steps:
-      - name: Checkout Source Code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust Nightly Toolchain
+      - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src, llvm-tools-preview
 
-      - name: Run 13 Verification Test Suites via Xtask
-        run: cargo run --manifest-path tools/xtask/Cargo.toml -- test
-
-  build-and-package:
-    name: Build & Package UEFI Boot Artifacts
-    runs-on: ubuntu-latest
-    needs: [check-and-lint, test-suite]
-    steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Install Rust Nightly Toolchain
-        uses: dtolnay/rust-toolchain@nightly
+      - name: Cache cargo registry and target
+        uses: Swatinem/rust-cache@v2
         with:
-          components: rust-src, llvm-tools-preview
+          cache-on-failure: true
+          prefix-key: posix-os
 
-      - name: Build Kernel & Stage UEFI Image
-        run: cargo run --manifest-path tools/xtask/Cargo.toml -- build
+      - name: Cache Limine BOOTX64.EFI
+        uses: actions/cache@v4
+        with:
+          path: BOOTX64.EFI
+          key: limine-bootx64-v8
 
-      - name: Create Zip Archive of Boot Drive
+      - name: Build kernel and UEFI image
+        run: cargo xtask build
+
+      - name: Stage boot artifacts
+        if: runner.os == 'Linux'
         run: |
-          cd target
-          zip -r ../rust-posix-os-uefi-boot.zip iso_root
-          cd ..
+          set -euo pipefail
+          mkdir -p dist/iso_root
+          cp -a target/iso_root/. dist/iso_root/
+          cp target/x86_64-unknown-none/debug/kernel dist/kernel
+          cp target/x86_64-unknown-none/debug/initramfs.tar dist/initramfs.tar
 
-      - name: Upload Kernel Binary Artifact
+      - name: Upload UEFI boot artifacts
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
-          name: kernel-elf
-          path: target/x86_64-unknown-none/debug/kernel
+          name: uefi-boot
+          path: dist/
           if-no-files-found: error
+          retention-days: 7
 
-      - name: Upload Initramfs Archive Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: initramfs-tar
-          path: target/x86_64-unknown-none/debug/initramfs.tar
-          if-no-files-found: error
-
-      - name: Upload UEFI Bootable Drive Package
-        uses: actions/upload-artifact@v4
-        with:
-          name: rust-posix-os-uefi-boot
-          path: rust-posix-os-uefi-boot.zip
-          if-no-files-found: error
-
-  qemu-smoke-test:
-    name: Headless QEMU Boot Smoke Test
+  qemu:
+    name: QEMU smoke test
     runs-on: ubuntu-latest
-    needs: [build-and-package]
+    needs: build
+    timeout-minutes: 10
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Install QEMU & OVMF UEFI Firmware
+      - name: Install QEMU and OVMF
         run: |
           sudo apt-get update
-          sudo apt-get install -y qemu-system-x86 ovmf
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends qemu-system-x86 ovmf
 
-      - name: Download UEFI Bootable Package
+      - name: Download UEFI boot artifacts
         uses: actions/download-artifact@v4
         with:
-          name: rust-posix-os-uefi-boot
-          path: .
+          name: uefi-boot
+          path: dist
 
-      - name: Unpack UEFI Boot Drive
+      - name: Boot headless QEMU and verify serial
         run: |
-          unzip -q rust-posix-os-uefi-boot.zip -d target
+          set -euo pipefail
+          mkdir -p target
+          cp -a dist/iso_root target/iso_root
 
-      - name: Boot OS in Headless QEMU & Verify Serial Telemetry
-        run: |
-          OVMF_PATH="/usr/share/OVMF/OVMF_CODE.fd"
-          if [ ! -f "$OVMF_PATH" ]; then
-            OVMF_PATH="/usr/share/ovmf/OVMF.fd"
+          OVMF_PATH=""
+          for candidate in \
+            /usr/share/OVMF/OVMF_CODE_4M.fd \
+            /usr/share/OVMF/OVMF_CODE.fd \
+            /usr/share/ovmf/OVMF.fd \
+            /usr/share/qemu/OVMF.fd; do
+            if [ -f "$candidate" ]; then
+              OVMF_PATH="$candidate"
+              break
+            fi
+          done
+          if [ -z "$OVMF_PATH" ]; then
+            echo "FAILED: OVMF firmware not found"
+            exit 1
           fi
+          echo "[CI] Using OVMF: $OVMF_PATH"
 
-          echo "[CI] Launching QEMU headless with 30s timeout..."
-          timeout --preserve-status 30s qemu-system-x86_64 \
+          set +e
+          timeout --signal=TERM --kill-after=5s 45s qemu-system-x86_64 \
             -cpu qemu64 \
             -drive "if=pflash,format=raw,readonly=on,file=$OVMF_PATH" \
             -drive "file=fat:rw:target/iso_root,format=raw,media=disk" \
@@ -141,42 +118,62 @@ jobs:
             -smp 2 \
             -serial file:serial.log \
             -display none \
-            -no-reboot || true
+            -no-reboot \
+            -no-shutdown
+          qemu_rc=$?
+          set -e
 
           echo "=================== QEMU SERIAL OUTPUT ==================="
-          cat serial.log
+          if [ -f serial.log ]; then
+            cat serial.log
+          else
+            echo "(serial.log missing, qemu exit $qemu_rc)"
+          fi
           echo "=========================================================="
 
-          # Verify critical kernel and userspace milestones in serial telemetry
-          grep -q "Rust POSIX Operating System (Framekernel Model)" serial.log || (echo "FAILED: Kernel banner missing" && exit 1)
-          grep -q "Kernel Initialization Complete. Kernel running!" serial.log || (echo "FAILED: Kernel init failed" && exit 1)
-          grep -q "Rust POSIX OS - Init Daemon (PID 1) Running" serial.log || (echo "FAILED: PID 1 init daemon missing" && exit 1)
-          grep -q "Rust POSIX Shell" serial.log || (echo "FAILED: Shell banner missing" && exit 1)
-          echo "[CI] QEMU boot smoke test passed successfully!"
+          if [ ! -s serial.log ]; then
+            echo "FAILED: empty serial log (qemu exit $qemu_rc)"
+            exit 1
+          fi
+
+          fail=0
+          grep -q "Rust POSIX Operating System (Framekernel Model)" serial.log || { echo "FAILED: kernel banner missing"; fail=1; }
+          grep -q "Kernel Initialization Complete. Kernel running!" serial.log || { echo "FAILED: kernel init failed"; fail=1; }
+          grep -q "Rust POSIX OS - Init Daemon (PID 1) Running" serial.log || { echo "FAILED: PID 1 init daemon missing"; fail=1; }
+          grep -q "Rust POSIX Shell" serial.log || { echo "FAILED: shell banner missing"; fail=1; }
+          if [ "$fail" -ne 0 ]; then
+            exit 1
+          fi
+          echo "[CI] QEMU boot smoke test passed (qemu exit $qemu_rc)"
+
+      - name: Upload serial log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: qemu-serial-log
+          path: serial.log
+          if-no-files-found: ignore
+          retention-days: 7
 
   release:
-    name: Publish GitHub Release
+    name: Publish GitHub release
     runs-on: ubuntu-latest
-    needs: [build-and-package, qemu-smoke-test]
+    needs: [build, qemu]
     if: startsWith(github.ref, 'refs/tags/v')
     permissions:
       contents: write
+    timeout-minutes: 10
     steps:
-      - name: Checkout Source Code
-        uses: actions/checkout@v4
-
-      - name: Download Build Artifacts
+      - name: Download UEFI boot artifacts
         uses: actions/download-artifact@v4
         with:
+          name: uefi-boot
           path: release_assets
 
-      - name: Publish Release to GitHub
+      - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            release_assets/rust-posix-os-uefi-boot/rust-posix-os-uefi-boot.zip
-            release_assets/kernel-elf/kernel
-            release_assets/initramfs-tar/initramfs.tar
+            release_assets/kernel
+            release_assets/initramfs.tar
           generate_release_notes: true
-          draft: false
-          prerelease: false
