@@ -1,5 +1,6 @@
 #![no_std]
 #![allow(suspicious_runtime_symbol_definitions)]
+#![allow(clippy::missing_safety_doc)]
 
 //! Lightweight POSIX C ABI Library in Rust.
 //!

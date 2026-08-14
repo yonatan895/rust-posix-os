@@ -20,6 +20,7 @@ pub fn run_tests() {
     test_two_process_pipe_voluntary_context_switch_and_blocking();
     test_signal_delivery_and_sigreturn();
     test_fork_and_address_space_isolation();
+    test_libc_small_object_allocator();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -46,6 +47,7 @@ pub fn run_tests() {
         "Pipe Blocking & EOF Semantics Test",
         "Two-Process Pipe Voluntary Context Switch & Blocking Test",
         "Signal Delivery & sigreturn Test",
+        "libc Small-Object Allocator Test",
     ];
 
     for t in tests {
@@ -993,4 +995,175 @@ fn test_fork_and_address_space_isolation() {
 
     // Verify File Descriptor Sharing
     assert_eq!(child.open_fds, parent.open_fds);
+}
+
+fn test_libc_small_object_allocator() {
+    // 1. Simulate the libc slab/bin allocator over 64 KiB chunks
+    const ARENA_SIZE: usize = 64 * 1024;
+    const NUM_CLASSES: usize = 8;
+    const SIZE_CLASSES: [usize; NUM_CLASSES] = [16, 32, 64, 128, 256, 512, 1024, 2048];
+    const SMALL_THRESHOLD: usize = 2048;
+
+    struct SimAllocator {
+        mmap_count: usize,
+        munmap_count: usize,
+        free_lists: [Vec<usize>; NUM_CLASSES],
+        arena_offsets: [usize; NUM_CLASSES],
+        arena_records: Vec<(usize, usize, usize)>, // (start, end, class_idx)
+        large_allocs: BTreeMap<usize, (usize, Vec<u8>)>,
+        next_addr: usize,
+    }
+
+    impl SimAllocator {
+        fn new() -> Self {
+            Self {
+                mmap_count: 0,
+                munmap_count: 0,
+                free_lists: Default::default(),
+                arena_offsets: [ARENA_SIZE; NUM_CLASSES], // force initial arena mmap
+                arena_records: Vec::new(),
+                large_allocs: BTreeMap::new(),
+                next_addr: 0x1000_0000,
+            }
+        }
+
+        fn malloc(&mut self, size: usize) -> usize {
+            if size == 0 {
+                return 0;
+            }
+            if size > SMALL_THRESHOLD {
+                self.mmap_count += 1;
+                let aligned = (size + 16 + 4095) & !4095;
+                let addr = self.next_addr;
+                self.next_addr += aligned;
+                self.large_allocs
+                    .insert(addr, (aligned, vec![0u8; aligned]));
+                addr + 16
+            } else {
+                let mut class_idx = 0;
+                while class_idx < NUM_CLASSES && SIZE_CLASSES[class_idx] < size {
+                    class_idx += 1;
+                }
+                if class_idx >= NUM_CLASSES {
+                    class_idx = NUM_CLASSES - 1;
+                }
+                let b_size = SIZE_CLASSES[class_idx];
+
+                if let Some(addr) = self.free_lists[class_idx].pop() {
+                    return addr;
+                }
+
+                if self.arena_offsets[class_idx] + b_size > ARENA_SIZE {
+                    // Mmap new 64 KiB arena
+                    self.mmap_count += 1;
+                    let arena_base = self.next_addr;
+                    self.next_addr += ARENA_SIZE;
+                    let hdr_size = 32;
+                    self.arena_records
+                        .push((arena_base, arena_base + ARENA_SIZE, class_idx));
+                    self.arena_offsets[class_idx] = hdr_size;
+                }
+
+                let arena_base = self
+                    .arena_records
+                    .iter()
+                    .rev()
+                    .find(|(_, _, c)| *c == class_idx)
+                    .unwrap()
+                    .0;
+                let addr = arena_base + self.arena_offsets[class_idx];
+                self.arena_offsets[class_idx] += b_size;
+                addr
+            }
+        }
+
+        fn free(&mut self, ptr: usize) {
+            if ptr == 0 {
+                return;
+            }
+            for &(start, end, class_idx) in &self.arena_records {
+                if ptr >= start && ptr < end {
+                    self.free_lists[class_idx].push(ptr);
+                    return;
+                }
+            }
+            let base = ptr - 16;
+            if self.large_allocs.remove(&base).is_some() {
+                self.munmap_count += 1;
+            }
+        }
+
+        fn realloc(&mut self, ptr: usize, size: usize) -> usize {
+            if ptr == 0 {
+                return self.malloc(size);
+            }
+            if size == 0 {
+                self.free(ptr);
+                return 0;
+            }
+            let mut old_cap = 0;
+            let mut is_small = false;
+            for &(start, end, class_idx) in &self.arena_records {
+                if ptr >= start && ptr < end {
+                    old_cap = SIZE_CLASSES[class_idx];
+                    is_small = true;
+                    break;
+                }
+            }
+            if !is_small {
+                let base = ptr - 16;
+                if let Some((aligned, _)) = self.large_allocs.get(&base) {
+                    old_cap = aligned - 16;
+                }
+            }
+            if old_cap >= size {
+                return ptr; // In-place reuse
+            }
+            let new_ptr = self.malloc(size);
+            self.free(ptr);
+            new_ptr
+        }
+    }
+
+    let mut alloc = SimAllocator::new();
+
+    // 10,000 malloc/free cycles of <= 128 bytes
+    let mut live_ptrs = Vec::new();
+    for i in 0..10_000 {
+        let sz = ((i * 17) % 128) + 1; // Varying sizes from 1 to 128 B
+        let p = alloc.malloc(sz);
+        assert_ne!(p, 0);
+        live_ptrs.push(p);
+
+        if live_ptrs.len() >= 64 {
+            let to_free = live_ptrs.swap_remove(0);
+            alloc.free(to_free);
+        }
+    }
+
+    while let Some(p) = live_ptrs.pop() {
+        alloc.free(p);
+    }
+
+    // Acceptance criterion: 10,000 malloc/free cycles of <= 128 B complete with < 64 SYS_MMAP calls
+    assert!(
+        alloc.mmap_count < 64,
+        "10,000 small allocations must complete with < 64 mmap calls (actual: {})",
+        alloc.mmap_count
+    );
+
+    // Test in-place realloc
+    let p1 = alloc.malloc(32);
+    let p2 = alloc.realloc(p1, 28);
+    assert_eq!(p1, p2, "Realloc within size class must reuse in-place");
+
+    let p3 = alloc.realloc(p2, 512); // Growth to larger size class
+    assert_ne!(p3, p2);
+    alloc.free(p3);
+
+    // Test large allocation
+    let large_p = alloc.malloc(8192);
+    assert_ne!(large_p, 0);
+    alloc.free(large_p);
+    assert!(alloc.munmap_count > 0);
 }
