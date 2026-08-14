@@ -1,0 +1,1 @@
+This file is a note for the follow-up patch to main.rs: replace repaint_prompt_line body with line_draw::paint_prompt and declare mod line_draw.
