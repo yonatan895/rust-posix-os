@@ -51,6 +51,8 @@ ADR-0001:
 - R4. Address-space / context switch only in `ostd`.
 - R5. Every `unsafe` block has `// SAFETY:` stating why it is sound.
 
+ADR-0002: locking rules (hierarchy, IRQ discipline, no user memory under spinlock) live in docs/adr/0002-locking.md.
+
 A change that needs two layers is two PRs (ostd primitive first).
 
 ## 2. Abstractions
