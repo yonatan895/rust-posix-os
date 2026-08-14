@@ -132,8 +132,9 @@ jobs:
             OVMF_PATH="/usr/share/ovmf/OVMF.fd"
           fi
 
-          echo "[CI] Launching QEMU headless with 12s timeout..."
-          timeout --preserve-status 12s qemu-system-x86_64 \
+          echo "[CI] Launching QEMU headless with 30s timeout..."
+          timeout --preserve-status 30s qemu-system-x86_64 \
+            -cpu qemu64 \
             -drive "if=pflash,format=raw,readonly=on,file=$OVMF_PATH" \
             -drive "file=fat:rw:target/iso_root,format=raw,media=disk" \
             -m 512M \
