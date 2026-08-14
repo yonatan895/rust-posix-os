@@ -104,33 +104,41 @@ pub unsafe fn show_completion_menu(
     clear_menu_fn: impl Fn(*const u8, &[u8], usize),
 ) {
     let mut sel = 0;
-    render_menu_row(matches, count, sel);
-    out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+    unsafe {
+        render_menu_row(matches, count, sel);
+        out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+    }
 
     loop {
-        let b = libc::getchar();
+        let b = unsafe { libc::getchar() };
         if b < 0 {
             continue;
         }
         let ch = b as u8;
         if ch == b'\t' || ch == 0x06 {
             sel = (sel + 1) % count;
-            render_menu_row(matches, count, sel);
-            out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+            unsafe {
+                render_menu_row(matches, count, sel);
+                out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+            }
         } else if ch == 0x1b {
-            let b2 = libc::getchar();
-            let b3 = libc::getchar();
+            let b2 = unsafe { libc::getchar() };
+            let b3 = unsafe { libc::getchar() };
             if b2 == b'[' as i32 {
                 match b3 as u8 {
                     b'C' => {
                         sel = (sel + 1) % count;
-                        render_menu_row(matches, count, sel);
-                        out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+                        unsafe {
+                            render_menu_row(matches, count, sel);
+                            out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+                        }
                     }
                     b'D' => {
                         sel = if sel == 0 { count - 1 } else { sel - 1 };
-                        render_menu_row(matches, count, sel);
-                        out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+                        unsafe {
+                            render_menu_row(matches, count, sel);
+                            out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
+                        }
                     }
                     _ => {}
                 }
@@ -223,20 +231,22 @@ pub unsafe fn handle_tab_completion(
             Ok(s) => s,
             Err(_) => return,
         };
-        let fd = open(b".\0".as_ptr(), O_RDONLY | O_DIRECTORY, 0);
+        let fd = unsafe { open(b".\0".as_ptr(), O_RDONLY | O_DIRECTORY, 0) };
         if fd >= 0 {
             let mut dir_buf = [0u8; 4096];
-            let n = syscall::syscall3(
-                SYS_GETDENTS64,
-                fd as usize,
-                dir_buf.as_mut_ptr() as usize,
-                dir_buf.len(),
-            ) as isize;
-            close(fd);
+            let n = unsafe {
+                syscall::syscall3(
+                    SYS_GETDENTS64,
+                    fd as usize,
+                    dir_buf.as_mut_ptr() as usize,
+                    dir_buf.len(),
+                ) as isize
+            };
+            unsafe { close(fd) };
             if n > 0 {
                 let mut offset = 0;
                 while offset < n as usize && match_count < 24 {
-                    let dirent = &*(dir_buf.as_ptr().add(offset) as *const Dirent64);
+                    let dirent = unsafe { &*(dir_buf.as_ptr().add(offset) as *const Dirent64) };
                     let mut name_len = 0;
                     while name_len < dirent.d_name.len() && dirent.d_name[name_len] != 0 {
                         name_len += 1;
@@ -293,15 +303,17 @@ pub unsafe fn handle_tab_completion(
         }
         repaint_fn(cwd, buf, *len);
     } else {
-        show_completion_menu(
-            cwd,
-            buf,
-            len,
-            replace_start,
-            &mut matches,
-            match_count,
-            &repaint_fn,
-            clear_menu_fn,
-        );
+        unsafe {
+            show_completion_menu(
+                cwd,
+                buf,
+                len,
+                replace_start,
+                &mut matches,
+                match_count,
+                &repaint_fn,
+                clear_menu_fn,
+            );
+        }
     }
 }

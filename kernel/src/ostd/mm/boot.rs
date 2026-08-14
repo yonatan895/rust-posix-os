@@ -65,6 +65,6 @@ where
     }
     // SAFETY: see function docs. Single-CPU: the frame is not reused until
     // this function returns to the trampoline.
-    let r = &mut *regs;
+    let r = unsafe { &mut *regs };
     f(r)
 }

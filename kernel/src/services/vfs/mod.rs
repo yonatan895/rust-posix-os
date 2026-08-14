@@ -99,10 +99,10 @@ impl FileHandle {
 
     pub fn write(&self, buf: &[u8]) -> Result<usize, i32> {
         let mut offset_guard = self.offset.lock();
-        if self.flags & O_APPEND != 0 {
-            if let Ok(st) = self.inode.stat() {
-                *offset_guard = st.st_size as usize;
-            }
+        if self.flags & O_APPEND != 0
+            && let Ok(st) = self.inode.stat()
+        {
+            *offset_guard = st.st_size as usize;
         }
         let bytes_written = self.inode.write(*offset_guard, buf)?;
         *offset_guard += bytes_written;

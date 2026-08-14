@@ -29,14 +29,18 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
     if memmap_response.is_null() {
         return;
     }
-    let count = (*memmap_response).entry_count as usize;
-    let entries = (*memmap_response).entries;
+    let (count, entries) = unsafe {
+        (
+            (*memmap_response).entry_count as usize,
+            (*memmap_response).entries,
+        )
+    };
 
     let mut highest_addr: u64 = 0;
     let mut total_bytes: usize = 0;
 
     for i in 0..count {
-        let entry = **entries.add(i);
+        let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE {
             total_bytes += entry.length as usize;
             let top = entry.base + entry.length;
@@ -53,7 +57,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
     // Find a usable region large enough for the bitmap
     let mut bitmap_addr: u64 = 0;
     for i in 0..count {
-        let entry = **entries.add(i);
+        let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE && (entry.length as usize) >= bitmap_size {
             bitmap_addr = entry.base;
             break;
@@ -62,7 +66,9 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
 
     let bitmap_ptr = (bitmap_addr as usize + hhdm_offset) as *mut u8;
     // Initially mark everything as allocated (1 = used)
-    core::ptr::write_bytes(bitmap_ptr, 0xFF, bitmap_size);
+    unsafe {
+        core::ptr::write_bytes(bitmap_ptr, 0xFF, bitmap_size);
+    }
 
     let mut manager = PhysicalMemoryManager {
         bitmap: bitmap_ptr,
@@ -73,7 +79,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
 
     // Mark usable areas as free (0 = free)
     for i in 0..count {
-        let entry = **entries.add(i);
+        let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE {
             let start_frame = (entry.base as usize) / PAGE_SIZE;
             let frame_count = (entry.length as usize) / PAGE_SIZE;

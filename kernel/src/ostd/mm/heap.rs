@@ -34,7 +34,9 @@ impl LinkedListAllocator {
     /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
     /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
-        self.add_free_region(heap_start, heap_size);
+        unsafe {
+            self.add_free_region(heap_start, heap_size);
+        }
     }
 
     unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
@@ -47,10 +49,12 @@ impl LinkedListAllocator {
         let usable_size = size - padding;
 
         let node_ptr = aligned_addr as *mut ListNode;
-        core::ptr::write_unaligned(node_ptr, ListNode::new(usable_size));
-        let node = &mut *node_ptr;
-        node.next = self.head.next.take();
-        self.head.next = Some(node);
+        unsafe {
+            core::ptr::write_unaligned(node_ptr, ListNode::new(usable_size));
+            let node = &mut *node_ptr;
+            node.next = self.head.next.take();
+            self.head.next = Some(node);
+        }
     }
 
     fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut ListNode, usize)> {
@@ -93,7 +97,9 @@ impl LockedHeap {
     /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
     /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
-        self.0.lock().init(heap_start, heap_size);
+        unsafe {
+            self.0.lock().init(heap_start, heap_size);
+        }
     }
 }
 
@@ -121,7 +127,9 @@ unsafe impl GlobalAlloc for LockedHeap {
             let excess_size = region_end.saturating_sub(alloc_end);
 
             if excess_size >= core::mem::size_of::<ListNode>() {
-                allocator.add_free_region(alloc_end, excess_size);
+                unsafe {
+                    allocator.add_free_region(alloc_end, excess_size);
+                }
             }
             HEAP_USED_BYTES.fetch_add(min_size, Ordering::Relaxed);
             alloc_start as *mut u8
@@ -135,7 +143,9 @@ unsafe impl GlobalAlloc for LockedHeap {
         let align = layout.align().max(core::mem::align_of::<ListNode>());
         let size = (layout.size() + align - 1) & !(align - 1);
         let min_size = size.max(core::mem::size_of::<ListNode>());
-        allocator.add_free_region(ptr as usize, min_size);
+        unsafe {
+            allocator.add_free_region(ptr as usize, min_size);
+        }
         HEAP_USED_BYTES.fetch_sub(min_size, Ordering::Relaxed);
     }
 }

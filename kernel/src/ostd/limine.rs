@@ -178,7 +178,7 @@ unsafe impl Sync for LimineModuleRequest {}
 unsafe impl Send for LimineModuleRequest {}
 
 #[used]
-#[link_section = ".requests_start"]
+#[unsafe(link_section = ".requests_start")]
 static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
     id: [
         0xf6b8f4b39de7d1ae,
@@ -189,14 +189,14 @@ static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
 };
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static BASE_REVISION: LimineBaseRevision = LimineBaseRevision {
     id: [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc],
     revision: 3,
 };
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
     id: LIMINE_HHDM_REQUEST,
     revision: 0,
@@ -204,7 +204,7 @@ static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
 };
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
     id: LIMINE_MEMMAP_REQUEST,
     revision: 0,
@@ -212,7 +212,7 @@ static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
 };
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
     id: LIMINE_FRAMEBUFFER_REQUEST,
     revision: 0,
@@ -220,7 +220,7 @@ static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest 
 };
 
 #[used]
-#[link_section = ".requests"]
+#[unsafe(link_section = ".requests")]
 static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
     id: LIMINE_MODULE_REQUEST,
     revision: 0,
@@ -228,7 +228,7 @@ static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
 };
 
 #[used]
-#[link_section = ".requests_end"]
+#[unsafe(link_section = ".requests_end")]
 static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
     id: [0xadc0e0531bb10d03, 0x9572709f31764c62],
 };

@@ -73,7 +73,7 @@ pub struct InterruptFrame {
 /// # Safety
 ///
 /// `frame` must point to a valid hardware exception stack frame.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, error_code: u64) {
     let fault_addr = unsafe { read_cr2() };
     log::error!(
@@ -92,7 +92,7 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
 /// # Safety
 ///
 /// `frame` must point to a valid hardware exception stack frame.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_general_protection_fault(
     frame: *const InterruptFrame,
     error_code: u64,
@@ -109,7 +109,7 @@ pub unsafe extern "C" fn rust_general_protection_fault(
 
 pub static mut TIMER_TICKS: u64 = 0;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub extern "C" fn rust_timer_handler() {
     unsafe {
         TIMER_TICKS = TIMER_TICKS.wrapping_add(1);
@@ -127,5 +127,7 @@ pub unsafe fn idt_init() {
         base: &raw const GLOBAL_IDT as u64,
     };
 
-    asm!("lidt [{}]", in(reg) &descriptor, options(nostack));
+    unsafe {
+        asm!("lidt [{}]", in(reg) &descriptor, options(nostack));
+    }
 }

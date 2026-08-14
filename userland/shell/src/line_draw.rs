@@ -82,7 +82,7 @@ pub unsafe fn paint_prompt(
     out.push_cstr(cwd);
     out.push_str("# ");
 
-    let (start, cmd_end) = cmd_span(buf, len);
+    let (start, cmd_end) = unsafe { cmd_span(buf, len) };
     for i in 0..start {
         out.push_byte(buf[i]);
     }
