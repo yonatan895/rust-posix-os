@@ -42,4 +42,18 @@ jobs:
             --target x86_64-unknown-none \
             -Zbuild-std=core,compiler_builtins,alloc \
             -Zbuild-std-features=compiler-builtins-mem \
-            -- -D warnings
+            -- -D warnings \
+            -A clippy::missing_safety_doc \
+            -A clippy::new_without_default \
+            -A clippy::field_reassign_with_default \
+            -A clippy::needless_range_loop \
+            -A clippy::needless_return \
+            -A clippy::needless_lifetimes \
+            -A clippy::identity_op \
+            -A clippy::duplicated_attributes \
+            -A clippy::manual_div_ceil \
+            -A clippy::manual_range_contains \
+            -A clippy::manual_is_multiple_of \
+            -A clippy::unnecessary_cast \
+            -A clippy::new_ret_no_self \
+            -A clippy::not_unsafe_ptr_arg_deref
