@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
 
 concurrency:
-  group: ci-${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -22,8 +22,13 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  rust-quality:
+    name: Quality
+    uses: ./.github/workflows/quality.yml
+
   build:
     name: Build (${{ matrix.os }})
+    needs: rust-quality
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35

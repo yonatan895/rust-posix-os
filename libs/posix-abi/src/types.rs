@@ -64,7 +64,7 @@ impl Default for Stat {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Utsname {
     pub sysname: [u8; 65],
     pub nodename: [u8; 65],
@@ -72,6 +72,19 @@ pub struct Utsname {
     pub version: [u8; 65],
     pub machine: [u8; 65],
     pub domainname: [u8; 65],
+}
+
+impl Default for Utsname {
+    fn default() -> Self {
+        Self {
+            sysname: [0; 65],
+            nodename: [0; 65],
+            release: [0; 65],
+            version: [0; 65],
+            machine: [0; 65],
+            domainname: [0; 65],
+        }
+    }
 }
 
 #[repr(C)]
@@ -94,13 +107,25 @@ pub struct Sysinfo {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct Dirent64 {
     pub d_ino: u64,
     pub d_off: i64,
     pub d_reclen: u16,
     pub d_type: u8,
     pub d_name: [u8; 256],
+}
+
+impl Default for Dirent64 {
+    fn default() -> Self {
+        Self {
+            d_ino: 0,
+            d_off: 0,
+            d_reclen: 0,
+            d_type: 0,
+            d_name: [0; 256],
+        }
+    }
 }
 
 #[repr(C)]
@@ -128,7 +153,7 @@ pub struct SigAction {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 pub struct AuditSnapshotHeader {
     pub id: u64,
     pub timestamp_ticks: u64,
@@ -138,4 +163,19 @@ pub struct AuditSnapshotHeader {
     pub heap_used_kb: u64,
     pub process_count: u32,
     pub label: [u8; 64],
+}
+
+impl Default for AuditSnapshotHeader {
+    fn default() -> Self {
+        Self {
+            id: 0,
+            timestamp_ticks: 0,
+            journal_seq: 0,
+            total_memory_kb: 0,
+            used_memory_kb: 0,
+            heap_used_kb: 0,
+            process_count: 0,
+            label: [0; 64],
+        }
+    }
 }

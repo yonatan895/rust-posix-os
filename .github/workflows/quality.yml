@@ -1,18 +1,7 @@
 name: Quality
 
 on:
-  pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
-
-concurrency:
-  group: quality-${{ github.ref }}
-  cancel-in-progress: true
-
-permissions:
-  contents: read
+  workflow_call:
 
 jobs:
   rust-quality:
@@ -29,6 +18,7 @@ jobs:
           components: rustfmt, clippy, rust-src
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt (changed .rs only)
+        if: github.event_name == 'pull_request'
         run: |
           set -euo pipefail
           git fetch origin "${{ github.base_ref }}" --depth=1
@@ -39,6 +29,9 @@ jobs:
             exit 0
           fi
           echo "$files" | xargs rustfmt --edition 2024 --check
+      - name: rustfmt (full tree)
+        if: github.event_name != 'pull_request'
+        run: cargo fmt --all -- --check
       - name: clippy host crates
         run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
       - name: clippy kernel
