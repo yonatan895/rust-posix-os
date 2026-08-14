@@ -49,44 +49,81 @@ pub fn sys_execve(
     }
 }
 
-pub fn sys_wait4(pid: i32, status_ptr: *mut i32, _options: i32) -> isize {
-    let mut table = PROCESS_TABLE.lock();
-    let target_pid = if pid == -1 {
-        let mut found = None;
-        for (&p, proc) in table.iter() {
-            if proc.lock().state == ProcessState::Zombie {
-                found = Some(p);
-                break;
-            }
-        }
-        match found {
-            Some(p) => p,
-            None => return -(ECHILD as isize),
-        }
-    } else {
-        pid
+pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
+    let calling_pid = match get_current_process() {
+        Some(proc) => proc.lock().pid,
+        None => return -(ESRCH as isize),
     };
 
-    if let Some(proc_lock) = table.get(&target_pid) {
-        let proc = proc_lock.lock();
-        if proc.state == ProcessState::Zombie {
-            let exit_code = proc.exit_code;
-            drop(proc);
-            table.remove(&target_pid);
-            if !status_ptr.is_null() {
-                let out = match UserPtr::<i32>::from_raw(status_ptr as usize) {
-                    Ok(p) => p,
-                    Err(e) => return -(map_user_error(e) as isize),
-                };
-                if let Err(e) = out.write((exit_code & 0xff) << 8) {
-                    return -(map_user_error(e) as isize);
+    let mut table = PROCESS_TABLE.lock();
+
+    let mut has_children = false;
+    let mut reaped_pid = None;
+    let mut exit_code = 0;
+
+    if pid == -1 || pid == 0 || pid < -1 {
+        // Wait for any child where ppid == calling_pid
+        for (&p, proc_arc) in table.iter() {
+            let proc = proc_arc.lock();
+            if proc.ppid == calling_pid {
+                has_children = true;
+                if proc.state == ProcessState::Zombie {
+                    reaped_pid = Some(p);
+                    exit_code = proc.exit_code;
+                    break;
                 }
             }
-            return target_pid as isize;
+        }
+    } else {
+        // Wait for specific child pid
+        if let Some(proc_arc) = table.get(&pid) {
+            let proc = proc_arc.lock();
+            if proc.ppid == calling_pid {
+                has_children = true;
+                if proc.state == ProcessState::Zombie {
+                    reaped_pid = Some(pid);
+                    exit_code = proc.exit_code;
+                }
+            } else {
+                // Target is not a child of the calling process -> -ECHILD
+                return -(ECHILD as isize);
+            }
+        } else {
+            // Target PID does not exist in table -> -ECHILD
+            return -(ECHILD as isize);
         }
     }
 
-    -(ECHILD as isize)
+    if let Some(target) = reaped_pid {
+        table.remove(&target);
+        // SAFETY & LOCK ORDERING (ADR-0002 L1): Drop table lock before writing to user memory
+        drop(table);
+
+        if !status_ptr.is_null() {
+            let out = match UserPtr::<i32>::from_raw(status_ptr as usize) {
+                Ok(p) => p,
+                Err(e) => return -(map_user_error(e) as isize),
+            };
+            if let Err(e) = out.write((exit_code & 0xff) << 8) {
+                return -(map_user_error(e) as isize);
+            }
+        }
+        return target as isize;
+    }
+
+    // No zombie child found
+    if has_children {
+        if options & WNOHANG != 0 {
+            // POSIX WNOHANG: Children exist but none have changed state -> return 0
+            0
+        } else {
+            // Blocking wait: Children exist, cooperative-system placeholder for blocking (Issue #26)
+            -(EAGAIN as isize)
+        }
+    } else {
+        // No unwaited children exist -> -ECHILD
+        -(ECHILD as isize)
+    }
 }
 
 pub fn sys_getpid() -> isize {

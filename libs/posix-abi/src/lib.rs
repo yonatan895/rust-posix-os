@@ -47,4 +47,11 @@ mod tests {
         assert_eq!(O_RDWR, 2);
         assert_eq!(O_CREAT, 0o100);
     }
+
+    #[test]
+    fn test_wait_flags() {
+        assert_eq!(WNOHANG, 1);
+        assert_eq!(WUNTRACED, 2);
+        assert_eq!(WCONTINUED, 8);
+    }
 }
