@@ -7,6 +7,7 @@ on:
       - "feature/**"
       - "ci/**"
       - "cleanup/**"
+      - "fix/**"
     tags:
       - "v*"
   pull_request:
@@ -94,7 +95,7 @@ jobs:
           name: uefi-boot
           path: dist
 
-      - name: Boot headless QEMU and verify serial
+      - name: Boot until shell then stop QEMU
         run: |
           set -euo pipefail
           mkdir -p target
@@ -117,8 +118,8 @@ jobs:
           fi
           echo "[CI] Using OVMF: $OVMF_PATH"
 
-          set +e
-          timeout --signal=TERM --kill-after=5s 45s qemu-system-x86_64 \
+          : > serial.log
+          qemu-system-x86_64 \
             -cpu qemu64 \
             -drive "if=pflash,format=raw,readonly=on,file=$OVMF_PATH" \
             -drive "file=fat:rw:target/iso_root,format=raw,media=disk" \
@@ -126,33 +127,54 @@ jobs:
             -smp 2 \
             -serial file:serial.log \
             -display none \
-            -no-reboot \
-            -no-shutdown
-          qemu_rc=$?
-          set -e
+            -no-reboot &
+          QEMU_PID=$!
+
+          cleanup() {
+            if kill -0 "$QEMU_PID" 2>/dev/null; then
+              kill -TERM "$QEMU_PID" 2>/dev/null || true
+              sleep 1
+              kill -KILL "$QEMU_PID" 2>/dev/null || true
+              wait "$QEMU_PID" 2>/dev/null || true
+            fi
+          }
+          trap cleanup EXIT
+
+          ready() {
+            [ -s serial.log ] || return 1
+            grep -q "Rust POSIX Operating System (Framekernel Model)" serial.log || return 1
+            grep -q "Kernel Initialization Complete. Kernel running!" serial.log || return 1
+            grep -q "Rust POSIX OS - Init Daemon (PID 1) Running" serial.log || return 1
+            grep -q "Rust POSIX Shell" serial.log || return 1
+          }
+
+          for _ in $(seq 1 90); do
+            if ready; then
+              echo "[CI] Guest reached interactive shell; stopping QEMU."
+              cleanup
+              trap - EXIT
+              echo "=================== QEMU SERIAL OUTPUT ==================="
+              cat serial.log
+              echo "=========================================================="
+              echo "[CI] QEMU boot smoke test passed"
+              exit 0
+            fi
+            if ! kill -0 "$QEMU_PID" 2>/dev/null; then
+              wait "$QEMU_PID" || true
+              echo "=================== QEMU SERIAL OUTPUT ==================="
+              cat serial.log || true
+              echo "=========================================================="
+              echo "FAILED: QEMU exited before the shell banner"
+              exit 1
+            fi
+            sleep 0.5
+          done
 
           echo "=================== QEMU SERIAL OUTPUT ==================="
-          if [ -f serial.log ]; then
-            cat serial.log
-          else
-            echo "(serial.log missing, qemu exit $qemu_rc)"
-          fi
+          cat serial.log || true
           echo "=========================================================="
-
-          if [ ! -s serial.log ]; then
-            echo "FAILED: empty serial log (qemu exit $qemu_rc)"
-            exit 1
-          fi
-
-          fail=0
-          grep -q "Rust POSIX Operating System (Framekernel Model)" serial.log || { echo "FAILED: kernel banner missing"; fail=1; }
-          grep -q "Kernel Initialization Complete. Kernel running!" serial.log || { echo "FAILED: kernel init failed"; fail=1; }
-          grep -q "Rust POSIX OS - Init Daemon (PID 1) Running" serial.log || { echo "FAILED: PID 1 init daemon missing"; fail=1; }
-          grep -q "Rust POSIX Shell" serial.log || { echo "FAILED: shell banner missing"; fail=1; }
-          if [ "$fail" -ne 0 ]; then
-            exit 1
-          fi
-          echo "[CI] QEMU boot smoke test passed (qemu exit $qemu_rc)"
+          echo "FAILED: timed out waiting for shell banner"
+          exit 1
 
       - name: Upload serial log
         if: always()
