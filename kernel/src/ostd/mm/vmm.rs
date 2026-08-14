@@ -59,6 +59,59 @@ pub struct VmSpace {
     pub vmas: Vec<Vma>,
 }
 
+#[inline(always)]
+fn pt_indices(virt_addr: usize) -> (usize, usize, usize, usize) {
+    (
+        (virt_addr >> 39) & 0x1FF,
+        (virt_addr >> 30) & 0x1FF,
+        (virt_addr >> 21) & 0x1FF,
+        (virt_addr >> 12) & 0x1FF,
+    )
+}
+
+#[inline(always)]
+fn pte_phys(entry: u64) -> usize {
+    (entry & 0x000F_FFFF_FFFF_F000) as usize
+}
+
+/// Gets or creates an intermediate page table level.
+///
+/// # Safety
+/// `table` must be a valid pointer to an initialized PageTable in the HHDM.
+unsafe fn get_or_create_table(
+    table: *mut PageTable,
+    idx: usize,
+    flags: u64,
+) -> Result<*mut PageTable, &'static str> {
+    // SAFETY: caller guarantees valid table pointer and index is within 0..512.
+    unsafe {
+        if (*table).entries[idx] & PAGE_PRESENT == 0 {
+            let frame = alloc_frame().ok_or("Out of physical frames for page table")?;
+            zero_phys_frame(frame);
+            (*table).entries[idx] =
+                (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+        }
+        let next_phys = pte_phys((*table).entries[idx]);
+        Ok(phys_to_virt(next_phys) as *mut PageTable)
+    }
+}
+
+/// Reads an intermediate page table if present.
+///
+/// # Safety
+/// `table` must be a valid pointer to an initialized PageTable in the HHDM.
+unsafe fn get_table(table: *const PageTable, idx: usize) -> Option<*const PageTable> {
+    // SAFETY: caller guarantees valid table pointer and index is within 0..512.
+    unsafe {
+        if (*table).entries[idx] & PAGE_PRESENT == 0 {
+            None
+        } else {
+            let next_phys = pte_phys((*table).entries[idx]);
+            Some(phys_to_virt(next_phys) as *const PageTable)
+        }
+    }
+}
+
 impl VmSpace {
     pub fn new() -> Option<Self> {
         let pml4_phys = alloc_frame()?;
@@ -291,36 +344,26 @@ impl VmSpace {
     /// Note: `invlpg` invalidates the local CPU TLB for `virt_addr` under the uniprocessor
     /// model where active process mutations occur on the current CR3.
     pub fn set_page_flags(&mut self, virt_addr: usize, new_flags: u64) {
-        let pml4_idx = (virt_addr >> 39) & 0x1FF;
-        let pdpt_idx = (virt_addr >> 30) & 0x1FF;
-        let pd_idx = (virt_addr >> 21) & 0x1FF;
-        let pt_idx = (virt_addr >> 12) & 0x1FF;
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
 
         // SAFETY: Table pointers are valid HHDM views of allocated page tables.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
+            let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
+            let Some(pdpt) = get_table(pml4, pml4_idx) else {
                 return;
-            }
-            let pdpt = phys_to_virt(((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
-
-            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
+            };
+            let Some(pd) = get_table(pdpt, pdpt_idx) else {
                 return;
-            }
-            let pd = phys_to_virt(((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
-
-            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
+            };
+            let Some(pt) = get_table(pd, pd_idx) else {
                 return;
-            }
-            let pt = phys_to_virt(((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
+            };
+            let pt_mut = pt as *mut PageTable;
 
-            let entry = (*pt).entries[pt_idx];
+            let entry = (*pt_mut).entries[pt_idx];
             if entry & PAGE_PRESENT != 0 {
-                let phys_base = entry & 0x000F_FFFF_FFFF_F000;
-                (*pt).entries[pt_idx] = phys_base | new_flags | PAGE_PRESENT;
+                let phys_base = pte_phys(entry) as u64;
+                (*pt_mut).entries[pt_idx] = phys_base | new_flags | PAGE_PRESENT;
                 core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
             }
         }
@@ -333,41 +376,14 @@ impl VmSpace {
         phys_addr: usize,
         flags: u64,
     ) -> Result<(), &'static str> {
-        let pml4_idx = (virt_addr >> 39) & 0x1FF;
-        let pdpt_idx = (virt_addr >> 30) & 0x1FF;
-        let pd_idx = (virt_addr >> 21) & 0x1FF;
-        let pt_idx = (virt_addr >> 12) & 0x1FF;
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
 
         // SAFETY: Table pointers are HHDM views of frames we allocated or copied from kernel PML4.
         unsafe {
             let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-
-            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
-                let frame = alloc_frame().ok_or("Out of memory for PDPT")?;
-                zero_phys_frame(frame);
-                (*pml4).entries[pml4_idx] =
-                    (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-            }
-            let pdpt_phys = ((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-            let pdpt = phys_to_virt(pdpt_phys) as *mut PageTable;
-
-            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
-                let frame = alloc_frame().ok_or("Out of memory for PD")?;
-                zero_phys_frame(frame);
-                (*pdpt).entries[pdpt_idx] =
-                    (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-            }
-            let pd_phys = ((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-            let pd = phys_to_virt(pd_phys) as *mut PageTable;
-
-            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
-                let frame = alloc_frame().ok_or("Out of memory for PT")?;
-                zero_phys_frame(frame);
-                (*pd).entries[pd_idx] =
-                    (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-            }
-            let pt_phys = ((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-            let pt = phys_to_virt(pt_phys) as *mut PageTable;
+            let pdpt = get_or_create_table(pml4, pml4_idx, flags)?;
+            let pd = get_or_create_table(pdpt, pdpt_idx, flags)?;
+            let pt = get_or_create_table(pd, pd_idx, flags)?;
 
             (*pt).entries[pt_idx] = (phys_addr as u64) | flags | PAGE_PRESENT;
         }
@@ -376,36 +392,26 @@ impl VmSpace {
 
     /// Unmaps a 4 KiB virtual page from this address space and frees its physical frame.
     pub fn unmap_page(&mut self, virt_addr: usize) {
-        let pml4_idx = (virt_addr >> 39) & 0x1FF;
-        let pdpt_idx = (virt_addr >> 30) & 0x1FF;
-        let pd_idx = (virt_addr >> 21) & 0x1FF;
-        let pt_idx = (virt_addr >> 12) & 0x1FF;
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
 
         // SAFETY: Table pointers are HHDM views of allocated frames.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
+            let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
+            let Some(pdpt) = get_table(pml4, pml4_idx) else {
                 return;
-            }
-            let pdpt = phys_to_virt(((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
-
-            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
+            };
+            let Some(pd) = get_table(pdpt, pdpt_idx) else {
                 return;
-            }
-            let pd = phys_to_virt(((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
-
-            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
+            };
+            let Some(pt) = get_table(pd, pd_idx) else {
                 return;
-            }
-            let pt = phys_to_virt(((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *mut PageTable;
+            };
+            let pt_mut = pt as *mut PageTable;
 
-            let entry = (*pt).entries[pt_idx];
+            let entry = (*pt_mut).entries[pt_idx];
             if entry & PAGE_PRESENT != 0 {
-                let phys = (entry & 0x000F_FFFF_FFFF_F000) as usize;
-                (*pt).entries[pt_idx] = 0;
+                let phys = pte_phys(entry);
+                (*pt_mut).entries[pt_idx] = 0;
                 free_frame(phys);
                 core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
             }
@@ -414,39 +420,21 @@ impl VmSpace {
 
     /// Translates a virtual address to its mapped physical address.
     pub fn translate(&self, virt_addr: usize) -> Option<usize> {
-        let pml4_idx = (virt_addr >> 39) & 0x1FF;
-        let pdpt_idx = (virt_addr >> 30) & 0x1FF;
-        let pd_idx = (virt_addr >> 21) & 0x1FF;
-        let pt_idx = (virt_addr >> 12) & 0x1FF;
+        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
         let offset = virt_addr & 0xFFF;
 
         // SAFETY: Table pointers are HHDM views of allocated frames.
         unsafe {
             let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
-            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
-                return None;
-            }
-            let pdpt = phys_to_virt(((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *const PageTable;
-
-            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
-                return None;
-            }
-            let pd = phys_to_virt(((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *const PageTable;
-
-            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
-                return None;
-            }
-            let pt = phys_to_virt(((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize)
-                as *const PageTable;
+            let pdpt = get_table(pml4, pml4_idx)?;
+            let pd = get_table(pdpt, pdpt_idx)?;
+            let pt = get_table(pd, pd_idx)?;
 
             let entry = (*pt).entries[pt_idx];
             if entry & PAGE_PRESENT == 0 {
                 return None;
             }
-            let phys_base = (entry & 0x000F_FFFF_FFFF_F000) as usize;
-            Some(phys_base + offset)
+            Some(pte_phys(entry) + offset)
         }
     }
 

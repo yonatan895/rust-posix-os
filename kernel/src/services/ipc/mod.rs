@@ -95,15 +95,9 @@ impl SignalManager {
         let old_mask = *current;
 
         match how {
-            SIG_BLOCK => {
-                *current |= effective_set;
-            }
-            SIG_UNBLOCK => {
-                *current &= !effective_set;
-            }
-            SIG_SETMASK => {
-                *current = effective_set;
-            }
+            SIG_BLOCK => *current |= effective_set,
+            SIG_UNBLOCK => *current &= !effective_set,
+            SIG_SETMASK => *current = effective_set,
             _ => return Err(EINVAL),
         }
 
