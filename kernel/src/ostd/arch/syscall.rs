@@ -102,26 +102,28 @@ pub unsafe extern "C" fn syscall_entry() {
 ///
 /// Must be invoked during boot before entering user mode with a valid kernel stack address.
 pub unsafe fn syscall_init(kernel_stack_top: u64) {
-    // 0. Initialize PerCpuData and Kernel GS Base
-    BSP_PER_CPU.kernel_rsp = kernel_stack_top;
-    wrmsr(IA32_KERNEL_GS_BASE, &raw const BSP_PER_CPU as u64);
+    unsafe {
+        // 0. Initialize PerCpuData and Kernel GS Base
+        BSP_PER_CPU.kernel_rsp = kernel_stack_top;
+        wrmsr(IA32_KERNEL_GS_BASE, &raw const BSP_PER_CPU as u64);
 
-    // 1. Enable System Call Extensions (SCE) in EFER
-    let efer = rdmsr(IA32_EFER);
-    wrmsr(IA32_EFER, efer | 1);
+        // 1. Enable System Call Extensions (SCE) in EFER
+        let efer = rdmsr(IA32_EFER);
+        wrmsr(IA32_EFER, efer | 1);
 
-    // 2. Configure STAR MSR:
-    // Bits 47:32 = Kernel CS (0x08)
-    // Bits 63:48 = Base for User SS/CS (0x10 -> SS = 0x18 | 3 = 0x1B, CS = 0x20 | 3 = 0x23)
-    let star = ((KERNEL_CODE_SEL as u64) << 32) | (0x10u64 << 48);
-    wrmsr(IA32_STAR, star);
+        // 2. Configure STAR MSR:
+        // Bits 47:32 = Kernel CS (0x08)
+        // Bits 63:48 = Base for User SS/CS (0x10 -> SS = 0x18 | 3 = 0x1B, CS = 0x20 | 3 = 0x23)
+        let star = ((KERNEL_CODE_SEL as u64) << 32) | (0x10u64 << 48);
+        wrmsr(IA32_STAR, star);
 
-    // 3. Configure LSTAR MSR with address of syscall_entry
-    wrmsr(IA32_LSTAR, syscall_entry as *const () as usize as u64);
+        // 3. Configure LSTAR MSR with address of syscall_entry
+        wrmsr(IA32_LSTAR, syscall_entry as *const () as usize as u64);
 
-    // 4. Configure FMASK MSR to clear IF (interrupts), DF, TF upon syscall entry
-    let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
-    wrmsr(IA32_FMASK, fmask);
+        // 4. Configure FMASK MSR to clear IF (interrupts), DF, TF upon syscall entry
+        let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
+        wrmsr(IA32_FMASK, fmask);
+    }
 }
 
 /// Syscall dispatcher bridge called from `syscall_entry` assembly.
@@ -129,7 +131,7 @@ pub unsafe fn syscall_init(kernel_stack_top: u64) {
 /// # Safety
 ///
 /// `regs` must either be null or point to a live `SyscallRegisters` frame on the current stack.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
-    crate::ostd::mm::with_syscall_regs(regs, crate::services::posix::dispatch_syscall)
+    unsafe { crate::ostd::mm::with_syscall_regs(regs, crate::services::posix::dispatch_syscall) }
 }

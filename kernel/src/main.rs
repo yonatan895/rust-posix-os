@@ -21,30 +21,42 @@ static mut BOOT_STACK: KernelStack = KernelStack([0; 64 * 1024]);
 /// # Safety
 ///
 /// Must be invoked by a compliant 64-bit bootloader with paging and stack initialized.
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
-    serial_init();
+    unsafe {
+        serial_init();
+    }
     log::info!("=====================================================");
     log::info!("  Rust POSIX Operating System (Framekernel Model)   ");
     log::info!("  Target: x86_64 | Standard: POSIX.1-2024 (IEEE)     ");
     log::info!("=====================================================");
 
     let stack_top = (&raw const BOOT_STACK as u64) + (64 * 1024);
-    gdt_init(stack_top);
+    unsafe {
+        gdt_init(stack_top);
+    }
     log::info!("[OSTD] GDT and 64-bit TSS loaded successfully.");
 
-    idt_init();
+    unsafe {
+        idt_init();
+    }
     log::info!("[OSTD] IDT and exception vectors configured.");
 
-    mm_init();
+    unsafe {
+        mm_init();
+    }
     log::info!("[OSTD] Memory management initialized (PMM, 4-Level Paging, 16MiB Kernel Heap).");
 
     limine::init_framebuffer();
 
-    syscall_init(stack_top);
+    unsafe {
+        syscall_init(stack_top);
+    }
     log::info!("[OSTD] Fast system call MSRs (LSTAR/STAR/FMASK) armed.");
 
-    irq_init();
+    unsafe {
+        irq_init();
+    }
     log::info!("[OSTD] IRQ controllers prepared.");
 
     services::services_init(ostd::mm::boot_modules());
@@ -76,12 +88,16 @@ pub unsafe extern "C" fn _start() -> ! {
                 entry,
                 stack
             );
-            ostd::task::enter_user_mode(entry, stack, pml4);
+            unsafe {
+                ostd::task::enter_user_mode(entry, stack, pml4);
+            }
         }
     }
 
     loop {
-        arch::hlt();
+        unsafe {
+            arch::hlt();
+        }
     }
 }
 

@@ -40,7 +40,7 @@ pub static KNOWN_COMMANDS: [&str; 20] = [
     "exit",
 ];
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     puts(b"\x1b[1;32m=====================================================\x1b[0m\0".as_ptr());
     puts(b"\x1b[1;32m   Rust POSIX Shell (POSIX.1-2024 / x86_64 Userland)  \x1b[0m\0".as_ptr());

@@ -31,13 +31,15 @@ impl SerialPort {
     ///
     /// Directly programs UART hardware registers over I/O ports.
     pub unsafe fn init(&mut self) {
-        outb(self.port + 1, 0x00); // Disable interrupts
-        outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
-        outb(self.port, 0x03); // Set divisor to 3 (38400 baud)
-        outb(self.port + 1, 0x00);
-        outb(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
-        outb(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
-        outb(self.port + 4, 0x0B); // IRQs enabled, RTS/DSR set
+        unsafe {
+            outb(self.port + 1, 0x00); // Disable interrupts
+            outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
+            outb(self.port, 0x03); // Set divisor to 3 (38400 baud)
+            outb(self.port + 1, 0x00);
+            outb(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
+            outb(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
+            outb(self.port + 4, 0x0B); // IRQs enabled, RTS/DSR set
+        }
     }
 
     fn is_transmit_empty(&self) -> bool {
@@ -142,7 +144,9 @@ impl log::Log for KernelLogger {
 ///
 /// Must be called during single-threaded boot initialization.
 pub unsafe fn serial_init() {
-    SERIAL1.lock().init();
+    unsafe {
+        SERIAL1.lock().init();
+    }
     let _ = log::set_logger(&LOGGER);
     log::set_max_level(log::LevelFilter::Debug);
 }

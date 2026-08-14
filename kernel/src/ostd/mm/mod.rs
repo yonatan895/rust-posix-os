@@ -28,13 +28,17 @@ pub unsafe fn mm_init() {
     let memmap_response = crate::ostd::limine::memmap_response();
     let hhdm_offset = crate::ostd::limine::hhdm_offset();
 
-    pmm::pmm_init(memmap_response, hhdm_offset);
-    vmm::vmm_init(hhdm_offset);
+    unsafe {
+        pmm::pmm_init(memmap_response, hhdm_offset);
+        vmm::vmm_init(hhdm_offset);
+    }
 
     // Allocate contiguous physical frames for the kernel heap
     let heap_pages = heap::HEAP_SIZE / PAGE_SIZE;
     let heap_phys_start = alloc_contiguous_frames(heap_pages)
         .expect("Failed to allocate contiguous frames for kernel heap");
     let heap_virt_start = phys_to_virt(heap_phys_start);
-    HEAP_ALLOCATOR.init(heap_virt_start, heap::HEAP_SIZE);
+    unsafe {
+        HEAP_ALLOCATOR.init(heap_virt_start, heap::HEAP_SIZE);
+    }
 }

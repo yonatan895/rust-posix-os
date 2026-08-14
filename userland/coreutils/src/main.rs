@@ -7,7 +7,7 @@ use core::panic::PanicInfo;
 use libc::*;
 use posix_abi::*;
 
-#[no_mangle]
+#[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     let sp: *const usize;
     core::arch::asm!("mov {}, rsp", out(reg) sp, options(nomem, nostack));

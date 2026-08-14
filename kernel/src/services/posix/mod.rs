@@ -53,14 +53,14 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
                 a2 as *const *const u8,
                 a3 as *const *const u8,
             );
-            if res == 0 {
-                if let Some(p) = get_current_process() {
-                    let proc = p.lock();
-                    r.rcx = proc.entry_point;
-                    r.rsp = proc.user_stack_top;
-                    if let Some(ref vm) = proc.vm_space {
-                        vm.activate();
-                    }
+            if res == 0
+                && let Some(p) = get_current_process()
+            {
+                let proc = p.lock();
+                r.rcx = proc.entry_point;
+                r.rsp = proc.user_stack_top;
+                if let Some(ref vm) = proc.vm_space {
+                    vm.activate();
                 }
             }
             res
