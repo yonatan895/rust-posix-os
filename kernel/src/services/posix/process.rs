@@ -123,6 +123,15 @@ pub fn sys_execve(
     }
 }
 
+#[inline(always)]
+fn encode_wait_status(exit_code: i32, killed_by_sig: Option<i32>) -> i32 {
+    if let Some(sig) = killed_by_sig {
+        sig & 0x7f
+    } else {
+        (exit_code & 0xff) << 8
+    }
+}
+
 pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
     let calling_pid = CURRENT_PID.load(Ordering::SeqCst);
 
@@ -143,11 +152,7 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
                         has_children = true;
                         if proc.state == ProcessState::Zombie {
                             reaped_pid = Some(p);
-                            exit_status = if let Some(sig) = proc.killed_by_sig {
-                                sig & 0x7f
-                            } else {
-                                (proc.exit_code & 0xff) << 8
-                            };
+                            exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
                             break;
                         }
                     }
@@ -160,11 +165,7 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
                         has_children = true;
                         if proc.state == ProcessState::Zombie {
                             reaped_pid = Some(pid);
-                            exit_status = if let Some(sig) = proc.killed_by_sig {
-                                sig & 0x7f
-                            } else {
-                                (proc.exit_code & 0xff) << 8
-                            };
+                            exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
                         }
                     } else {
                         // Target is not a child of the calling process -> -ECHILD
@@ -192,11 +193,7 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
                     if proc.ppid == calling_pid && proc.state == ProcessState::Zombie {
                         zombie_found = true;
                         reaped_pid = Some(p);
-                        exit_status = if let Some(sig) = proc.killed_by_sig {
-                            sig & 0x7f
-                        } else {
-                            (proc.exit_code & 0xff) << 8
-                        };
+                        exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
                         break;
                     }
                 }
@@ -529,6 +526,10 @@ fn deliver_signal_to_user(
     r.rdx = new_rsp; // Arg 3: ucontext (points to SignalFrame)
 
     // Update process blocked signal mask
+    update_signal_mask_and_disposition(pid, sig, &action, blocked);
+}
+
+fn update_signal_mask_and_disposition(pid: i32, sig: i32, action: &SigAction, blocked: SigSet) {
     let mut new_mask = blocked | action.sa_mask;
     if (action.sa_flags & SA_NODEFER) == 0 {
         new_mask |= 1 << (sig - 1);
@@ -538,6 +539,22 @@ fn deliver_signal_to_user(
     if (action.sa_flags & SA_RESETHAND) != 0 {
         let _ = SIGNALS.set_action(pid, sig, SigAction::default());
     }
+}
+
+fn terminate_cpu_bound_task(pid: i32, sig: i32) {
+    let ppid = if let Some(proc_lock) = get_current_process() {
+        let mut proc = proc_lock.lock();
+        proc.state = ProcessState::Zombie;
+        proc.exit_code = sig & 0x7f;
+        proc.killed_by_sig = Some(sig);
+        proc.ppid
+    } else {
+        0
+    };
+    if ppid > 0 {
+        crate::services::scheduler::wake_tasks(&[ppid]);
+    }
+    SIGNALS.cleanup_process(pid);
 }
 
 /// Checks pending signals when returning from an interrupt to ring 3 (user mode).
@@ -576,19 +593,7 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
 
             if action.sa_handler == SIG_DFL {
                 // Default action: Terminate CPU-bound task
-                let ppid = if let Some(proc_lock) = get_current_process() {
-                    let mut proc = proc_lock.lock();
-                    proc.state = ProcessState::Zombie;
-                    proc.exit_code = sig & 0x7f;
-                    proc.killed_by_sig = Some(sig);
-                    proc.ppid
-                } else {
-                    0
-                };
-                if ppid > 0 {
-                    crate::services::scheduler::wake_tasks(&[ppid]);
-                }
-                SIGNALS.cleanup_process(pid);
+                terminate_cpu_bound_task(pid, sig);
                 return true;
             }
 
@@ -635,31 +640,11 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
                 frame.rsi = 0;
                 frame.rdx = new_rsp;
 
-                let mut new_mask = blocked | action.sa_mask;
-                if (action.sa_flags & SA_NODEFER) == 0 {
-                    new_mask |= 1 << (sig - 1);
-                }
-                let _ = SIGNALS.set_procmask(pid, SIG_SETMASK, new_mask);
-
-                if (action.sa_flags & SA_RESETHAND) != 0 {
-                    let _ = SIGNALS.set_action(pid, sig, SigAction::default());
-                }
+                update_signal_mask_and_disposition(pid, sig, &action, blocked);
                 return false;
             } else {
                 // Frame write failed: terminate with SIGSEGV matching syscall path
-                let ppid = if let Some(proc_lock) = get_current_process() {
-                    let mut proc = proc_lock.lock();
-                    proc.state = ProcessState::Zombie;
-                    proc.exit_code = SIGSEGV & 0x7f;
-                    proc.killed_by_sig = Some(SIGSEGV);
-                    proc.ppid
-                } else {
-                    0
-                };
-                if ppid > 0 {
-                    crate::services::scheduler::wake_tasks(&[ppid]);
-                }
-                SIGNALS.cleanup_process(pid);
+                terminate_cpu_bound_task(pid, SIGSEGV);
                 return true;
             }
         }

@@ -34,6 +34,18 @@ pub struct InodePollFlags {
     pub error: bool,
 }
 
+pub fn create_dirent(name: &str, d_type: u8) -> Dirent64 {
+    let mut dirent = Dirent64 {
+        d_type,
+        ..Default::default()
+    };
+    let bytes = name.as_bytes();
+    let len = bytes.len().min(dirent.d_name.len() - 1);
+    dirent.d_name[..len].copy_from_slice(&bytes[..len]);
+    dirent.d_name[len] = 0;
+    dirent
+}
+
 pub trait Inode: Send + Sync {
     fn file_type(&self) -> FileType;
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, i32>;

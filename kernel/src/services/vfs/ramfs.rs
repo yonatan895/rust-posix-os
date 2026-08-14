@@ -66,15 +66,7 @@ impl Inode for RamFsDir {
                 FileType::Fifo => DT_FIFO,
                 _ => DT_REG,
             };
-            let mut dirent = Dirent64 {
-                d_type,
-                ..Default::default()
-            };
-            let bytes = name.as_bytes();
-            let len = bytes.len().min(dirent.d_name.len() - 1);
-            dirent.d_name[..len].copy_from_slice(&bytes[..len]);
-            dirent.d_name[len] = 0;
-            list.push(dirent);
+            list.push(super::create_dirent(name, d_type));
         }
         Ok(list)
     }
