@@ -53,14 +53,6 @@ jobs:
             New-Item -ItemType Directory -Force -Path $p | Out-Null
             Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
           }
-      - name: Cache rustup toolchain
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.rustup/toolchains
-            ~/.rustup/update-hashes
-            ~/.rustup/settings.toml
-          key: rustup-${{ runner.os }}-nightly-rust-src
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
