@@ -11,24 +11,32 @@ use core::arch::naked_asm;
 
 pub const KERNEL_STACK_SIZE: usize = 16 * 1024; // 16 KiB
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CpuContext {
-    pub r15: usize,
-    pub r14: usize,
-    pub r13: usize,
-    pub r12: usize,
-    pub rbp: usize,
-    pub rbx: usize,
-    pub rip: usize,
-    pub rsp: usize,
-    pub rflags: usize,
-}
-
 /// Safely switches the CPU's active kernel stack in the TSS and syscall MSR.
 pub fn switch_active_kernel_stack(stack_top: u64) {
     unsafe {
         crate::ostd::arch::gdt::set_kernel_stack(stack_top);
+    }
+}
+
+/// Safely performs a task switch from `prev_saved_rsp_ptr` to `next_saved_rsp` under interrupt masking.
+///
+/// In OSTD task model, caller passes raw pointer to outgoing PCB AtomicUsize field.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn switch_tasks(prev_saved_rsp_ptr: *mut usize, next_saved_rsp: usize) {
+    unsafe {
+        crate::ostd::arch::cli();
+        voluntary_task_switch(prev_saved_rsp_ptr, next_saved_rsp);
+        crate::ostd::arch::sti();
+    }
+}
+
+/// Kernel idle loop running with interrupts enabled.
+pub extern "C" fn kernel_idle_loop() -> ! {
+    loop {
+        unsafe {
+            crate::ostd::arch::sti();
+            crate::ostd::arch::hlt();
+        }
     }
 }
 
@@ -101,40 +109,67 @@ pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
     frame_ptr as usize
 }
 
-/// Performs an architectural CPU register context switch between two threads.
+/// Performs a voluntary task switch by creating a kernel-mode `TrapFrame` on the outgoing stack
+/// and restoring the incoming task's stack via standard `TrapFrame` / `iretq` execution.
 ///
 /// # Safety
 ///
-/// `prev_ctx` and `next_ctx` must be valid, aligned pointers to live `CpuContext` instances.
+/// `prev_saved_rsp` must be a valid pointer to store the outgoing RSP into the PCB.
+/// `next_saved_rsp` must point to a valid `TrapFrame` on the incoming task's kernel stack.
 #[unsafe(naked)]
-pub unsafe extern "C" fn switch_context(_prev_ctx: *mut CpuContext, _next_ctx: *const CpuContext) {
+pub unsafe extern "C" fn voluntary_task_switch(
+    _prev_saved_rsp: *mut usize,
+    _next_saved_rsp: usize,
+) {
     naked_asm!(
-        // Save current callee-saved registers into prev_ctx (rdi)
-        "mov [rdi + 0x00], r15",
-        "mov [rdi + 0x08], r14",
-        "mov [rdi + 0x10], r13",
-        "mov [rdi + 0x18], r12",
-        "mov [rdi + 0x20], rbp",
-        "mov [rdi + 0x28], rbx",
-        "lea rax, [2f + rip]",
-        "mov [rdi + 0x30], rax", // rip
-        "mov [rdi + 0x38], rsp", // rsp
-        "pushfq",
+        // Push synthetic TrapFrame for returning to kernel mode (CS = 0x08, SS = 0x10)
+        // Hardware frame: [SS, RSP, RFLAGS, CS, RIP]
+        "push 0x10", // SS = KERNEL_DATA_SEL (0x10)
+        "lea rax, [rsp + 8]",
+        "push rax",  // RSP (stack before push)
+        "pushfq",    // RFLAGS
+        "push 0x08", // CS = KERNEL_CODE_SEL (0x08)
+        "lea rax, [1f + rip]",
+        "push rax", // RIP (resume point at label 1)
+        // 15 GPRs: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15
+        "push 0", // rax
+        "push rbx",
+        "push rcx",
+        "push rdx",
+        "push rsi",
+        "push rdi",
+        "push rbp",
+        "push r8",
+        "push r9",
+        "push r10",
+        "push r11",
+        "push r12",
+        "push r13",
+        "push r14",
+        "push r15",
+        // Save current RSP directly into the outgoing PCB field (*prev_saved_rsp = rsp)
+        "mov [rdi], rsp",
+        // Load next_saved_rsp (rsi) into RSP
+        "mov rsp, rsi",
+        // Resume next task via unified TrapFrame pop + iretq
+        "pop r15",
+        "pop r14",
+        "pop r13",
+        "pop r12",
+        "pop r11",
+        "pop r10",
+        "pop r9",
+        "pop r8",
+        "pop rbp",
+        "pop rdi",
+        "pop rsi",
+        "pop rdx",
+        "pop rcx",
+        "pop rbx",
         "pop rax",
-        "mov [rdi + 0x40], rax", // rflags
-        // Restore registers from next_ctx (rsi)
-        "mov r15, [rsi + 0x00]",
-        "mov r14, [rsi + 0x08]",
-        "mov r13, [rsi + 0x10]",
-        "mov r12, [rsi + 0x18]",
-        "mov rbp, [rsi + 0x20]",
-        "mov rbx, [rsi + 0x28]",
-        "mov rsp, [rsi + 0x38]",
-        "push [rsi + 0x40]",
-        "popfq",
-        "jmp [rsi + 0x30]", // Jump to next_ctx.rip
-        "2:",
-        "ret"
+        "iretq",
+        "1:",
+        "ret",
     );
 }
 

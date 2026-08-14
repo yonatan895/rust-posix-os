@@ -27,16 +27,20 @@ A schedulable task is exactly a POSIX `Process` (`pid: i32`), 1:1.
 
 Each process owns a dedicated, page-aligned kernel stack allocated during process creation.
 
-1. **Involuntary Context Switch (IRQ Preemption)**:
-   - When a hardware timer interrupt fires in user mode, the CPU automatically pushes the hardware interrupt frame `[SS, RSP, RFLAGS, CS, RIP]` onto the active task's kernel stack.
+1. **Unified Context Switch Representation (`TrapFrame` at `saved_kernel_rsp`)**:
+   - Both involuntary IRQ preemption and voluntary blocking/yielding use the **identical** 160-byte `TrapFrame` layout at `saved_kernel_rsp` and the **identical** `pop 15 GPRs; iretq` resumption path.
+   - For Ring 3 user tasks, `CS = USER_CODE_SEL (0x23)` and `SS = USER_DATA_SEL (0x1b)`.
+   - For Ring 0 kernel tasks (including PID 0 idle task and voluntarily blocked kernel syscall contexts), `CS = KERNEL_CODE_SEL (0x08)` and `SS = KERNEL_DATA_SEL (0x10)`.
+
+2. **Involuntary Context Switch (IRQ Preemption)**:
+   - When a hardware timer interrupt fires, the CPU automatically pushes the hardware interrupt frame `[SS, RSP, RFLAGS, CS, RIP]` onto the active task's kernel stack.
    - The interrupt entry stub pushes the remaining general-purpose registers (`rax`, `rbx`, `rcx`, `rdx`, `rsi`, `rdi`, `rbp`, `r8`..`r15`), forming a complete `TrapFrame`.
-   - The process control block records `saved_kernel_rsp: usize`, pointing to the top of this saved frame.
+   - The process control block records `saved_kernel_rsp: AtomicUsize`, pointing to the top of this saved frame.
 
-2. **Voluntary Context Switch (Yield / Block)**:
-   - When a task blocks (e.g., waiting for I/O, child exit, or sleep) or yields, the task saves its execution context onto its kernel stack and invokes the scheduler.
-   - `ostd::task::switch_context` switches between `prev_proc.saved_kernel_rsp` and `next_proc.saved_kernel_rsp`.
+3. **Voluntary Context Switch (Yield / Block)**:
+   - When a task blocks (e.g., waiting for pipe I/O, child exit in `wait4`, or sleep) or yields, `ostd::task::voluntary_task_switch` pushes a synthetic kernel-mode `TrapFrame` onto the outgoing stack, writes `rsp` directly into `prev_proc.saved_kernel_rsp`, sets `rsp = next_proc.saved_kernel_rsp`, and resumes the incoming task via `pop 15 GPRs; iretq`.
 
-3. **TSS & Per-CPU Kernel Stack Pointer Invariant**:
+4. **TSS & Per-CPU Kernel Stack Pointer Invariant**:
    - On **every** context switch, `TSS.rsp0` and `BSP_PER_CPU.kernel_rsp` **must be updated** to the top of the incoming task's kernel stack (`set_kernel_stack(next_kernel_stack_top)`).
    - This guarantees that subsequent user-to-kernel transitions (via `syscall` or interrupts) will always use the active task's dedicated kernel stack.
 

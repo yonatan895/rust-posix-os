@@ -56,7 +56,8 @@ impl Inode for PipeReadEnd {
     }
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
-        self.read_with_flags(offset, buf, 0, 0)
+        let pid = crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
+        self.read_with_flags(offset, buf, 0, pid)
     }
 
     fn read_with_flags(
@@ -66,50 +67,67 @@ impl Inode for PipeReadEnd {
         flags: i32,
         caller_pid: i32,
     ) -> Result<usize, i32> {
-        let mut to_wake_writers = Vec::new();
-        let result = {
-            let mut pipe = self.buf.lock();
-            if pipe.len == 0 {
-                if pipe.writers_open == 0 {
-                    return Ok(0); // EOF
+        loop {
+            // Mark caller Blocked BEFORE acquiring pipe Inode lock (ADR-0001/0002 compliance)
+            crate::services::scheduler::mark_current_blocked();
+
+            let mut to_wake_writers = Vec::new();
+            let (should_switch, bytes_read_opt) = {
+                let mut pipe = self.buf.lock();
+                if pipe.len == 0 {
+                    if pipe.writers_open == 0 {
+                        return Ok(0); // EOF
+                    }
+                    if flags & O_NONBLOCK != 0 {
+                        return Err(EAGAIN);
+                    }
+                    // Register caller on read_waiters queue
+                    pipe.read_waiters.add_waiter(caller_pid);
+
+                    // Re-check condition under pipe lock to close lost-wakeup race
+                    if pipe.len > 0 || pipe.writers_open == 0 {
+                        pipe.read_waiters.remove_waiter(caller_pid);
+                        (false, None)
+                    } else {
+                        (true, None)
+                    }
+                } else {
+                    let was_full = pipe.len == PIPE_BUFFER_SIZE;
+                    let to_read = buf.len().min(pipe.len);
+                    for item in buf.iter_mut().take(to_read) {
+                        *item = pipe.data[pipe.read_pos];
+                        pipe.read_pos = (pipe.read_pos + 1) % PIPE_BUFFER_SIZE;
+                    }
+                    pipe.len -= to_read;
+
+                    // Gate wakeup: only wake a writer if the pipe was full and gained space
+                    if was_full
+                        && pipe.len < PIPE_BUFFER_SIZE
+                        && let Some(w) = pipe.write_waiters.drain_one()
+                    {
+                        to_wake_writers.push(w);
+                    }
+
+                    (false, Some(to_read))
                 }
-                if flags & O_NONBLOCK != 0 {
-                    return Err(EAGAIN);
-                }
-                // Blocking wait: register caller on read_waiters queue
-                pipe.read_waiters.add_waiter(caller_pid);
-                // Close lost-wakeup race: recheck condition
-                if pipe.len > 0 || pipe.writers_open == 0 {
-                    pipe.read_waiters.remove_waiter(caller_pid);
-                }
-                // Cooperative placeholder for blocking path until schedule-out (#26)
-                return Err(EAGAIN);
+            }; // Pipe lock dropped before acquiring upper-tier locks (ADR-0002)
+
+            if !to_wake_writers.is_empty() {
+                crate::services::scheduler::wake_tasks(&to_wake_writers);
             }
 
-            let was_full = pipe.len == PIPE_BUFFER_SIZE;
-            let to_read = buf.len().min(pipe.len);
-            for item in buf.iter_mut().take(to_read) {
-                *item = pipe.data[pipe.read_pos];
-                pipe.read_pos = (pipe.read_pos + 1) % PIPE_BUFFER_SIZE;
-            }
-            pipe.len -= to_read;
-
-            // Gate wakeup: only wake a writer if the pipe was full and gained space
-            if was_full
-                && pipe.len < PIPE_BUFFER_SIZE
-                && let Some(w) = pipe.write_waiters.drain_one()
-            {
-                to_wake_writers.push(w);
+            if let Some(n) = bytes_read_opt {
+                crate::services::scheduler::mark_current_running();
+                return Ok(n);
             }
 
-            Ok(to_read)
-        }; // Pipe lock dropped before acquiring upper-tier locks (ADR-0002)
-
-        if !to_wake_writers.is_empty() {
-            crate::services::scheduler::wake_tasks(&to_wake_writers);
+            if should_switch {
+                crate::services::scheduler::switch_out_current();
+                crate::services::scheduler::mark_current_running();
+            } else {
+                crate::services::scheduler::mark_current_running();
+            }
         }
-
-        result
     }
 
     fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize, i32> {
@@ -150,7 +168,8 @@ impl Inode for PipeWriteEnd {
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize, i32> {
-        self.write_with_flags(offset, buf, 0, 0)
+        let pid = crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
+        self.write_with_flags(offset, buf, 0, pid)
     }
 
     fn write_with_flags(
@@ -160,50 +179,67 @@ impl Inode for PipeWriteEnd {
         flags: i32,
         caller_pid: i32,
     ) -> Result<usize, i32> {
-        let mut to_wake_readers = Vec::new();
-        let result = {
-            let mut pipe = self.buf.lock();
-            if pipe.readers_open == 0 {
-                // Last reader closed: return -EPIPE (and trigger SIGPIPE once signal dispatch is wired)
-                return Err(EPIPE);
-            }
-            let space = PIPE_BUFFER_SIZE - pipe.len;
-            if space == 0 {
-                if flags & O_NONBLOCK != 0 {
-                    return Err(EAGAIN);
+        loop {
+            // Mark caller Blocked BEFORE acquiring pipe Inode lock (ADR-0001/0002 compliance)
+            crate::services::scheduler::mark_current_blocked();
+
+            let mut to_wake_readers = Vec::new();
+            let (should_switch, bytes_written_opt) = {
+                let mut pipe = self.buf.lock();
+                if pipe.readers_open == 0 {
+                    // Last reader closed: return -EPIPE (and trigger SIGPIPE once signal dispatch is wired)
+                    return Err(EPIPE);
                 }
-                // Blocking wait: register caller on write_waiters queue
-                pipe.write_waiters.add_waiter(caller_pid);
-                // Close lost-wakeup race: recheck condition
-                if pipe.len < PIPE_BUFFER_SIZE || pipe.readers_open == 0 {
-                    pipe.write_waiters.remove_waiter(caller_pid);
+                let space = PIPE_BUFFER_SIZE - pipe.len;
+                if space == 0 {
+                    if flags & O_NONBLOCK != 0 {
+                        return Err(EAGAIN);
+                    }
+                    // Register caller on write_waiters queue
+                    pipe.write_waiters.add_waiter(caller_pid);
+
+                    // Re-check condition under pipe lock to close lost-wakeup race
+                    if pipe.len < PIPE_BUFFER_SIZE || pipe.readers_open == 0 {
+                        pipe.write_waiters.remove_waiter(caller_pid);
+                        (false, None)
+                    } else {
+                        (true, None)
+                    }
+                } else {
+                    let was_empty = pipe.len == 0;
+                    let to_write = buf.len().min(space);
+                    for &byte in buf.iter().take(to_write) {
+                        let pos = pipe.write_pos;
+                        pipe.data[pos] = byte;
+                        pipe.write_pos = (pos + 1) % PIPE_BUFFER_SIZE;
+                    }
+                    pipe.len += to_write;
+
+                    // Gate wakeup: only wake readers if the pipe was empty and gained data
+                    if was_empty && pipe.len > 0 {
+                        to_wake_readers = pipe.read_waiters.drain_all();
+                    }
+
+                    (false, Some(to_write))
                 }
-                // Cooperative placeholder for blocking path until schedule-out (#26)
-                return Err(EAGAIN);
+            }; // Pipe lock dropped before acquiring upper-tier locks (ADR-0002)
+
+            if !to_wake_readers.is_empty() {
+                crate::services::scheduler::wake_tasks(&to_wake_readers);
             }
 
-            let was_empty = pipe.len == 0;
-            let to_write = buf.len().min(space);
-            for &byte in buf.iter().take(to_write) {
-                let pos = pipe.write_pos;
-                pipe.data[pos] = byte;
-                pipe.write_pos = (pos + 1) % PIPE_BUFFER_SIZE;
-            }
-            pipe.len += to_write;
-
-            // Gate wakeup: only wake readers if the pipe was empty and gained data
-            if was_empty && pipe.len > 0 {
-                to_wake_readers = pipe.read_waiters.drain_all();
+            if let Some(n) = bytes_written_opt {
+                crate::services::scheduler::mark_current_running();
+                return Ok(n);
             }
 
-            Ok(to_write)
-        }; // Pipe lock dropped before acquiring upper-tier locks (ADR-0002)
-
-        if !to_wake_readers.is_empty() {
-            crate::services::scheduler::wake_tasks(&to_wake_readers);
+            if should_switch {
+                crate::services::scheduler::switch_out_current();
+                crate::services::scheduler::mark_current_running();
+            } else {
+                crate::services::scheduler::mark_current_running();
+            }
         }
-
-        result
     }
 
     fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
