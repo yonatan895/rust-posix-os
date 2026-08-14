@@ -82,7 +82,7 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     init_proc.fds.push(Some(stdout_h));
     init_proc.fds.push(Some(stderr_h));
 
-    match init_proc.exec("/bin/init") {
+    match init_proc.exec("/bin/init", &["/bin/init"], &[]) {
         Ok(()) => log::info!("[SERVICES] Successfully loaded /bin/init into PID 1."),
         Err(e) => log::warn!("[SERVICES] /bin/init not loaded (errno: {}).", e),
     }

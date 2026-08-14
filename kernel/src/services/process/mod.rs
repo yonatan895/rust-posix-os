@@ -80,14 +80,14 @@ impl Process {
         }
     }
 
-    pub fn exec(&mut self, path: &str) -> Result<(), i32> {
+    pub fn exec(&mut self, path: &str, argv: &[&str], envp: &[&str]) -> Result<(), i32> {
         let inode = crate::services::vfs::resolve_path_with_cwd(&self.cwd, path)?;
         let stat = inode.stat()?;
         let mut elf_data = alloc::vec![0u8; stat.st_size as usize];
         inode.read(0, &mut elf_data)?;
 
         let mut new_vm = VmSpace::new().ok_or(posix_abi::ENOMEM)?;
-        let loaded = load_elf(&elf_data, &mut new_vm).map_err(|_| posix_abi::ENOEXEC)?;
+        let loaded = load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
 
         self.vm_space = Some(new_vm);
         self.entry_point = loaded.entry_point;

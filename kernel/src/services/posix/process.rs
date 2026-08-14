@@ -14,12 +14,28 @@ pub fn sys_fork() -> isize {
     -(ENOSYS as isize)
 }
 
-pub fn sys_execve(path_ptr: *const u8) -> isize {
+pub fn sys_execve(
+    path_ptr: *const u8,
+    argv_ptr: *const *const u8,
+    envp_ptr: *const *const u8,
+) -> isize {
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
+
+    let argv_vec = match super::copy_user_str_array(argv_ptr, 256) {
+        Ok(v) => v,
+        Err(e) => return -(e as isize),
+    };
+    let envp_vec = match super::copy_user_str_array(envp_ptr, 256) {
+        Ok(v) => v,
+        Err(e) => return -(e as isize),
+    };
+
+    let argv_refs: alloc::vec::Vec<&str> = argv_vec.iter().map(|s| s.as_str()).collect();
+    let envp_refs: alloc::vec::Vec<&str> = envp_vec.iter().map(|s| s.as_str()).collect();
 
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -27,7 +43,7 @@ pub fn sys_execve(path_ptr: *const u8) -> isize {
     };
     let mut proc = proc_lock.lock();
 
-    match proc.exec(path) {
+    match proc.exec(path, &argv_refs, &envp_refs) {
         Ok(()) => 0,
         Err(err) => -(err as isize),
     }

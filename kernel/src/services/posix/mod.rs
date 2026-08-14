@@ -18,7 +18,7 @@ pub use mem::*;
 pub use system::*;
 pub use epoll::*;
 pub use audit::*;
-pub(crate) use user_access::{copy_optional_user_str, copy_user_path, map_user_error};
+pub(crate) use user_access::{copy_optional_user_str, copy_user_path, copy_user_str_array, map_user_error};
 
 use posix_abi::*;
 use crate::ostd::arch::syscall::SyscallRegisters;
@@ -52,7 +52,7 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
         SYS_FORK => sys_fork(),
         SYS_EXECVE => {
-            let res = sys_execve(a1 as *const u8);
+            let res = sys_execve(a1 as *const u8, a2 as *const *const u8, a3 as *const *const u8);
             if res == 0 {
                 if let Some(p) = get_current_process() {
                     let proc = p.lock();

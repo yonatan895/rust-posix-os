@@ -117,3 +117,17 @@ pub const AUDIT_TYPE_DIR_CREATE: u32 = 7;
 pub const AUDIT_TYPE_DIR_CHANGE: u32 = 8;
 pub const AUDIT_TYPE_SNAPSHOT_CREATED: u32 = 9;
 pub const AUDIT_TYPE_SECURITY_ALERT: u32 = 10;
+
+// ============================================================================
+// System V AMD64 ELF Auxiliary Vector Types (AT_*)
+// ============================================================================
+pub const AT_NULL: u64 = 0;
+pub const AT_IGNORE: u64 = 1;
+pub const AT_EXECFD: u64 = 2;
+pub const AT_PHDR: u64 = 3;
+pub const AT_PHENT: u64 = 4;
+pub const AT_PHNUM: u64 = 5;
+pub const AT_PAGESZ: u64 = 6;
+pub const AT_BASE: u64 = 7;
+pub const AT_FLAGS: u64 = 8;
+pub const AT_ENTRY: u64 = 9;
