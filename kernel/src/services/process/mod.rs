@@ -33,6 +33,8 @@ pub struct Process {
     pub mmap_next_vaddr: usize,
 }
 
+pub const DEFAULT_MMAP_BASE: usize = 0x6000_0000;
+
 impl Process {
     pub fn new(pid: i32, ppid: i32, cwd: String) -> Self {
         Self {
@@ -45,7 +47,7 @@ impl Process {
             vm_space: None,
             entry_point: 0,
             user_stack_top: 0,
-            mmap_next_vaddr: 0x6000_0000,
+            mmap_next_vaddr: DEFAULT_MMAP_BASE,
         }
     }
 
@@ -90,6 +92,7 @@ impl Process {
         self.vm_space = Some(new_vm);
         self.entry_point = loaded.entry_point;
         self.user_stack_top = loaded.user_stack_top;
+        self.mmap_next_vaddr = DEFAULT_MMAP_BASE;
 
         Ok(())
     }

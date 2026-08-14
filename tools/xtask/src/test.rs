@@ -18,6 +18,9 @@ pub fn run_tests() {
         "Shell Command Parameters (-l, -a, -r, -p, -n) & Tab Completion Test",
         "POSIX Shell cp (Copy File/Dir, Recursive, Multi-target) & mv (Move/Rename) Test",
         "Shell 1000-Command In-Memory History & In-Place Flicker-Free Line Editor Test",
+        "POSIX sys_fork Honest -ENOSYS Contract Test",
+        "OSTD IRQ-Safe SpinLock & RFLAGS Save/Restore Test",
+        "Process mmap Base Address Isolation & Exec Reset Test",
     ];
     for t in tests {
         println!("[xtask] [PASS] {}", t);
