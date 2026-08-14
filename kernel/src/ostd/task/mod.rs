@@ -32,6 +32,13 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
     }
 }
 
+/// Safely performs an architectural CPU register context switch between two threads.
+pub fn switch_cpu_context(prev_ctx: &mut CpuContext, next_ctx: &CpuContext) {
+    unsafe {
+        switch_context(prev_ctx as *mut CpuContext, next_ctx as *const CpuContext);
+    }
+}
+
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 3 userland entry.
 pub fn init_user_kernel_stack(
     stack: &mut [u8],

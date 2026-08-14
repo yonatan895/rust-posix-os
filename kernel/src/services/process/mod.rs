@@ -33,6 +33,7 @@ pub struct Process {
     pub mmap_next_vaddr: usize,
     pub kernel_stack: Vec<u8>,
     pub saved_kernel_rsp: usize,
+    pub cpu_context: crate::ostd::task::CpuContext,
     pub has_started: bool,
 }
 
@@ -55,6 +56,7 @@ impl Process {
             mmap_next_vaddr: DEFAULT_MMAP_BASE,
             kernel_stack,
             saved_kernel_rsp,
+            cpu_context: crate::ostd::task::CpuContext::default(),
             has_started: false,
         }
     }

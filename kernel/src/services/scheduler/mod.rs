@@ -6,6 +6,12 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WakeReason {
+    Woken,
+    Interrupted,
+}
+
 pub struct Scheduler {
     pub ready_queue: VecDeque<Arc<SpinLock<Process>>>,
 }
@@ -68,6 +74,122 @@ pub fn wake_tasks(pids: &[i32]) {
             }
         }
     }
+}
+
+/// Voluntarily blocks the current process, transitioning its state to `Blocked`
+/// and switching CPU context to the next ready task (or PID 0 Idle task).
+///
+/// # Concurrency & Lock Ordering (ADR-0002)
+///
+/// Callers MUST release all lower-tier locks (e.g. Inode, VFS, RamFs) BEFORE calling `block_current()`.
+/// `block_current()` only acquires `SCHEDULER` and individual process locks in strict D1 order.
+pub fn block_current() -> WakeReason {
+    let mut sched = SCHEDULER.lock();
+    let mut curr_guard = CURRENT_PROCESS.lock();
+
+    let prev_proc_arc = match curr_guard.take() {
+        Some(p) => p,
+        None => return WakeReason::Woken,
+    };
+
+    // Transition current task to Blocked state (do not re-add to ready_queue)
+    {
+        let mut prev_proc = prev_proc_arc.lock();
+        prev_proc.state = ProcessState::Blocked;
+    }
+
+    // Pick next ready task, or fall back to PID 0 (Idle task)
+    let next_proc_arc = match sched.ready_queue.pop_front() {
+        Some(p) => p,
+        None => match crate::services::process::PROCESS_TABLE.lock().get(&0) {
+            Some(idle) => idle.clone(),
+            None => {
+                let mut prev_proc = prev_proc_arc.lock();
+                prev_proc.state = ProcessState::Running;
+                drop(prev_proc);
+                *curr_guard = Some(prev_proc_arc);
+                return WakeReason::Woken;
+            }
+        },
+    };
+
+    let (mut prev_ctx, next_ctx) = {
+        let prev_proc = prev_proc_arc.lock();
+        let mut next_proc = next_proc_arc.lock();
+
+        next_proc.state = ProcessState::Running;
+        crate::ostd::task::switch_active_kernel_stack(next_proc.kernel_stack_top());
+        if let Some(ref vm) = next_proc.vm_space {
+            vm.activate();
+        }
+        crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
+
+        (prev_proc.cpu_context, next_proc.cpu_context)
+    };
+
+    *curr_guard = Some(next_proc_arc.clone());
+
+    drop(curr_guard);
+    drop(sched);
+
+    // Architectural CPU register context switch
+    crate::ostd::task::switch_cpu_context(&mut prev_ctx, &next_ctx);
+
+    prev_proc_arc.lock().cpu_context = prev_ctx;
+
+    WakeReason::Woken
+}
+
+/// Voluntarily yields the CPU quantum to the next ready task.
+pub fn schedule_yield() {
+    let mut sched = SCHEDULER.lock();
+    let mut curr_guard = CURRENT_PROCESS.lock();
+
+    let prev_proc_arc = match curr_guard.take() {
+        Some(p) => p,
+        None => return,
+    };
+
+    if sched.ready_queue.is_empty() {
+        *curr_guard = Some(prev_proc_arc);
+        return;
+    }
+
+    let next_proc_arc = match sched.ready_queue.pop_front() {
+        Some(p) => p,
+        None => {
+            *curr_guard = Some(prev_proc_arc);
+            return;
+        }
+    };
+
+    {
+        let mut prev_proc = prev_proc_arc.lock();
+        prev_proc.state = ProcessState::Ready;
+        sched.ready_queue.push_back(prev_proc_arc.clone());
+    }
+
+    let (mut prev_ctx, next_ctx) = {
+        let prev_proc = prev_proc_arc.lock();
+        let mut next_proc = next_proc_arc.lock();
+
+        next_proc.state = ProcessState::Running;
+        crate::ostd::task::switch_active_kernel_stack(next_proc.kernel_stack_top());
+        if let Some(ref vm) = next_proc.vm_space {
+            vm.activate();
+        }
+        crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
+
+        (prev_proc.cpu_context, next_proc.cpu_context)
+    };
+
+    *curr_guard = Some(next_proc_arc);
+
+    drop(curr_guard);
+    drop(sched);
+
+    crate::ostd::task::switch_cpu_context(&mut prev_ctx, &next_ctx);
+    prev_proc_arc.lock().cpu_context = prev_ctx;
 }
 
 /// Invoked from the timer interrupt service routine to perform round-robin preemptive scheduling.
@@ -143,17 +265,14 @@ mod tests {
         sched.add_task(p1.clone());
         sched.add_task(p2.clone());
 
-        // Simulate tick: p1 pops, then rotates to back
         let next = sched.pick_next().unwrap();
         assert_eq!(next.lock().pid, 1);
         sched.add_task(next);
 
-        // Next pick is p2
         let next2 = sched.pick_next().unwrap();
         assert_eq!(next2.lock().pid, 2);
         sched.add_task(next2);
 
-        // Next pick is p1 again
         let next3 = sched.pick_next().unwrap();
         assert_eq!(next3.lock().pid, 1);
     }

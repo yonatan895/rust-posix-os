@@ -304,11 +304,11 @@ fn test_pipe_blocking_and_eof_semantics() {
                 if is_nonblock {
                     return Err("EAGAIN");
                 }
-                // Blocking wait placeholder: register on read_waiters and return EAGAIN
+                // Blocking wait: register on read_waiters and block
                 if !self.read_waiters.contains(&caller_pid) {
                     self.read_waiters.push(caller_pid);
                 }
-                return Err("EAGAIN_BLOCKING_PLACEHOLDER");
+                return Err("BLOCKED");
             }
             let was_full = self.data.len() == self.capacity;
             let to_read = buf.len().min(self.data.len());
@@ -336,11 +336,11 @@ fn test_pipe_blocking_and_eof_semantics() {
                 if is_nonblock {
                     return Err("EAGAIN");
                 }
-                // Blocking wait placeholder: register on write_waiters and return EAGAIN
+                // Blocking wait: register on write_waiters and block
                 if !self.write_waiters.contains(&caller_pid) {
                     self.write_waiters.push(caller_pid);
                 }
-                return Err("EAGAIN_BLOCKING_PLACEHOLDER");
+                return Err("BLOCKED");
             }
             let was_empty = self.data.is_empty();
             let to_write = buf.len().min(space);
@@ -373,11 +373,8 @@ fn test_pipe_blocking_and_eof_semantics() {
     // 1. Empty read with nonblock -> EAGAIN
     assert_eq!(pipe.read(&mut buf, true, 1), Err("EAGAIN"));
 
-    // 2. Empty read without nonblock -> EAGAIN_BLOCKING_PLACEHOLDER (registers on read_waiters)
-    assert_eq!(
-        pipe.read(&mut buf, false, 1),
-        Err("EAGAIN_BLOCKING_PLACEHOLDER")
-    );
+    // 2. Empty read without nonblock -> BLOCKED (registers on read_waiters)
+    assert_eq!(pipe.read(&mut buf, false, 1), Err("BLOCKED"));
     assert_eq!(pipe.read_waiters, vec![1]);
 
     // 3. Write data -> gated wakeup clears read_waiters and fills buffer
@@ -390,11 +387,8 @@ fn test_pipe_blocking_and_eof_semantics() {
     // 4. Full write with nonblock -> EAGAIN
     assert_eq!(pipe.write(b"e", true, 2), Err("EAGAIN"));
 
-    // 5. Full write without nonblock -> EAGAIN_BLOCKING_PLACEHOLDER (registers on write_waiters)
-    assert_eq!(
-        pipe.write(b"e", false, 2),
-        Err("EAGAIN_BLOCKING_PLACEHOLDER")
-    );
+    // 5. Full write without nonblock -> BLOCKED (registers on write_waiters)
+    assert_eq!(pipe.write(b"e", false, 2), Err("BLOCKED"));
     assert_eq!(pipe.write_waiters, vec![2]);
 
     // 6. Read data -> gets 4 bytes, gated wakeup drains one write waiter
