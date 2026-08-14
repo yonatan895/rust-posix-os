@@ -1,4 +1,4 @@
-//! Preemptive / MLFQ Scheduler - De-privileged Safe Service.
+//! Round-Robin Task Scheduler - De-privileged Safe Service.
 
 use crate::ostd::sync::SpinLock;
 use alloc::collections::VecDeque;
