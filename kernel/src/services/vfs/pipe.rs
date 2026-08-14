@@ -26,6 +26,7 @@ pub struct PipeWriteEnd {
 }
 
 impl PipeBuffer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> (Arc<PipeReadEnd>, Arc<PipeWriteEnd>) {
         let buffer = Arc::new(SpinLock::new(PipeBuffer {
             data: [0; PIPE_BUFFER_SIZE],
@@ -54,8 +55,8 @@ impl Inode for PipeReadEnd {
             return Err(EAGAIN);
         }
         let to_read = buf.len().min(pipe.len);
-        for i in 0..to_read {
-            buf[i] = pipe.data[pipe.read_pos];
+        for item in buf.iter_mut().take(to_read) {
+            *item = pipe.data[pipe.read_pos];
             pipe.read_pos = (pipe.read_pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len -= to_read;
@@ -67,9 +68,10 @@ impl Inode for PipeReadEnd {
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFIFO | 0o600;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFIFO | 0o600,
+            ..Default::default()
+        })
     }
 
     fn poll(&self) -> InodePollFlags {
@@ -98,9 +100,9 @@ impl Inode for PipeWriteEnd {
             return Err(EAGAIN);
         }
         let to_write = buf.len().min(space);
-        for i in 0..to_write {
+        for &byte in buf.iter().take(to_write) {
             let pos = pipe.write_pos;
-            pipe.data[pos] = buf[i];
+            pipe.data[pos] = byte;
             pipe.write_pos = (pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len += to_write;
@@ -111,9 +113,10 @@ impl Inode for PipeWriteEnd {
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFIFO | 0o600;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFIFO | 0o600,
+            ..Default::default()
+        })
     }
 
     fn poll(&self) -> InodePollFlags {
@@ -130,17 +133,13 @@ impl Inode for PipeWriteEnd {
 impl Drop for PipeReadEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
-        if pipe.readers_open > 0 {
-            pipe.readers_open -= 1;
-        }
+        pipe.readers_open = pipe.readers_open.saturating_sub(1);
     }
 }
 
 impl Drop for PipeWriteEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
-        if pipe.writers_open > 0 {
-            pipe.writers_open -= 1;
-        }
+        pipe.writers_open = pipe.writers_open.saturating_sub(1);
     }
 }

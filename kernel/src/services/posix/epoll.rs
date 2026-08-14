@@ -81,13 +81,13 @@ pub fn sys_epoll_wait(epfd: i32, events_ptr: *mut EpollEvent, maxevents: i32, _t
     match epoll.wait(&mut kbuf, maxevents as usize) {
         Ok(count) => {
             let size = core::mem::size_of::<EpollEvent>();
-            for i in 0..count {
+            for (i, &event) in kbuf.iter().enumerate().take(count) {
                 let addr = (events_ptr as usize).saturating_add(i.saturating_mul(size));
                 let out = match UserPtr::<EpollEvent>::from_raw(addr) {
                     Ok(p) => p,
                     Err(e) => return -(map_user_error(e) as isize),
                 };
-                if let Err(e) = out.write(kbuf[i]) {
+                if let Err(e) = out.write(event) {
                     return -(map_user_error(e) as isize);
                 }
             }

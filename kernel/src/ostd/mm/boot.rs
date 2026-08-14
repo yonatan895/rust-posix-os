@@ -53,11 +53,10 @@ pub(crate) fn boot_module_blobs(resp: *mut LimineModuleResponse) -> alloc::vec::
 
 /// Borrow the trampoline's register save area for the duration of `f`.
 ///
-/// # Safety of the wrapper
-/// The pointer originates from `syscall_entry` / the C ABI trampoline and
-/// points at a live `SyscallRegisters` on the kernel stack. Null is treated
-/// as a no-op returning `usize::MAX` (not a valid success path).
-pub fn with_syscall_regs<F>(regs: *mut SyscallRegisters, f: F) -> usize
+/// # Safety
+///
+/// `regs` must either be null or point to a valid, live `SyscallRegisters` structure.
+pub unsafe fn with_syscall_regs<F>(regs: *mut SyscallRegisters, f: F) -> usize
 where
     F: FnOnce(&mut SyscallRegisters) -> usize,
 {
@@ -66,6 +65,6 @@ where
     }
     // SAFETY: see function docs. Single-CPU: the frame is not reused until
     // this function returns to the trampoline.
-    let r = unsafe { &mut *regs };
+    let r = &mut *regs;
     f(r)
 }

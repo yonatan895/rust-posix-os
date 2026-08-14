@@ -53,8 +53,19 @@ impl FramebufferConsole {
     }
 }
 
+impl Default for FramebufferConsole {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub static FB_CONSOLE: SpinLock<FramebufferConsole> = SpinLock::new(FramebufferConsole::new());
 
+/// Initializes the framebuffer console with Limine bootloader framebuffer info.
+///
+/// # Safety
+///
+/// `fb.address` must point to a valid mapped video memory buffer.
 pub unsafe fn fb_init(fb: LimineFramebuffer) {
     FB_CONSOLE.lock().init(fb);
 }

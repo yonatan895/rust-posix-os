@@ -15,9 +15,10 @@ impl Inode for DevNull {
     fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFCHR | 0o666;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFCHR | 0o666,
+            ..Default::default()
+        })
     }
 }
 
@@ -33,9 +34,10 @@ impl Inode for DevZero {
     fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFCHR | 0o666;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFCHR | 0o666,
+            ..Default::default()
+        })
     }
 }
 
@@ -71,8 +73,9 @@ impl Inode for DevConsole {
     fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFCHR | 0o666;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFCHR | 0o666,
+            ..Default::default()
+        })
     }
 }

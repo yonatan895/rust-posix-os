@@ -16,6 +16,12 @@ impl TaskId {
     }
 }
 
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Task {
     pub id: TaskId,
     pub future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,

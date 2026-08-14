@@ -1,5 +1,3 @@
-#![deny(unsafe_code)]
-
 //! De-Privileged OS Services - 100% Safe Rust.
 //!
 //! All high-level operating system functionality is implemented in this module

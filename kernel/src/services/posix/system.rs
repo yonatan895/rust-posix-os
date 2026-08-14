@@ -41,14 +41,16 @@ pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
     crate::services::monitor::update_system_metrics();
     let mon = crate::services::monitor::SYSTEM_MONITOR.lock();
 
-    let mut si = Sysinfo::default();
-    si.uptime = mon.sample_tick as i64;
-    si.totalram = mon.total_memory_bytes as u64;
-    si.freeram = mon.free_memory_bytes as u64;
-    si.bufferram = mon.total_heap_bytes as u64;
-    si.sharedram = mon.used_heap_bytes as u64;
-    si.procs = mon.total_processes as u16;
-    si.mem_unit = 1;
+    let si = Sysinfo {
+        uptime: mon.sample_tick as i64,
+        totalram: mon.total_memory_bytes as u64,
+        freeram: mon.free_memory_bytes as u64,
+        bufferram: mon.total_heap_bytes as u64,
+        sharedram: mon.used_heap_bytes as u64,
+        procs: mon.total_processes as u16,
+        mem_unit: 1,
+        ..Default::default()
+    };
 
     match out.write(si) {
         Ok(()) => 0,

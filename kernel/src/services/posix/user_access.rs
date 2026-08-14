@@ -17,19 +17,19 @@ pub fn map_user_error(err: UserAccessError) -> i32 {
 }
 
 /// Copy a NUL-terminated user path into `kbuf` and validate UTF-8.
-pub fn copy_user_path<'a>(
+pub fn copy_user_path(
     path_ptr: *const u8,
-    kbuf: &'a mut [u8; USER_STR_MAX],
-) -> Result<&'a str, i32> {
+    kbuf: &mut [u8; USER_STR_MAX],
+) -> Result<&str, i32> {
     let len = copy_cstr_from_user(path_ptr as usize, kbuf).map_err(map_user_error)?;
     core::str::from_utf8(&kbuf[..len]).map_err(|_| EINVAL)
 }
 
 /// Like [`copy_user_path`], but a null pointer is a valid empty string.
-pub fn copy_optional_user_str<'a>(
+pub fn copy_optional_user_str(
     ptr: *const u8,
-    kbuf: &'a mut [u8; USER_STR_MAX],
-) -> Result<&'a str, i32> {
+    kbuf: &mut [u8; USER_STR_MAX],
+) -> Result<&str, i32> {
     if ptr.is_null() {
         Ok("")
     } else {

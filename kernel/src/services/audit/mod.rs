@@ -46,6 +46,12 @@ impl AuditJournal {
     }
 }
 
+impl Default for AuditJournal {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub static AUDIT_JOURNAL: SpinLock<AuditJournal> = SpinLock::new(AuditJournal::new());
 static NEXT_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
 static NEXT_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
@@ -81,6 +87,12 @@ impl SnapshotManager {
         Self {
             snapshots: Vec::new(),
         }
+    }
+}
+
+impl Default for SnapshotManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

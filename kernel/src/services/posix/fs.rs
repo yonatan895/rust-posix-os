@@ -287,7 +287,7 @@ pub fn sys_dup(oldfd: i32) -> isize {
 }
 
 pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
-    if newfd < 0 || newfd >= 256 {
+    if !(0..256).contains(&newfd) {
         return -(EBADF as isize);
     }
     if oldfd == newfd {
@@ -326,7 +326,7 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
     let (parent, basename) = match resolve_parent_and_basename(path) {
         Ok(res) => res,
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -(err as i32), path, "Directory create failed (parent unresolved)");
+            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -err, path, "Directory create failed (parent unresolved)");
             return -(err as isize);
         }
     };
@@ -337,7 +337,7 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
             0
         }
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -(err as i32), path, "Directory create failed");
+            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -err, path, "Directory create failed");
             -(err as isize)
         }
     }
@@ -357,7 +357,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
     let (parent, basename) = match resolve_parent_and_basename(path) {
         Ok(res) => res,
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -(err as i32), path, "Unlink failed (parent unresolved)");
+            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -err, path, "Unlink failed (parent unresolved)");
             return -(err as isize);
         }
     };
@@ -368,7 +368,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
             0
         }
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -(err as i32), path, "Unlink failed");
+            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -err, path, "Unlink failed");
             -(err as isize)
         }
     }
@@ -460,7 +460,7 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
     let mut written = 0;
     let mut entries_written = 0;
 
-    for i in current_idx..entries.len() {
+    for entry in entries.iter().skip(current_idx) {
         if written + dirent_size > count {
             break;
         }
@@ -468,7 +468,7 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
             Ok(p) => p,
             Err(e) => return -(map_user_error(e) as isize),
         };
-        if let Err(e) = target.write(entries[i]) {
+        if let Err(e) = target.write(*entry) {
             return -(map_user_error(e) as isize);
         }
         written += dirent_size;

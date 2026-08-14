@@ -18,13 +18,19 @@ impl SignalManager {
     }
 
     pub fn send_signal(&self, pid: i32, sig: i32) -> Result<(), i32> {
-        if sig < 1 || sig >= 64 {
+        if !(1..64).contains(&sig) {
             return Err(EINVAL);
         }
         let mut pending = self.pending_signals.lock();
         let mask = pending.entry(pid).or_insert(0);
         *mask |= 1 << (sig - 1);
         Ok(())
+    }
+}
+
+impl Default for SignalManager {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

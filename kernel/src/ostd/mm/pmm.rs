@@ -19,6 +19,12 @@ unsafe impl Sync for PhysicalMemoryManager {}
 static PMM: SpinLock<Option<PhysicalMemoryManager>> = SpinLock::new(None);
 static TOTAL_MEMORY_BYTES: AtomicUsize = AtomicUsize::new(0);
 
+/// Initializes the physical memory manager bitmap allocator from the bootloader memory map.
+///
+/// # Safety
+///
+/// `memmap_response` must be a valid pointer provided by the bootloader, and `hhdm_offset`
+/// must be the valid higher-half direct mapping virtual offset.
 pub unsafe fn pmm_init(
     memmap_response: *mut LimineMemmapResponse,
     hhdm_offset: usize,
@@ -44,8 +50,8 @@ pub unsafe fn pmm_init(
     }
 
     TOTAL_MEMORY_BYTES.store(total_bytes, Ordering::Relaxed);
-    let total_frames = (highest_addr as usize + PAGE_SIZE - 1) / PAGE_SIZE;
-    let bitmap_size = (total_frames + 7) / 8;
+    let total_frames = (highest_addr as usize).div_ceil(PAGE_SIZE);
+    let bitmap_size = total_frames.div_ceil(8);
 
     // Find a usable region large enough for the bitmap
     let mut bitmap_addr: u64 = 0;
@@ -84,7 +90,7 @@ pub unsafe fn pmm_init(
     // Mark frame 0 and the bitmap itself as used
     manager.set_bit(0, true);
     let bitmap_start_frame = (bitmap_addr as usize) / PAGE_SIZE;
-    let bitmap_frame_count = (bitmap_size + PAGE_SIZE - 1) / PAGE_SIZE;
+    let bitmap_frame_count = bitmap_size.div_ceil(PAGE_SIZE);
     for f in bitmap_start_frame..(bitmap_start_frame + bitmap_frame_count) {
         manager.set_bit(f, true);
         manager.free_frames = manager.free_frames.saturating_sub(1);

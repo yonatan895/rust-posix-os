@@ -37,6 +37,11 @@ pub fn zero_phys_frame(phys: usize) {
     unsafe { core::ptr::write_bytes(virt, 0, PAGE_SIZE) };
 }
 
+/// Initializes the virtual memory manager with the bootloader HHDM virtual offset.
+///
+/// # Safety
+///
+/// `hhdm` must be the valid base virtual address of the physical memory direct map.
 pub unsafe fn vmm_init(hhdm: usize) {
     *HHDM_OFFSET.lock() = hhdm;
 }

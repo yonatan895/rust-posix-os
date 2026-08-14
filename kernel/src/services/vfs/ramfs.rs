@@ -58,13 +58,13 @@ impl Inode for RamFsDir {
         let entries = self.entries.lock();
         let mut list = Vec::new();
         for (name, child) in entries.iter() {
-            let mut dirent = Dirent64::default();
-            dirent.d_type = match child.file_type() {
+            let d_type = match child.file_type() {
                 FileType::Directory => DT_DIR,
                 FileType::CharacterDevice => DT_CHR,
                 FileType::Fifo => DT_FIFO,
                 _ => DT_REG,
             };
+            let mut dirent = Dirent64 { d_type, ..Default::default() };
             let bytes = name.as_bytes();
             let len = bytes.len().min(dirent.d_name.len() - 1);
             dirent.d_name[..len].copy_from_slice(&bytes[..len]);
@@ -75,9 +75,10 @@ impl Inode for RamFsDir {
     }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFDIR | 0o755;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFDIR | 0o755,
+            ..Default::default()
+        })
     }
 
     fn create_file(&self, name: &str) -> Result<Arc<dyn Inode>, i32> {
@@ -168,10 +169,11 @@ impl Inode for RamFsFile {
     }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFREG | 0o644;
-        s.st_size = self.data.lock().len() as i64;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFREG | 0o644,
+            st_size: self.data.lock().len() as i64,
+            ..Default::default()
+        })
     }
 
     fn truncate(&self) -> Result<(), i32> {

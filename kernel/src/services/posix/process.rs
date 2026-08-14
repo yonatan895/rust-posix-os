@@ -115,7 +115,7 @@ pub fn sys_exit(code: i32) -> isize {
 }
 
 pub fn sys_kill(pid: i32, sig: i32) -> isize {
-    if sig < 1 || sig > 31 {
+    if !(1..=31).contains(&sig) {
         return -(EINVAL as isize);
     }
     match SIGNALS.send_signal(pid, sig) {

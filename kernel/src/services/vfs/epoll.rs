@@ -121,9 +121,10 @@ impl Inode for EpollInstance {
     }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFREG | 0o600;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFREG | 0o600,
+            ..Default::default()
+        })
     }
 
     fn as_epoll(&self) -> Option<&EpollInstance> {

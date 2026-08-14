@@ -42,6 +42,11 @@ pub struct SyscallRegisters {
     pub rsp: usize, // User RSP
 }
 
+/// Naked entry point for the x86_64 fast `syscall` instruction.
+///
+/// # Safety
+///
+/// Must only be jumped to directly by CPU hardware during the `syscall` instruction.
 #[unsafe(naked)]
 pub unsafe extern "C" fn syscall_entry() {
     naked_asm!(
@@ -94,6 +99,11 @@ pub unsafe extern "C" fn syscall_entry() {
     );
 }
 
+/// Programs CPU Model-Specific Registers (STAR, LSTAR, FMASK, EFER) for fast system call dispatch.
+///
+/// # Safety
+///
+/// Must be invoked during boot before entering user mode with a valid kernel stack address.
 pub unsafe fn syscall_init(kernel_stack_top: u64) {
     // 0. Initialize PerCpuData and Kernel GS Base
     BSP_PER_CPU.kernel_rsp = kernel_stack_top;
@@ -115,4 +125,14 @@ pub unsafe fn syscall_init(kernel_stack_top: u64) {
     // 4. Configure FMASK MSR to clear IF (interrupts), DF, TF upon syscall entry
     let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
     wrmsr(IA32_FMASK, fmask);
+}
+
+/// Syscall dispatcher bridge called from `syscall_entry` assembly.
+///
+/// # Safety
+///
+/// `regs` must either be null or point to a live `SyscallRegisters` frame on the current stack.
+#[no_mangle]
+pub unsafe extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
+    crate::ostd::mm::with_syscall_regs(regs, crate::services::posix::dispatch_syscall)
 }

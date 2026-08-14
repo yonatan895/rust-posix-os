@@ -14,6 +14,11 @@ pub use user::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SP
 pub use pod::read_pod;
 pub use boot::{boot_modules, with_syscall_regs, BootBlob};
 
+/// Initializes the kernel memory management subsystem (PMM, VMM, and global heap).
+///
+/// # Safety
+///
+/// Must be invoked during early boot with valid bootloader memory responses.
 pub unsafe fn mm_init() {
     let memmap_response = crate::ostd::limine::memmap_response();
     let hhdm_offset = crate::ostd::limine::hhdm_offset();

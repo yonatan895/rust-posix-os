@@ -16,6 +16,11 @@ struct KernelStack([u8; 64 * 1024]);
 
 static mut BOOT_STACK: KernelStack = KernelStack([0; 64 * 1024]);
 
+/// Kernel entry point called by the Limine bootloader.
+///
+/// # Safety
+///
+/// Must be invoked by a compliant 64-bit bootloader with paging and stack initialized.
 #[no_mangle]
 pub unsafe extern "C" fn _start() -> ! {
     serial_init();

@@ -135,9 +135,10 @@ impl Inode for ProcDynamicFile {
 
     fn stat(&self) -> Result<Stat, i32> {
         let content = self.generate_content();
-        let mut s = Stat::default();
-        s.st_mode = S_IFREG | 0o444;
-        s.st_size = content.len() as i64;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFREG | 0o444,
+            st_size: content.len() as i64,
+            ..Default::default()
+        })
     }
 }

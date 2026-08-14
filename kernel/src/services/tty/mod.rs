@@ -14,8 +14,10 @@ pub struct LineDiscipline {
 
 impl LineDiscipline {
     pub fn new() -> Self {
-        let mut termios = Termios::default();
-        termios.c_lflag = ECHO | ICANON | ISIG;
+        let termios = Termios {
+            c_lflag: ECHO | ICANON | ISIG,
+            ..Default::default()
+        };
         Self {
             input_buffer: Vec::with_capacity(256),
             canonical_queue: Vec::with_capacity(1024),
@@ -31,23 +33,26 @@ impl LineDiscipline {
             if c == 0x08 || c == 0x7F {
                 // Backspace / Delete
                 if self.input_buffer.pop().is_some() && is_echo {
-                    return Some(0x08);
+                    Some(0x08)
+                } else {
+                    None
                 }
-                return None;
             } else if c == b'\r' || c == b'\n' {
                 self.input_buffer.push(b'\n');
                 self.canonical_queue.extend_from_slice(&self.input_buffer);
                 self.input_buffer.clear();
                 if is_echo {
-                    return Some(b'\n');
+                    Some(b'\n')
+                } else {
+                    None
                 }
-                return None;
             } else {
                 self.input_buffer.push(c);
                 if is_echo {
-                    return Some(c);
+                    Some(c)
+                } else {
+                    None
                 }
-                return None;
             }
         } else {
             self.canonical_queue.push(c);
@@ -57,6 +62,12 @@ impl LineDiscipline {
                 None
             }
         }
+    }
+}
+
+impl Default for LineDiscipline {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -81,8 +92,8 @@ impl Inode for TtyDevice {
             return Err(EAGAIN);
         }
         let to_read = buf.len().min(ldisc.canonical_queue.len());
-        for i in 0..to_read {
-            buf[i] = ldisc.canonical_queue.remove(0);
+        for item in buf.iter_mut().take(to_read) {
+            *item = ldisc.canonical_queue.remove(0);
         }
         Ok(to_read)
     }
@@ -99,8 +110,9 @@ impl Inode for TtyDevice {
     fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFCHR | 0o620;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFCHR | 0o620,
+            ..Default::default()
+        })
     }
 }

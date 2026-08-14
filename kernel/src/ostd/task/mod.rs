@@ -21,6 +21,11 @@ pub struct CpuContext {
     pub rflags: usize,
 }
 
+/// Performs an architectural CPU register context switch between two threads.
+///
+/// # Safety
+///
+/// `prev_ctx` and `next_ctx` must be valid, aligned pointers to live `CpuContext` instances.
 #[unsafe(naked)]
 pub unsafe extern "C" fn switch_context(
     _prev_ctx: *mut CpuContext,
@@ -58,6 +63,12 @@ pub unsafe extern "C" fn switch_context(
     );
 }
 
+/// Transitions the CPU to Ring 3 (user mode) and begins executing userland code.
+///
+/// # Safety
+///
+/// `entry_point` must be a valid executable user address, `user_stack_top` must be a valid user stack address,
+/// and `pml4_phys` must be a valid page table physical address.
 #[unsafe(naked)]
 pub unsafe extern "C" fn enter_user_mode(
     _entry_point: usize,

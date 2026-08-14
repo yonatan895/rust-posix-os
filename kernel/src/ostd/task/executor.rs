@@ -22,6 +22,15 @@ impl Executor {
             tasks: BTreeMap::new(),
         }
     }
+}
+
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Executor {
 
     pub fn spawn(&mut self, future: impl Future<Output = ()> + Send + 'static) -> TaskId {
         let task = Task::new(future);

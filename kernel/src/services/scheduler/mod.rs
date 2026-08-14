@@ -23,4 +23,10 @@ impl Scheduler {
     }
 }
 
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub static SCHEDULER: SpinLock<Scheduler> = SpinLock::new(Scheduler::new());

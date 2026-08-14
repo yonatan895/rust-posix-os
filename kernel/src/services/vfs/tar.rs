@@ -30,7 +30,7 @@ struct TarHeader {
 fn parse_octal(bytes: &[u8]) -> usize {
     let mut val = 0;
     for &b in bytes {
-        if b >= b'0' && b <= b'7' {
+        if (b'0'..=b'7').contains(&b) {
             val = (val << 3) | (b - b'0') as usize;
         } else if b == 0 || b == b' ' {
             break;
@@ -80,7 +80,7 @@ pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<u
             }
         }
 
-        let data_blocks = (size + 511) / 512;
+        let data_blocks = size.div_ceil(512);
         offset += data_blocks * 512;
     }
 
