@@ -176,3 +176,85 @@ pub struct LimineModuleRequest {
 }
 unsafe impl Sync for LimineModuleRequest {}
 unsafe impl Send for LimineModuleRequest {}
+
+#[used]
+#[link_section = ".requests_start"]
+pub static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
+    id: [0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9],
+};
+
+#[used]
+#[link_section = ".requests"]
+pub static BASE_REVISION: LimineBaseRevision = LimineBaseRevision {
+    id: [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc],
+    revision: 3,
+};
+
+#[used]
+#[link_section = ".requests"]
+pub static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
+    id: LIMINE_HHDM_REQUEST,
+    revision: 0,
+    response: UnsafeCell::new(core::ptr::null_mut()),
+};
+
+#[used]
+#[link_section = ".requests"]
+pub static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
+    id: LIMINE_MEMMAP_REQUEST,
+    revision: 0,
+    response: UnsafeCell::new(core::ptr::null_mut()),
+};
+
+#[used]
+#[link_section = ".requests"]
+pub static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
+    id: LIMINE_FRAMEBUFFER_REQUEST,
+    revision: 0,
+    response: UnsafeCell::new(core::ptr::null_mut()),
+};
+
+#[used]
+#[link_section = ".requests"]
+pub static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
+    id: LIMINE_MODULE_REQUEST,
+    revision: 0,
+    response: UnsafeCell::new(core::ptr::null_mut()),
+};
+
+#[used]
+#[link_section = ".requests_end"]
+pub static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
+    id: [0xadc0e0531bb10d03, 0x9572709f31764c62],
+};
+
+/// Get the higher-half direct map (HHDM) virtual offset provided by Limine.
+pub fn hhdm_offset() -> usize {
+    let resp = unsafe { *HHDM_REQUEST.response.get() };
+    if !resp.is_null() {
+        unsafe { (*resp).offset as usize }
+    } else {
+        0xFFFF_8000_0000_0000
+    }
+}
+
+/// Get the physical memory map response pointer.
+pub fn memmap_response() -> *mut LimineMemmapResponse {
+    unsafe { *MEMMAP_REQUEST.response.get() }
+}
+
+/// Get the bootloader module response pointer.
+pub fn module_response() -> *mut LimineModuleResponse {
+    unsafe { *MODULE_REQUEST.response.get() }
+}
+
+/// Initialize the framebuffer driver if a display device is reported by Limine.
+pub fn init_framebuffer() {
+    let resp = unsafe { *FRAMEBUFFER_REQUEST.response.get() };
+    if !resp.is_null() && unsafe { (*resp).framebuffer_count } > 0 {
+        let fb = unsafe { **(*resp).framebuffers };
+        // SAFETY: `fb` is provided and validated by the Limine bootloader payload.
+        unsafe { crate::ostd::drivers::framebuffer::fb_init(fb) };
+        log::info!("[OSTD] Framebuffer initialized ({}x{} @ {}bpp).", fb.width, fb.height, fb.bpp);
+    }
+}

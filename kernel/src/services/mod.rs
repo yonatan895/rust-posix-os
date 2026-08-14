@@ -17,8 +17,7 @@ pub mod audit;
 use alloc::sync::Arc;
 use alloc::string::ToString;
 use posix_abi::O_RDWR;
-use crate::ostd::limine::LimineModuleResponse;
-use crate::ostd::mm::boot_module_blobs;
+use crate::ostd::mm::BootBlob;
 use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
 use crate::services::vfs::devfs::{DevNull, DevZero, DevConsole};
 use crate::services::vfs::procfs::{ProcDynamicFile, ProcKind};
@@ -27,7 +26,7 @@ use crate::services::vfs::{vfs_init, FileHandle};
 use crate::services::process::{Process, PROCESS_TABLE};
 use crate::services::audit::audit_init;
 
-pub fn services_init(module_resp: *mut LimineModuleResponse) {
+pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     log::info!("[SERVICES] Starting de-privileged OS services initialization...");
 
     let root_dir = RamFsDir::new();
@@ -60,7 +59,6 @@ pub fn services_init(module_resp: *mut LimineModuleResponse) {
     root_dir.add_child("etc", etc_dir);
     log::info!("[SERVICES] Root filesystem directory hierarchy created.");
 
-    let blobs = boot_module_blobs(module_resp);
     if blobs.is_empty() {
         log::warn!("[SERVICES] No boot module payloads from Limine.");
     }

@@ -9,59 +9,7 @@ pub mod ostd;
 pub mod services;
 
 use core::panic::PanicInfo;
-use ostd::limine::*;
 use ostd::*;
-
-#[used]
-#[link_section = ".requests_start"]
-static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
-    id: [0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9],
-};
-
-#[used]
-#[link_section = ".requests"]
-static BASE_REVISION: LimineBaseRevision = LimineBaseRevision {
-    id: [0xf9562b2d5c95a6c8, 0x6a7b384944536bdc],
-    revision: 3,
-};
-
-#[used]
-#[link_section = ".requests"]
-static HHDM_REQUEST: LimineHhdmRequest = LimineHhdmRequest {
-    id: LIMINE_HHDM_REQUEST,
-    revision: 0,
-    response: core::cell::UnsafeCell::new(core::ptr::null_mut()),
-};
-
-#[used]
-#[link_section = ".requests"]
-static MEMMAP_REQUEST: LimineMemmapRequest = LimineMemmapRequest {
-    id: LIMINE_MEMMAP_REQUEST,
-    revision: 0,
-    response: core::cell::UnsafeCell::new(core::ptr::null_mut()),
-};
-
-#[used]
-#[link_section = ".requests"]
-static FRAMEBUFFER_REQUEST: LimineFramebufferRequest = LimineFramebufferRequest {
-    id: LIMINE_FRAMEBUFFER_REQUEST,
-    revision: 0,
-    response: core::cell::UnsafeCell::new(core::ptr::null_mut()),
-};
-
-#[used]
-#[link_section = ".requests"]
-static MODULE_REQUEST: LimineModuleRequest = LimineModuleRequest {
-    id: LIMINE_MODULE_REQUEST,
-    revision: 0,
-    response: core::cell::UnsafeCell::new(core::ptr::null_mut()),
-};
-
-#[used]
-#[link_section = ".requests_end"]
-static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
-    id: [0xadc0e0531bb10d03, 0x9572709f31764c62],
-};
 
 #[repr(C, align(4096))]
 struct KernelStack([u8; 64 * 1024]);
@@ -83,25 +31,10 @@ pub unsafe extern "C" fn _start() -> ! {
     idt_init();
     log::info!("[OSTD] IDT and exception vectors configured.");
 
-    let hhdm_resp = *HHDM_REQUEST.response.get();
-    let memmap_resp = *MEMMAP_REQUEST.response.get();
-    let module_resp = *MODULE_REQUEST.response.get();
-
-    let hhdm_offset = if !hhdm_resp.is_null() {
-        (*hhdm_resp).offset as usize
-    } else {
-        0xFFFF_8000_0000_0000
-    };
-
-    mm_init(memmap_resp, hhdm_offset);
+    mm_init();
     log::info!("[OSTD] Memory management initialized (PMM, 4-Level Paging, 16MiB Kernel Heap).");
 
-    let fb_resp = *FRAMEBUFFER_REQUEST.response.get();
-    if !fb_resp.is_null() && (*fb_resp).framebuffer_count > 0 {
-        let fb = **(*fb_resp).framebuffers;
-        ostd::drivers::framebuffer::fb_init(fb);
-        log::info!("[OSTD] Framebuffer initialized ({}x{} @ {}bpp).", fb.width, fb.height, fb.bpp);
-    }
+    limine::init_framebuffer();
 
     syscall_init(stack_top);
     log::info!("[OSTD] Fast system call MSRs (LSTAR/STAR/FMASK) armed.");
@@ -109,7 +42,7 @@ pub unsafe extern "C" fn _start() -> ! {
     irq_init();
     log::info!("[OSTD] IRQ controllers prepared.");
 
-    services::services_init(module_resp);
+    services::services_init(ostd::mm::boot_modules());
 
     ostd::task::executor::async_init();
     ostd::task::executor::spawn(services::monitor::system_resource_monitor_task());
