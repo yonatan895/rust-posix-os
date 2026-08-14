@@ -27,7 +27,20 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
     // Extract all needed parent state and duplicate address space before dropping parent lock.
     // Adheres strictly to ADR-0002 lock ordering: no process lock may be held while acquiring
     // PROCESS_TABLE, SCHEDULER, or IPC locks.
-    let (parent_pid, parent_cwd, parent_vm, entry_point, user_stack_top, mmap_next_vaddr, fds) = {
+    let (
+        parent_pid,
+        parent_uid,
+        parent_gid,
+        parent_euid,
+        parent_egid,
+        parent_umask,
+        parent_cwd,
+        parent_vm,
+        entry_point,
+        user_stack_top,
+        mmap_next_vaddr,
+        fds,
+    ) = {
         let parent = parent_arc.lock();
         let vm_clone = if let Some(ref parent_vm) = parent.vm_space {
             match parent_vm.clone_from() {
@@ -39,6 +52,11 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
         };
         (
             parent.pid,
+            parent.uid,
+            parent.gid,
+            parent.euid,
+            parent.egid,
+            parent.umask,
             parent.cwd.clone(),
             vm_clone,
             parent.entry_point,
@@ -50,6 +68,11 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
 
     let child_pid = alloc_pid();
     let mut child = Process::new(child_pid, parent_pid, parent_cwd);
+    child.uid = parent_uid;
+    child.gid = parent_gid;
+    child.euid = parent_euid;
+    child.egid = parent_egid;
+    child.umask = parent_umask;
     child.vm_space = parent_vm;
     child.entry_point = entry_point;
     child.user_stack_top = user_stack_top;
@@ -651,4 +674,78 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
     }
 
     false
+}
+
+pub fn sys_getuid() -> isize {
+    match get_current_process() {
+        Some(p) => p.lock().uid as isize,
+        None => 0,
+    }
+}
+
+pub fn sys_geteuid() -> isize {
+    match get_current_process() {
+        Some(p) => p.lock().euid as isize,
+        None => 0,
+    }
+}
+
+pub fn sys_getgid() -> isize {
+    match get_current_process() {
+        Some(p) => p.lock().gid as isize,
+        None => 0,
+    }
+}
+
+pub fn sys_getegid() -> isize {
+    match get_current_process() {
+        Some(p) => p.lock().egid as isize,
+        None => 0,
+    }
+}
+
+// TODO: saved-uid for seteuid — the setuid privilege-drop-and-regain pattern
+// requires a saved set-user-ID field on Process. The current implementation handles
+// the two main cases (root setuid drops everything, non-root no-op), but the model
+// is incomplete without saved-uid/saved-gid.
+pub fn sys_setuid(uid: u32) -> isize {
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let mut proc = proc_lock.lock();
+    if proc.euid == 0 || proc.uid == uid {
+        proc.uid = uid;
+        proc.euid = uid;
+        0
+    } else {
+        -(EPERM as isize)
+    }
+}
+
+// TODO: saved-gid for setegid (see sys_setuid TODO above).
+pub fn sys_setgid(gid: u32) -> isize {
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let mut proc = proc_lock.lock();
+    if proc.euid == 0 || proc.gid == gid {
+        proc.gid = gid;
+        proc.egid = gid;
+        0
+    } else {
+        -(EPERM as isize)
+    }
+}
+
+pub fn sys_umask(mask: u32) -> isize {
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let mut proc = proc_lock.lock();
+    let old_mask = proc.umask;
+    proc.umask = mask & 0o777;
+    old_mask as isize
 }

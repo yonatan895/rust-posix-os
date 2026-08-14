@@ -1,7 +1,9 @@
-//! POSIX Coreutils Multi-Call Binary in Rust (x86_64 Userland).
-
 #![no_std]
 #![no_main]
+#![allow(unsafe_op_in_unsafe_fn)]
+// Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
+// raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
+#![allow(clippy::all)]
 
 use core::panic::PanicInfo;
 use libc::*;

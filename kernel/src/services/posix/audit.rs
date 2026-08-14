@@ -6,9 +6,12 @@ use crate::services::audit::{create_audit_snapshot, log_audit_event};
 use crate::services::process::get_current_process;
 
 pub fn sys_audit_log(event_type: u32, target_ptr: *const u8, details_ptr: *const u8) -> isize {
-    let pid = match get_current_process() {
-        Some(p) => p.lock().pid,
-        None => 0,
+    let (pid, uid) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.pid, proc.uid)
+        }
+        None => (0, 0),
     };
     let mut tbuf = [0u8; USER_STR_MAX];
     let target = match copy_optional_user_str(target_ptr, &mut tbuf) {
@@ -20,7 +23,7 @@ pub fn sys_audit_log(event_type: u32, target_ptr: *const u8, details_ptr: *const
         Ok(s) => s,
         Err(e) => return -(e as isize),
     };
-    let seq = log_audit_event(pid, 0, event_type, 0, target, details);
+    let seq = log_audit_event(pid, uid, event_type, 0, target, details);
     seq as isize
 }
 

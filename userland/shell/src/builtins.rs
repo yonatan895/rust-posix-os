@@ -895,3 +895,19 @@ pub unsafe fn handle_snapshot_command(argc: usize, argv: &[*const u8; 16]) {
         );
     }
 }
+
+pub unsafe fn handle_id() {
+    let uid = getuid();
+    let gid = getgid();
+    let euid = geteuid();
+    let egid = getegid();
+    if uid == 0 {
+        printf(b"uid=%d(root) gid=%d(root)\0".as_ptr(), uid, gid);
+    } else {
+        printf(b"uid=%d gid=%d\0".as_ptr(), uid, gid);
+    }
+    if euid != uid || egid != gid {
+        printf(b" euid=%d egid=%d\0".as_ptr(), euid, egid);
+    }
+    puts(b"\0".as_ptr());
+}

@@ -11,13 +11,23 @@ use posix_abi::*;
 pub struct RamFsDir {
     pub entries: SpinLock<BTreeMap<String, Arc<dyn Inode>>>,
     pub subdirs: SpinLock<BTreeMap<String, Arc<RamFsDir>>>,
+    pub mode: SpinLock<u16>,
+    pub uid: SpinLock<u32>,
+    pub gid: SpinLock<u32>,
 }
 
 impl RamFsDir {
     pub fn new() -> Arc<Self> {
+        Self::new_with_creds(0o755, 0, 0)
+    }
+
+    pub fn new_with_creds(mode: u16, uid: u32, gid: u32) -> Arc<Self> {
         Arc::new(Self {
             entries: SpinLock::new(BTreeMap::new()),
             subdirs: SpinLock::new(BTreeMap::new()),
+            mode: SpinLock::new(mode),
+            uid: SpinLock::new(uid),
+            gid: SpinLock::new(gid),
         })
     }
 
@@ -73,27 +83,35 @@ impl Inode for RamFsDir {
 
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
-            st_mode: S_IFDIR | 0o755,
+            st_mode: S_IFDIR | (*self.mode.lock() as u32),
+            st_uid: *self.uid.lock(),
+            st_gid: *self.gid.lock(),
             ..Default::default()
         })
     }
 
-    fn create_file(&self, name: &str) -> Result<Arc<dyn Inode>, i32> {
+    fn create_file(
+        &self,
+        name: &str,
+        mode: u16,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Arc<dyn Inode>, i32> {
         let mut entries = self.entries.lock();
         if let Some(existing) = entries.get(name) {
             return Ok(existing.clone());
         }
-        let file = RamFsFile::new(Vec::new());
+        let file = RamFsFile::new_with_creds(Vec::new(), mode, uid, gid);
         entries.insert(name.to_string(), file.clone());
         Ok(file)
     }
 
-    fn create_dir(&self, name: &str) -> Result<Arc<dyn Inode>, i32> {
+    fn create_dir(&self, name: &str, mode: u16, uid: u32, gid: u32) -> Result<Arc<dyn Inode>, i32> {
         let mut entries = self.entries.lock();
         if entries.contains_key(name) {
             return Err(EEXIST);
         }
-        let new_dir = RamFsDir::new();
+        let new_dir = RamFsDir::new_with_creds(mode, uid, gid);
         self.subdirs
             .lock()
             .insert(name.to_string(), new_dir.clone());
@@ -124,12 +142,22 @@ impl Inode for RamFsDir {
 
 pub struct RamFsFile {
     pub data: SpinLock<Vec<u8>>,
+    pub mode: SpinLock<u16>,
+    pub uid: SpinLock<u32>,
+    pub gid: SpinLock<u32>,
 }
 
 impl RamFsFile {
     pub fn new(initial_data: Vec<u8>) -> Arc<Self> {
+        Self::new_with_creds(initial_data, 0o644, 0, 0)
+    }
+
+    pub fn new_with_creds(initial_data: Vec<u8>, mode: u16, uid: u32, gid: u32) -> Arc<Self> {
         Arc::new(Self {
             data: SpinLock::new(initial_data),
+            mode: SpinLock::new(mode),
+            uid: SpinLock::new(uid),
+            gid: SpinLock::new(gid),
         })
     }
 }
@@ -169,7 +197,9 @@ impl Inode for RamFsFile {
 
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
-            st_mode: S_IFREG | 0o644,
+            st_mode: S_IFREG | (*self.mode.lock() as u32),
+            st_uid: *self.uid.lock(),
+            st_gid: *self.gid.lock(),
             st_size: self.data.lock().len() as i64,
             ..Default::default()
         })

@@ -1,6 +1,9 @@
 #![no_std]
 #![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
+// Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
+// raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
+#![allow(clippy::all)]
 
 //! Rust POSIX Shell - Interactive Ring 3 Terminal & Command Interpreter.
 
@@ -18,10 +21,11 @@ use libc::*;
 use pipeline::execute_pipeline_line;
 use posix_abi::*;
 
-pub static KNOWN_COMMANDS: [&str; 20] = [
+pub static KNOWN_COMMANDS: [&str; 21] = [
     "help",
     "uname",
     "pwd",
+    "id",
     "cd",
     "ls",
     "cp",
@@ -70,7 +74,7 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     let cmd = argv[0];
     unsafe {
         if strcmp(cmd, b"help\0".as_ptr()) == 0 {
-            puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
+            puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, id, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
         } else if strcmp(cmd, b"uname\0".as_ptr()) == 0 {
             let mut uts = Utsname::default();
             syscall::syscall1(SYS_UNAME, &mut uts as *mut _ as usize);
@@ -85,6 +89,8 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
             let mut buf = [0u8; 128];
             getcwd(buf.as_mut_ptr(), buf.len());
             puts(buf.as_ptr());
+        } else if strcmp(cmd, b"id\0".as_ptr()) == 0 {
+            handle_id();
         } else if strcmp(cmd, b"ps\0".as_ptr()) == 0 {
             display_file(b"/proc/processes\0".as_ptr(), false);
         } else if strcmp(cmd, b"top\0".as_ptr()) == 0 || strcmp(cmd, b"monitor\0".as_ptr()) == 0 {
