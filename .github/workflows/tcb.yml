@@ -1,6 +1,18 @@
 name: TCB Boundary
 
-on: [push, pull_request]
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths-ignore:
+      - "**/*.md"
+      - "LICENSE*"
+
+concurrency:
+  group: tcb-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   unsafe-boundary:
@@ -11,9 +23,6 @@ jobs:
       - name: Enforce ADR-0001 R1 (kernel/src/services is 100% safe Rust)
         run: |
           set -euo pipefail
-          # Matches actual unsafe usage, not prose: `unsafe {`, `unsafe fn`,
-          # `unsafe impl`, `unsafe extern`. Doc text like
-          # `#![deny(unsafe_code)]` does not match.
           pattern='unsafe[[:space:]]*\{|unsafe[[:space:]]+(fn|impl|extern)'
           if grep -RnE --include='*.rs' "$pattern" kernel/src/services/; then
             echo "::error::unsafe code in kernel/src/services violates ADR-0001 R1."
