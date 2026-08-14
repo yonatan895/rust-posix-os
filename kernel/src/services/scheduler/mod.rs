@@ -1,4 +1,11 @@
 //! Round-Robin Task Scheduler - De-privileged Safe Service.
+//!
+//! # Scheduler-Tier Lock Ordering Hierarchy (ADR-0002)
+//!
+//! Statics at the scheduler tier MUST be acquired in this order only:
+//! 1. `SCHEDULER` (ready queue manipulation)
+//! 2. `CURRENT_PROCESS` (CPU active task tracking)
+//! 3. `IDLE_TASK` (fallback task reference)
 
 use crate::ostd::sync::SpinLock;
 use crate::services::process::{Process, ProcessState};
@@ -9,7 +16,7 @@ use core::sync::atomic::Ordering;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WakeReason {
     Woken,
-    // TODO(signals): WakeReason::Interrupted for EINTR delivery
+    // TODO(signals): WakeReason::Interrupted for EINTR signal delivery
     Interrupted,
 }
 
@@ -47,8 +54,13 @@ impl Default for Scheduler {
     }
 }
 
+/// Primary scheduler ready queue lock (Tier 1).
 pub static SCHEDULER: SpinLock<Scheduler> = SpinLock::new(Scheduler::new());
+
+/// CPU currently running process lock (Tier 2).
 pub static CURRENT_PROCESS: SpinLock<Option<Arc<SpinLock<Process>>>> = SpinLock::new(None);
+
+/// PID 0 idle task static reference (Tier 3).
 pub static IDLE_TASK: SpinLock<Option<Arc<SpinLock<Process>>>> = SpinLock::new(None);
 
 /// Sets the initial running process on the CPU.
@@ -137,7 +149,6 @@ pub fn switch_out_current() -> WakeReason {
         },
     };
 
-    let mut prev_saved_rsp = 0usize;
     let next_saved_rsp = {
         let mut next_proc = next_proc_arc.lock();
         next_proc.state = ProcessState::Running;
@@ -146,19 +157,18 @@ pub fn switch_out_current() -> WakeReason {
             vm.activate();
         }
         crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
-        next_proc.saved_kernel_rsp
+        next_proc.saved_kernel_rsp.load(Ordering::Acquire)
     };
 
     *curr_guard = Some(next_proc_arc);
 
+    let prev_proc = prev_proc_arc.lock();
+
     drop(curr_guard);
     drop(sched);
 
-    // Architectural task switch via unified TrapFrame / iretq
-    crate::ostd::task::switch_tasks(&mut prev_saved_rsp, next_saved_rsp);
-
-    // Write back saved stack pointer on the outgoing task PCB
-    prev_proc_arc.lock().saved_kernel_rsp = prev_saved_rsp;
+    // Architectural task switch via unified TrapFrame / iretq (writes directly to PCB saved_kernel_rsp)
+    crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
 
     WakeReason::Woken
 }
@@ -196,11 +206,10 @@ pub fn schedule_yield() {
         let mut prev_proc = prev_proc_arc.lock();
         if prev_proc.state == ProcessState::Running {
             prev_proc.state = ProcessState::Ready;
+            sched.ready_queue.push_back(prev_proc_arc.clone());
         }
-        sched.ready_queue.push_back(prev_proc_arc.clone());
     }
 
-    let mut prev_saved_rsp = 0usize;
     let next_saved_rsp = {
         let mut next_proc = next_proc_arc.lock();
         next_proc.state = ProcessState::Running;
@@ -209,16 +218,17 @@ pub fn schedule_yield() {
             vm.activate();
         }
         crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
-        next_proc.saved_kernel_rsp
+        next_proc.saved_kernel_rsp.load(Ordering::Acquire)
     };
 
     *curr_guard = Some(next_proc_arc);
 
+    let prev_proc = prev_proc_arc.lock();
+
     drop(curr_guard);
     drop(sched);
 
-    crate::ostd::task::switch_tasks(&mut prev_saved_rsp, next_saved_rsp);
-    prev_proc_arc.lock().saved_kernel_rsp = prev_saved_rsp;
+    crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
 }
 
 /// Invoked from the timer interrupt service routine to perform round-robin preemptive scheduling.
@@ -244,12 +254,13 @@ pub fn timer_tick_schedule(current_rsp: usize) -> usize {
 
     if let Some(ref prev_proc_arc) = prev_proc_opt {
         let mut prev_proc = prev_proc_arc.lock();
-        prev_proc.saved_kernel_rsp = current_rsp;
+        prev_proc
+            .saved_kernel_rsp
+            .store(current_rsp, Ordering::Release);
         if prev_proc.state == ProcessState::Running {
             prev_proc.state = ProcessState::Ready;
+            sched.ready_queue.push_back(prev_proc_arc.clone());
         }
-        drop(prev_proc);
-        sched.ready_queue.push_back(prev_proc_arc.clone());
     }
 
     let next_rsp = {
@@ -260,7 +271,7 @@ pub fn timer_tick_schedule(current_rsp: usize) -> usize {
             vm.activate();
         }
         crate::services::process::CURRENT_PID.store(next_proc.pid, Ordering::SeqCst);
-        next_proc.saved_kernel_rsp
+        next_proc.saved_kernel_rsp.load(Ordering::Acquire)
     };
 
     *curr_guard = Some(next_proc_arc);

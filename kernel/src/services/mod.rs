@@ -102,10 +102,13 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     crate::services::scheduler::set_current_process(init_arc);
 
     let mut idle_proc = Process::new(0, 0, "/".to_string());
-    idle_proc.saved_kernel_rsp = crate::ostd::task::init_kernel_task_stack(
+    let idle_rsp = crate::ostd::task::init_kernel_task_stack(
         &mut idle_proc.kernel_stack,
         crate::ostd::task::kernel_idle_loop as *const () as usize,
     );
+    idle_proc
+        .saved_kernel_rsp
+        .store(idle_rsp, core::sync::atomic::Ordering::Release);
     let idle_arc = Arc::new(crate::ostd::sync::SpinLock::new(idle_proc));
     PROCESS_TABLE.lock().insert(0, idle_arc.clone());
     crate::services::scheduler::set_idle_task(idle_arc);

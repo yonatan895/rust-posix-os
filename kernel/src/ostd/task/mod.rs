@@ -11,20 +11,6 @@ use core::arch::naked_asm;
 
 pub const KERNEL_STACK_SIZE: usize = 16 * 1024; // 16 KiB
 
-#[repr(C)]
-#[derive(Debug, Clone, Copy, Default)]
-pub struct CpuContext {
-    pub r15: usize,
-    pub r14: usize,
-    pub r13: usize,
-    pub r12: usize,
-    pub rbp: usize,
-    pub rbx: usize,
-    pub rip: usize,
-    pub rsp: usize,
-    pub rflags: usize,
-}
-
 /// Safely switches the CPU's active kernel stack in the TSS and syscall MSR.
 pub fn switch_active_kernel_stack(stack_top: u64) {
     unsafe {
@@ -32,18 +18,11 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
     }
 }
 
-/// Safely performs an architectural CPU register context switch between two threads.
-pub fn switch_cpu_context(prev_ctx: &mut CpuContext, next_ctx: &CpuContext) {
-    unsafe {
-        switch_context(prev_ctx as *mut CpuContext, next_ctx as *const CpuContext);
-    }
-}
-
 /// Safely performs a task switch from `prev_saved_rsp` to `next_saved_rsp` under interrupt masking.
-pub fn switch_tasks(prev_saved_rsp: &mut usize, next_saved_rsp: usize) {
+pub fn switch_tasks(prev_saved_rsp: &core::sync::atomic::AtomicUsize, next_saved_rsp: usize) {
     unsafe {
         crate::ostd::arch::cli();
-        voluntary_task_switch(prev_saved_rsp as *mut usize, next_saved_rsp);
+        voluntary_task_switch(prev_saved_rsp.as_ptr(), next_saved_rsp);
         crate::ostd::arch::sti();
     }
 }
@@ -132,7 +111,7 @@ pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
 ///
 /// # Safety
 ///
-/// `prev_saved_rsp` must be a valid pointer to store the outgoing RSP.
+/// `prev_saved_rsp` must be a valid pointer to store the outgoing RSP into the PCB.
 /// `next_saved_rsp` must point to a valid `TrapFrame` on the incoming task's kernel stack.
 #[unsafe(naked)]
 pub unsafe extern "C" fn voluntary_task_switch(
@@ -165,7 +144,7 @@ pub unsafe extern "C" fn voluntary_task_switch(
         "push r13",
         "push r14",
         "push r15",
-        // Save current RSP into *prev_saved_rsp (rdi)
+        // Save current RSP directly into the outgoing PCB field (*prev_saved_rsp = rsp)
         "mov [rdi], rsp",
         // Load next_saved_rsp (rsi) into RSP
         "mov rsp, rsi",
@@ -188,43 +167,6 @@ pub unsafe extern "C" fn voluntary_task_switch(
         "iretq",
         "1:",
         "ret",
-    );
-}
-
-/// Performs an architectural CPU register context switch between two threads.
-///
-/// # Safety
-///
-/// `prev_ctx` and `next_ctx` must be valid, aligned pointers to live `CpuContext` instances.
-#[unsafe(naked)]
-pub unsafe extern "C" fn switch_context(_prev_ctx: *mut CpuContext, _next_ctx: *const CpuContext) {
-    naked_asm!(
-        // Save current callee-saved registers into prev_ctx (rdi)
-        "mov [rdi + 0x00], r15",
-        "mov [rdi + 0x08], r14",
-        "mov [rdi + 0x10], r13",
-        "mov [rdi + 0x18], r12",
-        "mov [rdi + 0x20], rbp",
-        "mov [rdi + 0x28], rbx",
-        "lea rax, [2f + rip]",
-        "mov [rdi + 0x30], rax", // rip
-        "mov [rdi + 0x38], rsp", // rsp
-        "pushfq",
-        "pop rax",
-        "mov [rdi + 0x40], rax", // rflags
-        // Restore registers from next_ctx (rsi)
-        "mov r15, [rsi + 0x00]",
-        "mov r14, [rsi + 0x08]",
-        "mov r13, [rsi + 0x10]",
-        "mov r12, [rsi + 0x18]",
-        "mov rbp, [rsi + 0x20]",
-        "mov rbx, [rsi + 0x28]",
-        "mov rsp, [rsi + 0x38]",
-        "push [rsi + 0x40]",
-        "popfq",
-        "jmp [rsi + 0x30]", // Jump to next_ctx.rip
-        "2:",
-        "ret"
     );
 }
 

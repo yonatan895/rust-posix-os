@@ -68,6 +68,9 @@ impl Inode for PipeReadEnd {
         caller_pid: i32,
     ) -> Result<usize, i32> {
         loop {
+            // Mark caller Blocked BEFORE acquiring pipe Inode lock (ADR-0001/0002 compliance)
+            crate::services::scheduler::mark_current_blocked();
+
             let mut to_wake_writers = Vec::new();
             let (should_switch, bytes_read_opt) = {
                 let mut pipe = self.buf.lock();
@@ -78,14 +81,12 @@ impl Inode for PipeReadEnd {
                     if flags & O_NONBLOCK != 0 {
                         return Err(EAGAIN);
                     }
-                    // Mark caller Blocked before dropping pipe lock
-                    crate::services::scheduler::mark_current_blocked();
+                    // Register caller on read_waiters queue
                     pipe.read_waiters.add_waiter(caller_pid);
 
                     // Re-check condition under pipe lock to close lost-wakeup race
                     if pipe.len > 0 || pipe.writers_open == 0 {
                         pipe.read_waiters.remove_waiter(caller_pid);
-                        crate::services::scheduler::mark_current_running();
                         (false, None)
                     } else {
                         (true, None)
@@ -116,11 +117,15 @@ impl Inode for PipeReadEnd {
             }
 
             if let Some(n) = bytes_read_opt {
+                crate::services::scheduler::mark_current_running();
                 return Ok(n);
             }
 
             if should_switch {
                 crate::services::scheduler::switch_out_current();
+                crate::services::scheduler::mark_current_running();
+            } else {
+                crate::services::scheduler::mark_current_running();
             }
         }
     }
@@ -175,6 +180,9 @@ impl Inode for PipeWriteEnd {
         caller_pid: i32,
     ) -> Result<usize, i32> {
         loop {
+            // Mark caller Blocked BEFORE acquiring pipe Inode lock (ADR-0001/0002 compliance)
+            crate::services::scheduler::mark_current_blocked();
+
             let mut to_wake_readers = Vec::new();
             let (should_switch, bytes_written_opt) = {
                 let mut pipe = self.buf.lock();
@@ -187,14 +195,12 @@ impl Inode for PipeWriteEnd {
                     if flags & O_NONBLOCK != 0 {
                         return Err(EAGAIN);
                     }
-                    // Mark caller Blocked before dropping pipe lock
-                    crate::services::scheduler::mark_current_blocked();
+                    // Register caller on write_waiters queue
                     pipe.write_waiters.add_waiter(caller_pid);
 
                     // Re-check condition under pipe lock to close lost-wakeup race
                     if pipe.len < PIPE_BUFFER_SIZE || pipe.readers_open == 0 {
                         pipe.write_waiters.remove_waiter(caller_pid);
-                        crate::services::scheduler::mark_current_running();
                         (false, None)
                     } else {
                         (true, None)
@@ -223,11 +229,15 @@ impl Inode for PipeWriteEnd {
             }
 
             if let Some(n) = bytes_written_opt {
+                crate::services::scheduler::mark_current_running();
                 return Ok(n);
             }
 
             if should_switch {
                 crate::services::scheduler::switch_out_current();
+                crate::services::scheduler::mark_current_running();
+            } else {
+                crate::services::scheduler::mark_current_running();
             }
         }
     }

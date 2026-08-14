@@ -1,16 +1,16 @@
-//! Process & Thread Management - De-privileged Safe Service.
+//! Process Management Service - De-privileged Safe Service.
 
-pub mod elf;
-
-use self::elf::load_elf;
 use crate::ostd::mm::VmSpace;
 use crate::ostd::sync::SpinLock;
+use crate::services::process::elf::load_elf;
 use crate::services::vfs::FileHandle;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use core::sync::atomic::{AtomicI32, Ordering};
+use core::sync::atomic::{AtomicI32, AtomicUsize, Ordering};
+
+pub mod elf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -32,8 +32,7 @@ pub struct Process {
     pub user_stack_top: usize,
     pub mmap_next_vaddr: usize,
     pub kernel_stack: Vec<u8>,
-    pub saved_kernel_rsp: usize,
-    pub cpu_context: crate::ostd::task::CpuContext,
+    pub saved_kernel_rsp: AtomicUsize,
     pub has_started: bool,
 }
 
@@ -55,8 +54,7 @@ impl Process {
             user_stack_top: 0,
             mmap_next_vaddr: DEFAULT_MMAP_BASE,
             kernel_stack,
-            saved_kernel_rsp,
-            cpu_context: crate::ostd::task::CpuContext::default(),
+            saved_kernel_rsp: AtomicUsize::new(saved_kernel_rsp),
             has_started: false,
         }
     }
@@ -109,11 +107,12 @@ impl Process {
         self.user_stack_top = loaded.user_stack_top;
         self.mmap_next_vaddr = DEFAULT_MMAP_BASE;
 
-        self.saved_kernel_rsp = crate::ostd::task::init_user_kernel_stack(
+        let initial_rsp = crate::ostd::task::init_user_kernel_stack(
             &mut self.kernel_stack,
             self.entry_point,
             self.user_stack_top,
         );
+        self.saved_kernel_rsp.store(initial_rsp, Ordering::Release);
         self.has_started = true;
 
         Ok(())
