@@ -3,26 +3,26 @@
 //! All high-level operating system functionality is implemented in this module
 //! in safe Rust, using only the safe abstractions exposed by the OSTD framework.
 
-pub mod vfs;
-pub mod tty;
+pub mod audit;
+pub mod ipc;
+pub mod monitor;
+pub mod posix;
 pub mod process;
 pub mod scheduler;
-pub mod ipc;
-pub mod posix;
-pub mod monitor;
-pub mod audit;
+pub mod tty;
+pub mod vfs;
 
-use alloc::sync::Arc;
-use alloc::string::ToString;
-use posix_abi::O_RDWR;
 use crate::ostd::mm::BootBlob;
-use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
-use crate::services::vfs::devfs::{DevNull, DevZero, DevConsole};
+use crate::services::audit::audit_init;
+use crate::services::process::{Process, PROCESS_TABLE};
+use crate::services::vfs::devfs::{DevConsole, DevNull, DevZero};
 use crate::services::vfs::procfs::{ProcDynamicFile, ProcKind};
+use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
 use crate::services::vfs::tar::unpack_tar_archive;
 use crate::services::vfs::{vfs_init, FileHandle};
-use crate::services::process::{Process, PROCESS_TABLE};
-use crate::services::audit::audit_init;
+use alloc::string::ToString;
+use alloc::sync::Arc;
+use posix_abi::O_RDWR;
 
 pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     log::info!("[SERVICES] Starting de-privileged OS services initialization...");
@@ -44,10 +44,19 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     proc_dir.add_child("stat", ProcDynamicFile::new(ProcKind::Stat));
     proc_dir.add_child("uptime", ProcDynamicFile::new(ProcKind::Uptime));
     proc_dir.add_child("processes", ProcDynamicFile::new(ProcKind::Processes));
-    proc_dir.add_child("audit_journal", ProcDynamicFile::new(ProcKind::AuditJournal));
+    proc_dir.add_child(
+        "audit_journal",
+        ProcDynamicFile::new(ProcKind::AuditJournal),
+    );
     proc_dir.add_child("snapshots", ProcDynamicFile::new(ProcKind::AuditSnapshots));
 
-    etc_dir.add_child("os-release", RamFsFile::new(b"NAME=\"RustPOSIX\"\nVERSION=\"1.0.0\"\nID=rustposix\nPRETTY_NAME=\"Rust POSIX OS\"\n".to_vec()));
+    etc_dir.add_child(
+        "os-release",
+        RamFsFile::new(
+            b"NAME=\"RustPOSIX\"\nVERSION=\"1.0.0\"\nID=rustposix\nPRETTY_NAME=\"Rust POSIX OS\"\n"
+                .to_vec(),
+        ),
+    );
     etc_dir.add_child("motd", RamFsFile::new(b"Welcome to Rust POSIX OS (Framekernel Model)\nType 'help' for available commands.\n\n".to_vec()));
 
     root_dir.add_child("dev", dev_dir);
@@ -63,7 +72,10 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     for (i, blob) in blobs.iter().enumerate() {
         log::info!("[SERVICES] Boot module {}: {} bytes", i, blob.bytes.len());
         match unpack_tar_archive(blob.bytes, &root_dir) {
-            Ok(unpacked) => log::info!("[VFS] Unpacked {} files from boot module initramfs.", unpacked),
+            Ok(unpacked) => log::info!(
+                "[VFS] Unpacked {} files from boot module initramfs.",
+                unpacked
+            ),
             Err(e) => log::error!("[VFS] Failed to unpack initramfs: {}", e),
         }
     }
@@ -85,7 +97,9 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
         Err(e) => log::warn!("[SERVICES] /bin/init not loaded (errno: {}).", e),
     }
 
-    PROCESS_TABLE.lock().insert(1, Arc::new(crate::ostd::sync::SpinLock::new(init_proc)));
+    PROCESS_TABLE
+        .lock()
+        .insert(1, Arc::new(crate::ostd::sync::SpinLock::new(init_proc)));
 
     audit_init();
 

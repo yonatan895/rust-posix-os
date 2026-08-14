@@ -1,8 +1,8 @@
 //! POSIX Signals and IPC - De-privileged Safe Service.
 
+use crate::ostd::sync::SpinLock;
 use alloc::collections::BTreeMap;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 pub struct SignalManager {
     pub pending_signals: SpinLock<BTreeMap<i32, u64>>,

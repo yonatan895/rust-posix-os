@@ -11,16 +11,23 @@ pub struct HistoryEntry {
 
 impl Default for HistoryEntry {
     fn default() -> Self {
-        Self { buf: [0; MAX_CMD_LEN], len: 0 }
+        Self {
+            buf: [0; MAX_CMD_LEN],
+            len: 0,
+        }
     }
 }
 
-pub static mut HISTORY: [HistoryEntry; MAX_HISTORY] =
-    [HistoryEntry { buf: [0; MAX_CMD_LEN], len: 0 }; MAX_HISTORY];
+pub static mut HISTORY: [HistoryEntry; MAX_HISTORY] = [HistoryEntry {
+    buf: [0; MAX_CMD_LEN],
+    len: 0,
+}; MAX_HISTORY];
 pub static mut HISTORY_COUNT: usize = 0;
 
 pub unsafe fn history_add(cmd: &[u8], len: usize) {
-    if len == 0 { return; }
+    if len == 0 {
+        return;
+    }
     let count = HISTORY_COUNT;
     if count > 0 {
         let last_idx = (count - 1) % MAX_HISTORY;
@@ -38,7 +45,9 @@ pub unsafe fn history_add(cmd: &[u8], len: usize) {
 
 pub unsafe fn history_prev(cursor: &mut usize, buf: &mut [u8], len: &mut usize) {
     let total = HISTORY_COUNT;
-    if total == 0 { return; }
+    if total == 0 {
+        return;
+    }
     let max_avail = total.min(MAX_HISTORY);
     if *cursor < max_avail {
         *cursor += 1;
@@ -55,7 +64,13 @@ pub unsafe fn history_prev(cursor: &mut usize, buf: &mut [u8], len: &mut usize) 
     }
 }
 
-pub unsafe fn history_next(cursor: &mut usize, buf: &mut [u8], len: &mut usize, draft: &[u8], draft_len: usize) {
+pub unsafe fn history_next(
+    cursor: &mut usize,
+    buf: &mut [u8],
+    len: &mut usize,
+    draft: &[u8],
+    draft_len: usize,
+) {
     let total = HISTORY_COUNT;
     if *cursor > 1 {
         *cursor -= 1;

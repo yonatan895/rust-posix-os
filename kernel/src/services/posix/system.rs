@@ -4,12 +4,12 @@
 //! the dispatcher and are converted via `super::{copy_user_path, map_user_error}`
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
-use posix_abi::*;
+use super::{copy_user_path, map_user_error};
+use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
+use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::*;
-use crate::services::audit::log_audit_event;
-use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
-use super::{copy_user_path, map_user_error};
+use posix_abi::*;
 
 pub fn sys_uname(buf: *mut Utsname) -> isize {
     let out = match UserPtr::<Utsname>::from_raw(buf as usize) {
@@ -115,6 +115,13 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
     let pid = proc.pid;
     drop(proc);
 
-    log_audit_event(pid, 0, AUDIT_TYPE_DIR_CHANGE, 0, &target_norm, "Working directory changed");
+    log_audit_event(
+        pid,
+        0,
+        AUDIT_TYPE_DIR_CHANGE,
+        0,
+        &target_norm,
+        "Working directory changed",
+    );
     0
 }

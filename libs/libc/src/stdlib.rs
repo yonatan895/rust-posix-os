@@ -1,9 +1,9 @@
 //! Standard General Utilities Library (stdlib.h).
 
-use posix_abi::*;
-use crate::syscall::*;
-use crate::sys_mman::*;
 use crate::string::memcpy;
+use crate::sys_mman::*;
+use crate::syscall::*;
+use posix_abi::*;
 
 #[repr(C)]
 struct BlockHeader {
@@ -125,5 +125,9 @@ pub unsafe extern "C" fn atoi(s: *const u8) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn abs(j: i32) -> i32 {
-    if j < 0 { -j } else { j }
+    if j < 0 {
+        -j
+    } else {
+        j
+    }
 }

@@ -1,7 +1,7 @@
 //! Epoll Asynchronous I/O Event Notification (sys/epoll.h).
 
-use posix_abi::*;
 use crate::syscall::*;
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 {
@@ -14,12 +14,7 @@ pub unsafe extern "C" fn epoll_create(_size: i32) -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn epoll_ctl(
-    epfd: i32,
-    op: i32,
-    fd: i32,
-    event: *mut EpollEvent,
-) -> i32 {
+pub unsafe extern "C" fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut EpollEvent) -> i32 {
     syscall4(
         SYS_EPOLL_CTL,
         epfd as usize,

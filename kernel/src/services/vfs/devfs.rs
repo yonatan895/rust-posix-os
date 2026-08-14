@@ -1,19 +1,29 @@
 //! DevFs - Special Device Nodes (/dev/null, /dev/zero, /dev/tty, /dev/console).
 
 use super::{FileType, Inode};
+use crate::ostd::drivers::serial::SERIAL1;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::drivers::serial::SERIAL1;
 
 pub struct DevNull;
 
 impl Inode for DevNull {
-    fn file_type(&self) -> FileType { FileType::CharacterDevice }
-    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> { Ok(0) }
-    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> { Ok(buf.len()) }
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn file_type(&self) -> FileType {
+        FileType::CharacterDevice
+    }
+    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> {
+        Ok(0)
+    }
+    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> {
+        Ok(buf.len())
+    }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
             st_mode: S_IFCHR | 0o666,
@@ -25,14 +35,22 @@ impl Inode for DevNull {
 pub struct DevZero;
 
 impl Inode for DevZero {
-    fn file_type(&self) -> FileType { FileType::CharacterDevice }
+    fn file_type(&self) -> FileType {
+        FileType::CharacterDevice
+    }
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         buf.fill(0);
         Ok(buf.len())
     }
-    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> { Ok(buf.len()) }
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> {
+        Ok(buf.len())
+    }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
             st_mode: S_IFCHR | 0o666,
@@ -44,7 +62,9 @@ impl Inode for DevZero {
 pub struct DevConsole;
 
 impl Inode for DevConsole {
-    fn file_type(&self) -> FileType { FileType::CharacterDevice }
+    fn file_type(&self) -> FileType {
+        FileType::CharacterDevice
+    }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         if buf.is_empty() {
@@ -70,8 +90,12 @@ impl Inode for DevConsole {
         Ok(buf.len())
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
             st_mode: S_IFCHR | 0o666,

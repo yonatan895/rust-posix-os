@@ -1,10 +1,10 @@
 //! TTY Subsystem & Line Discipline - De-privileged Safe Service.
 
+use crate::ostd::sync::SpinLock;
+use crate::services::vfs::{FileType, Inode};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
-use crate::services::vfs::{FileType, Inode};
 
 pub struct LineDiscipline {
     pub input_buffer: Vec<u8>,
@@ -84,7 +84,9 @@ impl TtyDevice {
 }
 
 impl Inode for TtyDevice {
-    fn file_type(&self) -> FileType { FileType::CharacterDevice }
+    fn file_type(&self) -> FileType {
+        FileType::CharacterDevice
+    }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         let mut ldisc = self.ldisc.lock();
@@ -106,8 +108,12 @@ impl Inode for TtyDevice {
         Ok(buf.len())
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {

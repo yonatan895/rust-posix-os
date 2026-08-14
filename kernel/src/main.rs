@@ -52,7 +52,10 @@ pub unsafe extern "C" fn _start() -> ! {
     ostd::task::executor::async_init();
     ostd::task::executor::spawn(services::monitor::system_resource_monitor_task());
     let executed_steps = ostd::task::executor::run_async_tasks();
-    log::info!("[ASYNC] Kernel async executor initialized (executed {} task steps).", executed_steps);
+    log::info!(
+        "[ASYNC] Kernel async executor initialized (executed {} task steps).",
+        executed_steps
+    );
 
     log::info!("=====================================================");
     log::info!("  Kernel Initialization Complete. Kernel running!   ");
@@ -68,7 +71,11 @@ pub unsafe extern "C" fn _start() -> ! {
             }
         };
         if entry != 0 {
-            log::info!("[OSTD] Switching CPU to Ring 3 User Mode (entry: 0x{:x}, stack: 0x{:x})...", entry, stack);
+            log::info!(
+                "[OSTD] Switching CPU to Ring 3 User Mode (entry: 0x{:x}, stack: 0x{:x})...",
+                entry,
+                stack
+            );
             ostd::task::enter_user_mode(entry, stack, pml4);
         }
     }

@@ -5,9 +5,9 @@ use core::mem::size_of;
 
 pub const KERNEL_CODE_SEL: u16 = 0x08;
 pub const KERNEL_DATA_SEL: u16 = 0x10;
-pub const USER_DATA_SEL: u16   = 0x18 | 3;
-pub const USER_CODE_SEL: u16   = 0x20 | 3;
-pub const TSS_SEL: u16         = 0x28;
+pub const USER_DATA_SEL: u16 = 0x18 | 3;
+pub const USER_CODE_SEL: u16 = 0x20 | 3;
+pub const TSS_SEL: u16 = 0x28;
 
 #[repr(C, packed)]
 pub struct TSS {

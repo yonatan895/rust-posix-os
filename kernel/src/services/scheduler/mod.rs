@@ -1,7 +1,7 @@
 //! Preemptive / MLFQ Scheduler - De-privileged Safe Service.
 
-use alloc::collections::VecDeque;
 use crate::ostd::sync::SpinLock;
+use alloc::collections::VecDeque;
 
 pub struct Scheduler {
     ready_queue: VecDeque<i32>,

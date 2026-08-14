@@ -1,8 +1,8 @@
 //! Fast x86_64 System Call Subsystem (MSR LSTAR).
 
-use core::arch::naked_asm;
-use super::{rdmsr, wrmsr};
 use super::gdt::KERNEL_CODE_SEL;
+use super::{rdmsr, wrmsr};
+use core::arch::naked_asm;
 
 const IA32_EFER: u32 = 0xC0000080;
 const IA32_STAR: u32 = 0xC0000081;
@@ -52,31 +52,28 @@ pub unsafe extern "C" fn syscall_entry() {
     naked_asm!(
         // Swap to kernel GS base
         "swapgs",
-        "mov gs:[8], rsp",       // Save user RSP in PerCpuData.user_rsp
-        "mov rsp, gs:[0]",       // Load kernel RSP from PerCpuData.kernel_rsp
-
+        "mov gs:[8], rsp", // Save user RSP in PerCpuData.user_rsp
+        "mov rsp, gs:[0]", // Load kernel RSP from PerCpuData.kernel_rsp
         // Push registers to build SyscallRegisters structure
-        "push gs:[8]",           // User RSP
-        "push r11",              // User RFLAGS
-        "push rcx",              // User RIP
-        "push rax",              // Syscall number
-        "push rdi",              // Arg 1
-        "push rsi",              // Arg 2
-        "push rdx",              // Arg 3
-        "push r10",              // Arg 4 (POSIX x86_64 ABI uses r10 for syscall arg 4)
-        "push r8",               // Arg 5
-        "push r9",               // Arg 6
+        "push gs:[8]", // User RSP
+        "push r11",    // User RFLAGS
+        "push rcx",    // User RIP
+        "push rax",    // Syscall number
+        "push rdi",    // Arg 1
+        "push rsi",    // Arg 2
+        "push rdx",    // Arg 3
+        "push r10",    // Arg 4 (POSIX x86_64 ABI uses r10 for syscall arg 4)
+        "push r8",     // Arg 5
+        "push r9",     // Arg 6
         "push rbx",
         "push rbp",
         "push r12",
         "push r13",
         "push r14",
         "push r15",
-
         // Pass pointer to SyscallRegisters as first argument (rdi)
         "mov rdi, rsp",
         "call rust_syscall_dispatcher",
-
         // Restore registers
         "pop r15",
         "pop r14",
@@ -90,10 +87,10 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop rdx",
         "pop rsi",
         "pop rdi",
-        "pop rax",               // Return value from syscall dispatcher
-        "pop rcx",               // Restore RIP
-        "pop r11",              // Restore RFLAGS
-        "pop rsp",               // Restore user RSP
+        "pop rax", // Return value from syscall dispatcher
+        "pop rcx", // Restore RIP
+        "pop r11", // Restore RFLAGS
+        "pop rsp", // Restore user RSP
         "swapgs",
         "sysretq"
     );

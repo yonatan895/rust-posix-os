@@ -1,10 +1,10 @@
 //! POSIX Anonymous Pipe Implementation.
 
 use super::{FileType, Inode, InodePollFlags};
+use crate::ostd::sync::SpinLock;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 pub const PIPE_BUFFER_SIZE: usize = 4096;
 
@@ -37,14 +37,18 @@ impl PipeBuffer {
             writers_open: 1,
         }));
         (
-            Arc::new(PipeReadEnd { buf: buffer.clone() }),
+            Arc::new(PipeReadEnd {
+                buf: buffer.clone(),
+            }),
             Arc::new(PipeWriteEnd { buf: buffer }),
         )
     }
 }
 
 impl Inode for PipeReadEnd {
-    fn file_type(&self) -> FileType { FileType::Fifo }
+    fn file_type(&self) -> FileType {
+        FileType::Fifo
+    }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
@@ -63,9 +67,15 @@ impl Inode for PipeReadEnd {
         Ok(to_read)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize, i32> { Err(EBADF) }
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize, i32> {
+        Err(EBADF)
+    }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {
@@ -86,9 +96,13 @@ impl Inode for PipeReadEnd {
 }
 
 impl Inode for PipeWriteEnd {
-    fn file_type(&self) -> FileType { FileType::Fifo }
+    fn file_type(&self) -> FileType {
+        FileType::Fifo
+    }
 
-    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> { Err(EBADF) }
+    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> {
+        Err(EBADF)
+    }
 
     fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
@@ -109,8 +123,12 @@ impl Inode for PipeWriteEnd {
         Ok(to_write)
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
         Ok(Stat {

@@ -1,6 +1,6 @@
 //! Interrupt Controller & Timers in OSTD.
 
-use crate::ostd::arch::{outb, io_wait};
+use crate::ostd::arch::{io_wait, outb};
 
 /// Disables the legacy 8259 PIC by masking all IRQ lines.
 ///

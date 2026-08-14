@@ -73,14 +73,14 @@ pub struct LimineHhdmRequest {
 unsafe impl Sync for LimineHhdmRequest {}
 unsafe impl Send for LimineHhdmRequest {}
 
-pub const LIMINE_MEMMAP_USABLE: u64                 = 0;
-pub const LIMINE_MEMMAP_RESERVED: u64               = 1;
-pub const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64       = 2;
-pub const LIMINE_MEMMAP_ACPI_NVS: u64               = 3;
-pub const LIMINE_MEMMAP_BAD_MEMORY: u64             = 4;
+pub const LIMINE_MEMMAP_USABLE: u64 = 0;
+pub const LIMINE_MEMMAP_RESERVED: u64 = 1;
+pub const LIMINE_MEMMAP_ACPI_RECLAIMABLE: u64 = 2;
+pub const LIMINE_MEMMAP_ACPI_NVS: u64 = 3;
+pub const LIMINE_MEMMAP_BAD_MEMORY: u64 = 4;
 pub const LIMINE_MEMMAP_BOOTLOADER_RECLAIMABLE: u64 = 5;
-pub const LIMINE_MEMMAP_KERNEL_AND_MODULES: u64     = 6;
-pub const LIMINE_MEMMAP_FRAMEBUFFER: u64            = 7;
+pub const LIMINE_MEMMAP_KERNEL_AND_MODULES: u64 = 6;
+pub const LIMINE_MEMMAP_FRAMEBUFFER: u64 = 7;
 
 #[repr(C, align(8))]
 #[derive(Debug, Clone, Copy)]
@@ -180,7 +180,12 @@ unsafe impl Send for LimineModuleRequest {}
 #[used]
 #[link_section = ".requests_start"]
 static REQ_START: LimineRequestsStartMarker = LimineRequestsStartMarker {
-    id: [0xf6b8f4b39de7d1ae, 0xfab91a6940fcb9cf, 0x785c6ed015d3e316, 0x181e920a7852b9d9],
+    id: [
+        0xf6b8f4b39de7d1ae,
+        0xfab91a6940fcb9cf,
+        0x785c6ed015d3e316,
+        0x181e920a7852b9d9,
+    ],
 };
 
 #[used]
@@ -258,6 +263,11 @@ pub fn init_framebuffer() {
         let fb = unsafe { **(*resp).framebuffers };
         // SAFETY: `fb` is provided and validated by the Limine bootloader payload.
         unsafe { crate::ostd::drivers::framebuffer::fb_init(fb) };
-        log::info!("[OSTD] Framebuffer initialized ({}x{} @ {}bpp).", fb.width, fb.height, fb.bpp);
+        log::info!(
+            "[OSTD] Framebuffer initialized ({}x{} @ {}bpp).",
+            fb.width,
+            fb.height,
+            fb.bpp
+        );
     }
 }

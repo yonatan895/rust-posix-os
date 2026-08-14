@@ -1,11 +1,11 @@
 //! POSIX Epoll Asynchronous Event Multiplexing Inode.
 
+use crate::ostd::sync::SpinLock;
+use crate::services::vfs::{FileType, Inode};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
-use crate::services::vfs::{FileType, Inode};
 
 pub struct EpollInstance {
     interests: SpinLock<BTreeMap<i32, EpollEvent>>,
@@ -45,11 +45,7 @@ impl EpollInstance {
         }
     }
 
-    pub fn wait(
-        &self,
-        events: &mut [EpollEvent],
-        maxevents: usize,
-    ) -> Result<usize, i32> {
+    pub fn wait(&self, events: &mut [EpollEvent], maxevents: usize) -> Result<usize, i32> {
         if maxevents == 0 || events.is_empty() {
             return Err(EINVAL);
         }

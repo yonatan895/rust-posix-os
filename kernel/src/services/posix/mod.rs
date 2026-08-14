@@ -4,26 +4,27 @@
 //! place that translates ostd user-memory errors into errno (ADR-0001 R2).
 //! The dispatcher itself is safe: register-frame deref and CR3 switch live in ostd.
 
-pub mod fs;
-pub mod process;
-pub mod mem;
-pub mod system;
-pub mod epoll;
 pub mod audit;
+pub mod epoll;
+pub mod fs;
+pub mod mem;
+pub mod process;
+pub mod system;
 mod user_access;
 
-pub use fs::*;
-pub use process::*;
-pub use mem::*;
-pub use system::*;
-pub use epoll::*;
 pub use audit::*;
-pub(crate) use user_access::{copy_optional_user_str, copy_user_path, copy_user_str_array, map_user_error};
+pub use epoll::*;
+pub use fs::*;
+pub use mem::*;
+pub use process::*;
+pub use system::*;
+pub(crate) use user_access::{
+    copy_optional_user_str, copy_user_path, copy_user_str_array, map_user_error,
+};
 
-use posix_abi::*;
 use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::services::process::get_current_process;
-
+use posix_abi::*;
 
 pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
     let syscall_nr = r.rax;
@@ -47,7 +48,11 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
         SYS_FORK => sys_fork(),
         SYS_EXECVE => {
-            let res = sys_execve(a1 as *const u8, a2 as *const *const u8, a3 as *const *const u8);
+            let res = sys_execve(
+                a1 as *const u8,
+                a2 as *const *const u8,
+                a3 as *const *const u8,
+            );
             if res == 0 {
                 if let Some(p) = get_current_process() {
                     let proc = p.lock();

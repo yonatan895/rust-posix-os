@@ -17,7 +17,10 @@ pub fn build_all() {
             "-Zbuild-std=core,compiler_builtins,alloc",
             "-Zbuild-std-features=compiler-builtins-mem",
         ])
-        .env("RUSTFLAGS", "-C relocation-model=static -C code-model=kernel")
+        .env(
+            "RUSTFLAGS",
+            "-C relocation-model=static -C code-model=kernel",
+        )
         .status()
         .expect("Failed to execute cargo build");
     if !status.success() {
@@ -28,7 +31,10 @@ pub fn build_all() {
 }
 
 pub fn rustc_sysroot() -> Option<PathBuf> {
-    let out = Command::new("rustc").args(["--print", "sysroot"]).output().ok()?;
+    let out = Command::new("rustc")
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()?;
     if !out.status.success() {
         return None;
     }
@@ -42,8 +48,19 @@ pub fn rustc_sysroot() -> Option<PathBuf> {
 }
 
 pub fn find_llvm_strip() -> Option<PathBuf> {
-    for name in ["llvm-strip", "rust-llvm-strip", "strip", "llvm-strip.exe", "strip.exe"] {
-        if Command::new(name).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+    for name in [
+        "llvm-strip",
+        "rust-llvm-strip",
+        "strip",
+        "llvm-strip.exe",
+        "strip.exe",
+    ] {
+        if Command::new(name)
+            .arg("--version")
+            .output()
+            .map(|o| o.status.success())
+            .unwrap_or(false)
+        {
             return Some(PathBuf::from(name));
         }
     }
@@ -61,17 +78,31 @@ pub fn find_llvm_strip() -> Option<PathBuf> {
             })
     })?;
     let candidates = [
-        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-strip.exe"),
-        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-strip"),
-        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-objcopy.exe"),
-        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-objcopy"),
+        sysroot
+            .join("lib/rustlib")
+            .join(&host)
+            .join("bin/llvm-strip.exe"),
+        sysroot
+            .join("lib/rustlib")
+            .join(&host)
+            .join("bin/llvm-strip"),
+        sysroot
+            .join("lib/rustlib")
+            .join(&host)
+            .join("bin/llvm-objcopy.exe"),
+        sysroot
+            .join("lib/rustlib")
+            .join(&host)
+            .join("bin/llvm-objcopy"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
 
 pub fn strip_binary(path: &Path) {
     let Some(tool) = find_llvm_strip() else {
-        eprintln!("[xtask] warning: llvm-strip not found (install rustup component llvm-tools-preview)");
+        eprintln!(
+            "[xtask] warning: llvm-strip not found (install rustup component llvm-tools-preview)"
+        );
         return;
     };
     let ok = Command::new(&tool)
@@ -81,6 +112,10 @@ pub fn strip_binary(path: &Path) {
         .map(|s| s.success())
         .unwrap_or(false);
     if !ok {
-        eprintln!("[xtask] warning: {} --strip-all {} failed", tool.display(), path.display());
+        eprintln!(
+            "[xtask] warning: {} --strip-all {} failed",
+            tool.display(),
+            path.display()
+        );
     }
 }

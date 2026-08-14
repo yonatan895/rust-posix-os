@@ -27,10 +27,7 @@ pub struct CpuContext {
 ///
 /// `prev_ctx` and `next_ctx` must be valid, aligned pointers to live `CpuContext` instances.
 #[unsafe(naked)]
-pub unsafe extern "C" fn switch_context(
-    _prev_ctx: *mut CpuContext,
-    _next_ctx: *const CpuContext,
-) {
+pub unsafe extern "C" fn switch_context(_prev_ctx: *mut CpuContext, _next_ctx: *const CpuContext) {
     naked_asm!(
         // Save current callee-saved registers into prev_ctx (rdi)
         "mov [rdi + 0x00], r15",
@@ -45,7 +42,6 @@ pub unsafe extern "C" fn switch_context(
         "pushfq",
         "pop rax",
         "mov [rdi + 0x40], rax", // rflags
-
         // Restore registers from next_ctx (rsi)
         "mov r15, [rsi + 0x00]",
         "mov r14, [rsi + 0x08]",
@@ -56,8 +52,7 @@ pub unsafe extern "C" fn switch_context(
         "mov rsp, [rsi + 0x38]",
         "push [rsi + 0x40]",
         "popfq",
-        "jmp [rsi + 0x30]",      // Jump to next_ctx.rip
-
+        "jmp [rsi + 0x30]", // Jump to next_ctx.rip
         "2:",
         "ret"
     );
@@ -82,14 +77,12 @@ pub unsafe extern "C" fn enter_user_mode(
 
         // Switch to process address space
         "mov cr3, rdx",
-
         // Push iretq frame: [SS, RSP, RFLAGS, CS, RIP]
-        "push 0x1b",         // User Data Segment (SS = 0x18 | 3)
-        "push rsi",          // User Stack Pointer (RSP)
-        "push 0x202",        // RFLAGS (IF = 1)
-        "push 0x23",         // User Code Segment (CS = 0x20 | 3)
-        "push rdi",          // User Instruction Pointer (RIP)
-
+        "push 0x1b",  // User Data Segment (SS = 0x18 | 3)
+        "push rsi",   // User Stack Pointer (RSP)
+        "push 0x202", // RFLAGS (IF = 1)
+        "push 0x23",  // User Code Segment (CS = 0x20 | 3)
+        "push rdi",   // User Instruction Pointer (RIP)
         // Clear general registers
         "xor rax, rax",
         "xor rbx, rbx",
@@ -106,7 +99,6 @@ pub unsafe extern "C" fn enter_user_mode(
         "xor r13, r13",
         "xor r14, r14",
         "xor r15, r15",
-
         "iretq",
     );
 }

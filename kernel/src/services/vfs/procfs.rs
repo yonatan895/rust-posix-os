@@ -1,12 +1,12 @@
 //! Pseudo-Filesystem (/proc) Dynamic Inodes.
 
+use crate::services::audit::{get_audit_events, get_snapshots};
+use crate::services::monitor::{update_system_metrics, SYSTEM_MONITOR};
+use crate::services::vfs::{FileType, Inode};
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::services::vfs::{Inode, FileType};
-use crate::services::monitor::{update_system_metrics, SYSTEM_MONITOR};
-use crate::services::audit::{get_audit_events, get_snapshots};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcKind {
@@ -47,7 +47,10 @@ impl ProcDynamicFile {
             ProcKind::Stat => {
                 alloc::format!(
                     "cpu_ticks {}\nprocesses {}\nprocs_running {}\nasync_cycles {}\n",
-                    mon.sample_tick, mon.total_processes, mon.running_processes, mon.async_executor_cycles
+                    mon.sample_tick,
+                    mon.total_processes,
+                    mon.running_processes,
+                    mon.async_executor_cycles
                 )
             }
             ProcKind::Uptime => {
@@ -57,7 +60,14 @@ impl ProcDynamicFile {
             ProcKind::Processes => {
                 let mut out = String::from("PID\tPPID\tSTATE\tFDS\tCWD\n");
                 for p in mon.processes.iter() {
-                    let line = alloc::format!("{}\t{}\t{}\t{}\t{}\n", p.pid, p.ppid, p.state, p.open_fds, p.cwd);
+                    let line = alloc::format!(
+                        "{}\t{}\t{}\t{}\t{}\n",
+                        p.pid,
+                        p.ppid,
+                        p.state,
+                        p.open_fds,
+                        p.cwd
+                    );
                     out.push_str(&line);
                 }
                 out
@@ -81,19 +91,32 @@ impl ProcDynamicFile {
                     };
                     let line = alloc::format!(
                         "{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
-                        ev.seq, ev.timestamp_ticks, ev.pid, type_name, ev.status, ev.target, ev.details
+                        ev.seq,
+                        ev.timestamp_ticks,
+                        ev.pid,
+                        type_name,
+                        ev.status,
+                        ev.target,
+                        ev.details
                     );
                     out.push_str(&line);
                 }
                 out
             }
             ProcKind::AuditSnapshots => {
-                let mut out = String::from("ID\tLABEL\tTIME\tJOURNAL_SEQ\tRAM_USED\tHEAP_USED\tPROCS\n");
+                let mut out =
+                    String::from("ID\tLABEL\tTIME\tJOURNAL_SEQ\tRAM_USED\tHEAP_USED\tPROCS\n");
                 let snapshots = get_snapshots();
                 for s in snapshots.iter() {
                     let line = alloc::format!(
                         "{}\t{}\t{}\t{}\t{} kB\t{} kB\t{}\n",
-                        s.id, s.label, s.timestamp_ticks, s.journal_seq, s.used_memory_kb, s.heap_used_kb, s.process_count
+                        s.id,
+                        s.label,
+                        s.timestamp_ticks,
+                        s.journal_seq,
+                        s.used_memory_kb,
+                        s.heap_used_kb,
+                        s.process_count
                     );
                     out.push_str(&line);
                 }

@@ -1,7 +1,7 @@
 //! Kernel Global Heap Allocator.
 
-use core::alloc::{GlobalAlloc, Layout};
 use crate::ostd::sync::SpinLock;
+use core::alloc::{GlobalAlloc, Layout};
 
 pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
@@ -22,7 +22,9 @@ pub struct LinkedListAllocator {
 
 impl LinkedListAllocator {
     pub const fn new() -> Self {
-        Self { head: ListNode::new(0) }
+        Self {
+            head: ListNode::new(0),
+        }
     }
 
     /// Initializes the allocator with a backing memory buffer.

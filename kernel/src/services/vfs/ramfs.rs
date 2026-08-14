@@ -1,12 +1,12 @@
 //! RamFs - Safe In-Memory Filesystem.
 
 use super::{FileType, Inode};
+use crate::ostd::sync::SpinLock;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 pub struct RamFsDir {
     pub entries: SpinLock<BTreeMap<String, Arc<dyn Inode>>>,
@@ -32,7 +32,9 @@ impl RamFsDir {
         }
         let new_dir = RamFsDir::new();
         subdirs.insert(name.to_string(), new_dir.clone());
-        self.entries.lock().insert(name.to_string(), new_dir.clone());
+        self.entries
+            .lock()
+            .insert(name.to_string(), new_dir.clone());
         new_dir
     }
 }
@@ -64,7 +66,10 @@ impl Inode for RamFsDir {
                 FileType::Fifo => DT_FIFO,
                 _ => DT_REG,
             };
-            let mut dirent = Dirent64 { d_type, ..Default::default() };
+            let mut dirent = Dirent64 {
+                d_type,
+                ..Default::default()
+            };
             let bytes = name.as_bytes();
             let len = bytes.len().min(dirent.d_name.len() - 1);
             dirent.d_name[..len].copy_from_slice(&bytes[..len]);
@@ -97,7 +102,9 @@ impl Inode for RamFsDir {
             return Err(EEXIST);
         }
         let new_dir = RamFsDir::new();
-        self.subdirs.lock().insert(name.to_string(), new_dir.clone());
+        self.subdirs
+            .lock()
+            .insert(name.to_string(), new_dir.clone());
         entries.insert(name.to_string(), new_dir.clone());
         Ok(new_dir)
     }

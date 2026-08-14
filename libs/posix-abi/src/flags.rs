@@ -20,10 +20,10 @@ pub const EPOLLET: u32 = 1 << 31; // Edge Triggered
 // ============================================================================
 pub const O_RDONLY: i32 = 0x0000;
 pub const O_WRONLY: i32 = 0x0001;
-pub const O_RDWR: i32   = 0x0002;
-pub const O_CREAT: i32  = 0x0040;
-pub const O_EXCL: i32   = 0x0080;
-pub const O_TRUNC: i32  = 0x0200;
+pub const O_RDWR: i32 = 0x0002;
+pub const O_CREAT: i32 = 0x0040;
+pub const O_EXCL: i32 = 0x0080;
+pub const O_TRUNC: i32 = 0x0200;
 pub const O_APPEND: i32 = 0x0400;
 pub const O_NONBLOCK: i32 = 0x0800;
 pub const O_DIRECTORY: i32 = 0x10000;
@@ -39,51 +39,51 @@ pub const SEEK_END: i32 = 2;
 // ============================================================================
 // Memory Management Flags (mmap / mprotect)
 // ============================================================================
-pub const PROT_NONE: i32  = 0x00;
-pub const PROT_READ: i32  = 0x01;
+pub const PROT_NONE: i32 = 0x00;
+pub const PROT_READ: i32 = 0x01;
 pub const PROT_WRITE: i32 = 0x02;
-pub const PROT_EXEC: i32  = 0x04;
+pub const PROT_EXEC: i32 = 0x04;
 
-pub const MAP_SHARED: i32    = 0x01;
-pub const MAP_PRIVATE: i32   = 0x02;
-pub const MAP_FIXED: i32     = 0x10;
+pub const MAP_SHARED: i32 = 0x01;
+pub const MAP_PRIVATE: i32 = 0x02;
+pub const MAP_FIXED: i32 = 0x10;
 pub const MAP_ANONYMOUS: i32 = 0x20;
 
 // ============================================================================
 // POSIX Signals
 // ============================================================================
-pub const SIGHUP: i32    = 1;
-pub const SIGINT: i32    = 2;
-pub const SIGQUIT: i32   = 3;
-pub const SIGILL: i32    = 4;
-pub const SIGTRAP: i32   = 5;
-pub const SIGABRT: i32   = 6;
-pub const SIGBUS: i32    = 7;
-pub const SIGFPE: i32    = 8;
-pub const SIGKILL: i32   = 9;
-pub const SIGUSR1: i32   = 10;
-pub const SIGSEGV: i32   = 11;
-pub const SIGUSR2: i32   = 12;
-pub const SIGPIPE: i32   = 13;
-pub const SIGALRM: i32   = 14;
-pub const SIGTERM: i32   = 15;
-pub const SIGCHLD: i32   = 17;
-pub const SIGCONT: i32   = 18;
-pub const SIGSTOP: i32   = 19;
-pub const SIGTSTP: i32   = 20;
-pub const SIGWINCH: i32  = 28;
+pub const SIGHUP: i32 = 1;
+pub const SIGINT: i32 = 2;
+pub const SIGQUIT: i32 = 3;
+pub const SIGILL: i32 = 4;
+pub const SIGTRAP: i32 = 5;
+pub const SIGABRT: i32 = 6;
+pub const SIGBUS: i32 = 7;
+pub const SIGFPE: i32 = 8;
+pub const SIGKILL: i32 = 9;
+pub const SIGUSR1: i32 = 10;
+pub const SIGSEGV: i32 = 11;
+pub const SIGUSR2: i32 = 12;
+pub const SIGPIPE: i32 = 13;
+pub const SIGALRM: i32 = 14;
+pub const SIGTERM: i32 = 15;
+pub const SIGCHLD: i32 = 17;
+pub const SIGCONT: i32 = 18;
+pub const SIGSTOP: i32 = 19;
+pub const SIGTSTP: i32 = 20;
+pub const SIGWINCH: i32 = 28;
 
 // ============================================================================
 // POSIX File Mode Types (S_IF*)
 // ============================================================================
-pub const S_IFMT: u32   = 0o170000;
+pub const S_IFMT: u32 = 0o170000;
 pub const S_IFSOCK: u32 = 0o140000;
-pub const S_IFLNK: u32  = 0o120000;
-pub const S_IFREG: u32  = 0o100000;
-pub const S_IFBLK: u32  = 0o060000;
-pub const S_IFDIR: u32  = 0o040000;
-pub const S_IFCHR: u32  = 0o020000;
-pub const S_IFIFO: u32  = 0o010000;
+pub const S_IFLNK: u32 = 0o120000;
+pub const S_IFREG: u32 = 0o100000;
+pub const S_IFBLK: u32 = 0o060000;
+pub const S_IFDIR: u32 = 0o040000;
+pub const S_IFCHR: u32 = 0o020000;
+pub const S_IFIFO: u32 = 0o010000;
 
 // ============================================================================
 // Directory Entry Types (DT_*)

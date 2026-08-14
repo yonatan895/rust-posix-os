@@ -1,8 +1,8 @@
 //! POSIX Virtual Memory Management System Calls.
 
-use posix_abi::*;
 use crate::ostd::mm::{alloc_frame, zero_phys_frame, PAGE_SIZE};
 use crate::services::process::get_current_process;
+use posix_abi::*;
 
 pub fn sys_mmap(addr: usize, length: usize, prot: i32, _flags: i32) -> isize {
     if length == 0 {

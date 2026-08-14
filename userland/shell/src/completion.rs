@@ -1,21 +1,31 @@
 //! Fuzzy Command & Path Autocompletion with Interactive Arrow-Key Menu.
 
+use crate::line_draw::LineBuffer;
 use libc::*;
 use posix_abi::*;
-use crate::line_draw::LineBuffer;
 
 pub fn fuzzy_score(pattern: &str, target: &str) -> Option<i32> {
     let p_bytes = pattern.as_bytes();
     let t_bytes = target.as_bytes();
-    if p_bytes.is_empty() { return Some(0); }
-    if p_bytes.len() > t_bytes.len() { return None; }
+    if p_bytes.is_empty() {
+        return Some(0);
+    }
+    if p_bytes.len() > t_bytes.len() {
+        return None;
+    }
     let mut p_idx = 0;
     let mut score = 0;
     let mut prev_matched_idx = -1i32;
     for (t_idx, &t_byte) in t_bytes.iter().enumerate() {
-        if p_idx < p_bytes.len() && p_bytes[p_idx].to_ascii_lowercase() == t_byte.to_ascii_lowercase() {
+        if p_idx < p_bytes.len()
+            && p_bytes[p_idx].to_ascii_lowercase() == t_byte.to_ascii_lowercase()
+        {
             score += 10;
-            if t_idx == 0 || t_bytes[t_idx - 1] == b'/' || t_bytes[t_idx - 1] == b'-' || t_bytes[t_idx - 1] == b'_' {
+            if t_idx == 0
+                || t_bytes[t_idx - 1] == b'/'
+                || t_bytes[t_idx - 1] == b'-'
+                || t_bytes[t_idx - 1] == b'_'
+            {
                 score += 15;
             }
             if prev_matched_idx >= 0 && (t_idx as i32 == prev_matched_idx + 1) {
@@ -46,7 +56,12 @@ pub struct MatchCandidate {
 
 impl Default for MatchCandidate {
     fn default() -> Self {
-        Self { name: [0; 64], len: 0, score: 0, is_dir: false }
+        Self {
+            name: [0; 64],
+            len: 0,
+            score: 0,
+            is_dir: false,
+        }
     }
 }
 
@@ -55,7 +70,9 @@ pub unsafe fn render_menu_row(matches: &[MatchCandidate], count: usize, selected
     let mut out = LineBuffer::new(&mut scratch);
     out.push_str("\n\r\x1b[K");
     for (idx, m) in matches[..count].iter().enumerate() {
-        if idx > 0 { out.push_str("  "); }
+        if idx > 0 {
+            out.push_str("  ");
+        }
         if idx == selected {
             out.push_str("\x1b[7;32m[");
         } else {
@@ -64,7 +81,9 @@ pub unsafe fn render_menu_row(matches: &[MatchCandidate], count: usize, selected
         for b in &m.name[..m.len] {
             out.push_byte(*b);
         }
-        if m.is_dir { out.push_byte(b'/'); }
+        if m.is_dir {
+            out.push_byte(b'/');
+        }
         if idx == selected {
             out.push_str("]\x1b[0m");
         } else {
@@ -90,7 +109,9 @@ pub unsafe fn show_completion_menu(
 
     loop {
         let b = libc::getchar();
-        if b < 0 { continue; }
+        if b < 0 {
+            continue;
+        }
         let ch = b as u8;
         if ch == b'\t' || ch == 0x06 {
             sel = (sel + 1) % count;
@@ -161,17 +182,25 @@ pub unsafe fn handle_tab_completion(
     clear_menu_fn: impl Fn(*const u8, &[u8], usize),
 ) {
     let mut start = 0;
-    while start < *len && (buf[start] == b' ' || buf[start] == b'\t') { start += 1; }
+    while start < *len && (buf[start] == b' ' || buf[start] == b'\t') {
+        start += 1;
+    }
     let mut is_command_name = true;
     for i in start..*len {
-        if buf[i] == b' ' || buf[i] == b'\t' { is_command_name = false; break; }
+        if buf[i] == b' ' || buf[i] == b'\t' {
+            is_command_name = false;
+            break;
+        }
     }
     let mut matches: [MatchCandidate; 24] = [MatchCandidate::default(); 24];
     let mut match_count = 0;
     let replace_start: usize;
     if is_command_name {
         replace_start = start;
-        let prefix = match core::str::from_utf8(&buf[start..*len]) { Ok(s) => s, Err(_) => return };
+        let prefix = match core::str::from_utf8(&buf[start..*len]) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         for &cmd in known_commands.iter() {
             if let Some(sc) = fuzzy_score(prefix, cmd) {
                 if match_count < 24 {
@@ -190,25 +219,36 @@ pub unsafe fn handle_tab_completion(
             last_space -= 1;
         }
         replace_start = last_space;
-        let arg_prefix = match core::str::from_utf8(&buf[last_space..*len]) { Ok(s) => s, Err(_) => return };
+        let arg_prefix = match core::str::from_utf8(&buf[last_space..*len]) {
+            Ok(s) => s,
+            Err(_) => return,
+        };
         let fd = open(b".\0".as_ptr(), O_RDONLY | O_DIRECTORY, 0);
         if fd >= 0 {
             let mut dir_buf = [0u8; 4096];
-            let n = syscall::syscall3(SYS_GETDENTS64, fd as usize, dir_buf.as_mut_ptr() as usize, dir_buf.len()) as isize;
+            let n = syscall::syscall3(
+                SYS_GETDENTS64,
+                fd as usize,
+                dir_buf.as_mut_ptr() as usize,
+                dir_buf.len(),
+            ) as isize;
             close(fd);
             if n > 0 {
                 let mut offset = 0;
                 while offset < n as usize && match_count < 24 {
                     let dirent = &*(dir_buf.as_ptr().add(offset) as *const Dirent64);
                     let mut name_len = 0;
-                    while name_len < dirent.d_name.len() && dirent.d_name[name_len] != 0 { name_len += 1; }
+                    while name_len < dirent.d_name.len() && dirent.d_name[name_len] != 0 {
+                        name_len += 1;
+                    }
                     if name_len > 0 {
                         let name_bytes = &dirent.d_name[..name_len];
                         if let Ok(name_str) = core::str::from_utf8(name_bytes) {
                             if !name_str.starts_with('.') || arg_prefix.starts_with('.') {
                                 if let Some(sc) = fuzzy_score(arg_prefix, name_str) {
                                     let item_len = name_len.min(63);
-                                    matches[match_count].name[..item_len].copy_from_slice(&name_bytes[..item_len]);
+                                    matches[match_count].name[..item_len]
+                                        .copy_from_slice(&name_bytes[..item_len]);
                                     matches[match_count].len = item_len;
                                     matches[match_count].score = sc;
                                     matches[match_count].is_dir = dirent.d_type == DT_DIR;
@@ -223,7 +263,9 @@ pub unsafe fn handle_tab_completion(
         }
     }
 
-    if match_count == 0 { return; }
+    if match_count == 0 {
+        return;
+    }
 
     for i in 0..match_count {
         for j in (i + 1)..match_count {
@@ -251,6 +293,15 @@ pub unsafe fn handle_tab_completion(
         }
         repaint_fn(cwd, buf, *len);
     } else {
-        show_completion_menu(cwd, buf, len, replace_start, &mut matches, match_count, &repaint_fn, clear_menu_fn);
+        show_completion_menu(
+            cwd,
+            buf,
+            len,
+            replace_start,
+            &mut matches,
+            match_count,
+            &repaint_fn,
+            clear_menu_fn,
+        );
     }
 }

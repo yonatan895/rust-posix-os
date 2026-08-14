@@ -1,8 +1,8 @@
 //! Physical Memory Manager (PMM) - Fast Bitmap Frame Allocator.
 
-use core::sync::atomic::{AtomicUsize, Ordering};
 use crate::ostd::limine::{LimineMemmapResponse, LIMINE_MEMMAP_USABLE};
 use crate::ostd::sync::SpinLock;
+use core::sync::atomic::{AtomicUsize, Ordering};
 
 pub const PAGE_SIZE: usize = 4096;
 
@@ -25,10 +25,7 @@ static TOTAL_MEMORY_BYTES: AtomicUsize = AtomicUsize::new(0);
 ///
 /// `memmap_response` must be a valid pointer provided by the bootloader, and `hhdm_offset`
 /// must be the valid higher-half direct mapping virtual offset.
-pub unsafe fn pmm_init(
-    memmap_response: *mut LimineMemmapResponse,
-    hhdm_offset: usize,
-) {
+pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: usize) {
     if memmap_response.is_null() {
         return;
     }
@@ -96,7 +93,11 @@ pub unsafe fn pmm_init(
         manager.free_frames = manager.free_frames.saturating_sub(1);
     }
 
-    log::info!("[PMM] Bitmap initialized: {} total frames, {} free frames.", total_frames, manager.free_frames);
+    log::info!(
+        "[PMM] Bitmap initialized: {} total frames, {} free frames.",
+        total_frames,
+        manager.free_frames
+    );
     *PMM.lock() = Some(manager);
 }
 
@@ -125,9 +126,7 @@ impl PhysicalMemoryManager {
         }
         let byte_idx = frame_idx / 8;
         let bit_idx = frame_idx % 8;
-        unsafe {
-            (*self.bitmap.add(byte_idx) & (1 << bit_idx)) != 0
-        }
+        unsafe { (*self.bitmap.add(byte_idx) & (1 << bit_idx)) != 0 }
     }
 
     pub fn alloc_frame(&mut self) -> Option<usize> {
@@ -197,7 +196,9 @@ pub fn alloc_frame() -> Option<usize> {
 }
 
 pub fn alloc_contiguous_frames(count: usize) -> Option<usize> {
-    PMM.lock().as_mut().and_then(|pmm| pmm.alloc_contiguous_frames(count))
+    PMM.lock()
+        .as_mut()
+        .and_then(|pmm| pmm.alloc_contiguous_frames(count))
 }
 
 pub fn free_frame(phys_addr: usize) {

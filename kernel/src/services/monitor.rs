@@ -1,11 +1,11 @@
 //! Background System Resource & Process Monitoring Service.
 
+use crate::ostd::mm::{get_heap_stats, get_pmm_stats, PAGE_SIZE};
+use crate::ostd::sync::SpinLock;
+use crate::ostd::task::yield_now;
+use crate::services::process::{ProcessState, PROCESS_TABLE};
 use alloc::string::String;
 use alloc::vec::Vec;
-use crate::ostd::sync::SpinLock;
-use crate::ostd::mm::{get_pmm_stats, get_heap_stats, PAGE_SIZE};
-use crate::services::process::{PROCESS_TABLE, ProcessState};
-use crate::ostd::task::yield_now;
 
 #[derive(Debug, Clone)]
 pub struct ProcessMetric {
@@ -47,7 +47,8 @@ impl SystemMetricsSnapshot {
     }
 }
 
-pub static SYSTEM_MONITOR: SpinLock<SystemMetricsSnapshot> = SpinLock::new(SystemMetricsSnapshot::empty());
+pub static SYSTEM_MONITOR: SpinLock<SystemMetricsSnapshot> =
+    SpinLock::new(SystemMetricsSnapshot::empty());
 
 pub fn update_system_metrics() {
     let (total_frames, free_frames) = get_pmm_stats();

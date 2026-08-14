@@ -1,7 +1,7 @@
 //! POSIX Memory Management Declarations (sys/mman.h).
 
-use posix_abi::*;
 use crate::syscall::*;
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn mmap(

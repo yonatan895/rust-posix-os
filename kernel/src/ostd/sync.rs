@@ -3,10 +3,10 @@
 //! SpinLock masks CPU interrupts on acquire and restores the previous RFLAGS
 //! state on drop, preventing deadlocks when acquiring locks held across ISR contexts.
 
+use crate::ostd::arch::{cli, read_rflags, restore_rflags};
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
-use crate::ostd::arch::{cli, read_rflags, restore_rflags};
 
 pub struct SpinLock<T> {
     lock: AtomicBool,

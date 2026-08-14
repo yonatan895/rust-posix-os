@@ -1,9 +1,9 @@
 //! Interrupt Descriptor Table (IDT) and Exception Handling.
 
-use core::arch::asm;
-use core::mem::size_of;
 use super::gdt::KERNEL_CODE_SEL;
 use super::read_cr2;
+use core::arch::asm;
+use core::mem::size_of;
 
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
@@ -93,7 +93,10 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
 ///
 /// `frame` must point to a valid hardware exception stack frame.
 #[no_mangle]
-pub unsafe extern "C" fn rust_general_protection_fault(frame: *const InterruptFrame, error_code: u64) {
+pub unsafe extern "C" fn rust_general_protection_fault(
+    frame: *const InterruptFrame,
+    error_code: u64,
+) {
     log::error!(
         "GENERAL PROTECTION FAULT (#GP), Error Code: 0x{:x}, RIP: 0x{:016x}",
         error_code,

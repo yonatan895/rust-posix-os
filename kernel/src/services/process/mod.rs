@@ -2,15 +2,15 @@
 
 pub mod elf;
 
+use self::elf::load_elf;
+use crate::ostd::mm::VmSpace;
+use crate::ostd::sync::SpinLock;
+use crate::services::vfs::FileHandle;
 use alloc::collections::BTreeMap;
 use alloc::string::String;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicI32, Ordering};
-use crate::ostd::mm::VmSpace;
-use crate::ostd::sync::SpinLock;
-use crate::services::vfs::FileHandle;
-use self::elf::load_elf;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcessState {
@@ -87,7 +87,8 @@ impl Process {
         inode.read(0, &mut elf_data)?;
 
         let mut new_vm = VmSpace::new().ok_or(posix_abi::ENOMEM)?;
-        let loaded = load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
+        let loaded =
+            load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
 
         self.vm_space = Some(new_vm);
         self.entry_point = loaded.entry_point;
@@ -99,7 +100,8 @@ impl Process {
 }
 
 static NEXT_PID: AtomicI32 = AtomicI32::new(1);
-pub static PROCESS_TABLE: SpinLock<BTreeMap<i32, Arc<SpinLock<Process>>>> = SpinLock::new(BTreeMap::new());
+pub static PROCESS_TABLE: SpinLock<BTreeMap<i32, Arc<SpinLock<Process>>>> =
+    SpinLock::new(BTreeMap::new());
 pub static CURRENT_PID: AtomicI32 = AtomicI32::new(1);
 
 pub fn alloc_pid() -> i32 {

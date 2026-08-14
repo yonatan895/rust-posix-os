@@ -1,10 +1,10 @@
 //! POSIX Process Lifecycle & Signal System Calls.
 
-use posix_abi::*;
-use crate::services::process::*;
-use crate::services::ipc::SIGNALS;
-use crate::ostd::mm::{UserPtr, USER_STR_MAX};
 use super::{copy_user_path, map_user_error};
+use crate::ostd::mm::{UserPtr, USER_STR_MAX};
+use crate::services::ipc::SIGNALS;
+use crate::services::process::*;
+use posix_abi::*;
 
 /// POSIX fork system call.
 ///

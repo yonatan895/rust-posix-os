@@ -1,9 +1,9 @@
 //! POSIX Security Audit Journal & Snapshot System Calls.
 
-use crate::services::process::get_current_process;
-use crate::services::audit::{log_audit_event, create_audit_snapshot};
-use crate::ostd::mm::USER_STR_MAX;
 use super::{copy_optional_user_str, copy_user_path};
+use crate::ostd::mm::USER_STR_MAX;
+use crate::services::audit::{create_audit_snapshot, log_audit_event};
+use crate::services::process::get_current_process;
 
 pub fn sys_audit_log(event_type: u32, target_ptr: *const u8, details_ptr: *const u8) -> isize {
     let pid = match get_current_process() {
