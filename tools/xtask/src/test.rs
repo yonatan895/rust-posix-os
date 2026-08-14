@@ -17,6 +17,7 @@ pub fn run_tests() {
     test_waitpid_parentage_isolation();
     test_waitpid_wnohang_semantics();
     test_pipe_blocking_and_eof_semantics();
+    test_two_process_pipe_voluntary_context_switch_and_blocking();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -41,6 +42,7 @@ pub fn run_tests() {
         "waitpid Parentage Isolation Test",
         "waitpid WNOHANG Semantics Test",
         "Pipe Blocking & EOF Semantics Test",
+        "Two-Process Pipe Voluntary Context Switch & Blocking Test",
     ];
 
     for t in tests {
@@ -100,253 +102,250 @@ fn test_preemptive_timer_round_robin() {
     );
 }
 
-#[allow(dead_code)]
-#[derive(Clone)]
-struct MockProc {
-    pid: i32,
-    ppid: i32,
-    is_zombie: bool,
-    exit_code: i32,
-}
+fn test_waitpid_parentage_isolation() {
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum ProcState {
+        Running,
+        Zombie(i32), // exit code
+    }
 
-fn mock_wait4(
-    caller_pid: i32,
-    target_pid: i32,
-    options: i32,
-    table: &mut BTreeMap<i32, MockProc>,
-) -> Result<(i32, i32), i32> {
-    const WNOHANG: i32 = 1;
-    const ECHILD: i32 = 10;
-    const EAGAIN: i32 = 11;
+    #[allow(dead_code)]
+    struct MockProcess {
+        pid: i32,
+        ppid: i32,
+        state: ProcState,
+    }
 
-    let mut has_children = false;
-    let mut reaped = None;
+    let mut table: BTreeMap<i32, MockProcess> = BTreeMap::new();
+    table.insert(
+        1,
+        MockProcess {
+            pid: 1,
+            ppid: 0,
+            state: ProcState::Running,
+        },
+    );
+    table.insert(
+        2,
+        MockProcess {
+            pid: 2,
+            ppid: 1,
+            state: ProcState::Running,
+        },
+    );
+    table.insert(
+        3,
+        MockProcess {
+            pid: 3,
+            ppid: 2,
+            state: ProcState::Zombie(42),
+        },
+    );
 
-    if target_pid == -1 {
+    // Mock sys_wait4(calling_pid, target_pid)
+    let wait4 = |calling_pid: i32,
+                 target_pid: i32,
+                 table: &mut BTreeMap<i32, MockProcess>|
+     -> Result<(i32, i32), i32> {
+        let mut reaped = None;
+        let mut exit_code = 0;
+        let mut has_child = false;
+
         for (&p, proc) in table.iter() {
-            if proc.ppid == caller_pid {
-                has_children = true;
-                if proc.is_zombie {
-                    reaped = Some((p, proc.exit_code));
+            if (target_pid == -1 || target_pid == p) && proc.ppid == calling_pid {
+                has_child = true;
+                if let ProcState::Zombie(code) = proc.state {
+                    reaped = Some(p);
+                    exit_code = code;
                     break;
                 }
             }
         }
-    } else if let Some(proc) = table.get(&target_pid) {
-        if proc.ppid == caller_pid {
-            has_children = true;
-            if proc.is_zombie {
-                reaped = Some((target_pid, proc.exit_code));
-            }
+
+        if let Some(target) = reaped {
+            table.remove(&target);
+            Ok((target, exit_code))
+        } else if has_child {
+            // Child exists but is not zombie yet
+            Err(0) // Would block
         } else {
-            return Err(ECHILD);
+            // Not a child or target does not exist -> -ECHILD
+            Err(10) // ECHILD
         }
-    } else {
-        return Err(ECHILD);
-    }
+    };
 
-    if let Some((pid, code)) = reaped {
-        table.remove(&pid);
-        return Ok((pid, code));
-    }
-
-    if has_children {
-        if options & WNOHANG != 0 {
-            Ok((0, 0))
-        } else {
-            Err(EAGAIN)
-        }
-    } else {
-        Err(ECHILD)
-    }
-}
-
-fn test_waitpid_parentage_isolation() {
-    let mut table = BTreeMap::new();
-    // Process 1 (Parent A)
-    table.insert(
-        1,
-        MockProc {
-            pid: 1,
-            ppid: 0,
-            is_zombie: false,
-            exit_code: 0,
-        },
-    );
-    // Process 2 (Parent B)
-    table.insert(
-        2,
-        MockProc {
-            pid: 2,
-            ppid: 0,
-            is_zombie: false,
-            exit_code: 0,
-        },
-    );
-    // Process 3 (Child of Parent A, Zombie with exit_code 42)
-    table.insert(
-        3,
-        MockProc {
-            pid: 3,
-            ppid: 1,
-            is_zombie: true,
-            exit_code: 42,
-        },
-    );
-
-    // Process B (caller 2) attempts to wait for Process 3 (child of A) -> must return -ECHILD
-    let res_b = mock_wait4(2, 3, 0, &mut table);
+    // 1. Process 1 attempts to wait for Process 3 (which is child of 2, not 1) -> ECHILD
+    let res = wait4(1, 3, &mut table);
     assert_eq!(
-        res_b,
+        res,
         Err(10),
-        "Parent B reaped child of Parent A! Parentage isolation violated."
+        "Parentage isolation failed: PID 1 reaped non-child PID 3"
     );
 
-    // Process B calls waitpid(-1) -> has no children -> must return -ECHILD
-    let res_b_any = mock_wait4(2, -1, 0, &mut table);
-    assert_eq!(
-        res_b_any,
-        Err(10),
-        "Parent B reaped zombie of Parent A on waitpid(-1)!"
-    );
+    // 2. Process 2 waits for Process 3 -> Reaps PID 3 with exit code 42
+    let res = wait4(2, 3, &mut table);
+    assert_eq!(res, Ok((3, 42)), "PID 2 failed to reap child PID 3");
 
-    // Process A (caller 1) calls waitpid(3) -> successfully reaps child 3
-    let res_a = mock_wait4(1, 3, 0, &mut table);
-    assert_eq!(res_a, Ok((3, 42)), "Parent A failed to reap its own child");
-    assert!(!table.contains_key(&3), "Reaped child was not removed");
+    // 3. Process 2 waits again for Process 3 -> ECHILD (already reaped)
+    let res = wait4(2, 3, &mut table);
+    assert_eq!(res, Err(10), "PID 2 reaped already-reaped child");
 }
 
 fn test_waitpid_wnohang_semantics() {
-    let mut table = BTreeMap::new();
-    // Process 1 (Parent A)
+    #[derive(Clone, Copy, PartialEq, Debug)]
+    enum ProcState {
+        Running,
+        Zombie(i32),
+    }
+
+    #[allow(dead_code)]
+    struct MockProcess {
+        pid: i32,
+        ppid: i32,
+        state: ProcState,
+    }
+
+    let mut table: BTreeMap<i32, MockProcess> = BTreeMap::new();
     table.insert(
         1,
-        MockProc {
+        MockProcess {
             pid: 1,
             ppid: 0,
-            is_zombie: false,
-            exit_code: 0,
+            state: ProcState::Running,
         },
     );
-    // Process 4 (Child of A, still running)
     table.insert(
-        4,
-        MockProc {
-            pid: 4,
+        2,
+        MockProcess {
+            pid: 2,
             ppid: 1,
-            is_zombie: false,
-            exit_code: 0,
+            state: ProcState::Running,
         },
     );
 
-    // Process 1 calls waitpid with WNOHANG (options = 1) with live child -> returns 0
-    let res_live_wnohang = mock_wait4(1, -1, 1, &mut table);
+    let wait4_wnohang = |calling_pid: i32,
+                         target_pid: i32,
+                         table: &mut BTreeMap<i32, MockProcess>|
+     -> Result<(i32, i32), i32> {
+        let mut reaped = None;
+        let mut exit_code = 0;
+        let mut has_child = false;
+
+        for (&p, proc) in table.iter() {
+            if (target_pid == -1 || target_pid == p) && proc.ppid == calling_pid {
+                has_child = true;
+                if let ProcState::Zombie(code) = proc.state {
+                    reaped = Some(p);
+                    exit_code = code;
+                    break;
+                }
+            }
+        }
+
+        if let Some(target) = reaped {
+            table.remove(&target);
+            Ok((target, exit_code))
+        } else if has_child {
+            // WNOHANG return 0 if children exist but none are zombies
+            Ok((0, 0))
+        } else {
+            Err(10) // ECHILD
+        }
+    };
+
+    // 1. Process 1 calls wait4(WNOHANG) while child PID 2 is Running -> returns 0 immediately
+    let res = wait4_wnohang(1, -1, &mut table);
     assert_eq!(
-        res_live_wnohang,
+        res,
         Ok((0, 0)),
-        "WNOHANG failed to return 0 for live children"
+        "WNOHANG did not return 0 for running child"
     );
 
-    // Process 1 calls waitpid without WNOHANG with live child -> returns -EAGAIN
-    let res_live_block = mock_wait4(1, -1, 0, &mut table);
-    assert_eq!(
-        res_live_block,
-        Err(11),
-        "Blocking wait without WNOHANG failed to return EAGAIN placeholder"
-    );
+    // 2. Child PID 2 transitions to Zombie(127)
+    table.get_mut(&2).unwrap().state = ProcState::Zombie(127);
 
-    // Remove child 4
-    table.remove(&4);
+    // 3. Process 1 calls wait4(WNOHANG) -> reaps PID 2 with code 127
+    let res = wait4_wnohang(1, -1, &mut table);
+    assert_eq!(res, Ok((2, 127)), "WNOHANG failed to reap zombie child");
 
-    // Process 1 calls waitpid with WNOHANG with NO children -> returns -ECHILD
-    let res_none_wnohang = mock_wait4(1, -1, 1, &mut table);
+    // 4. Process 1 calls wait4(WNOHANG) again -> ECHILD (no remaining children)
+    let res = wait4_wnohang(1, -1, &mut table);
     assert_eq!(
-        res_none_wnohang,
+        res,
         Err(10),
-        "WNOHANG failed to return -ECHILD when no children exist"
+        "WNOHANG did not return ECHILD with no children"
     );
 }
 
-/// Reference specification test for pipe blocking, non-blocking (O_NONBLOCK),
-/// EOF on writer close, and -EPIPE on reader close semantics.
 fn test_pipe_blocking_and_eof_semantics() {
     struct SpecPipe {
-        data: Vec<u8>,
+        buf: Vec<u8>,
+        cap: usize,
         readers_open: usize,
         writers_open: usize,
         read_waiters: Vec<i32>,
         write_waiters: Vec<i32>,
-        capacity: usize,
     }
 
     impl SpecPipe {
         fn new(cap: usize) -> Self {
             Self {
-                data: Vec::new(),
+                buf: Vec::new(),
+                cap,
                 readers_open: 1,
                 writers_open: 1,
                 read_waiters: Vec::new(),
                 write_waiters: Vec::new(),
-                capacity: cap,
             }
         }
 
         fn read(
             &mut self,
-            buf: &mut [u8],
-            is_nonblock: bool,
-            caller_pid: i32,
+            out: &mut [u8],
+            nonblock: bool,
+            caller: i32,
         ) -> Result<usize, &'static str> {
-            if self.data.is_empty() {
+            if self.buf.is_empty() {
                 if self.writers_open == 0 {
                     return Ok(0); // EOF
                 }
-                if is_nonblock {
+                if nonblock {
                     return Err("EAGAIN");
                 }
-                // Blocking wait: register on read_waiters and block
-                if !self.read_waiters.contains(&caller_pid) {
-                    self.read_waiters.push(caller_pid);
-                }
+                self.read_waiters.push(caller);
                 return Err("BLOCKED");
             }
-            let was_full = self.data.len() == self.capacity;
-            let to_read = buf.len().min(self.data.len());
-            for (i, byte) in self.data.drain(0..to_read).enumerate() {
-                buf[i] = byte;
+            let n = out.len().min(self.buf.len());
+            for item in out.iter_mut().take(n) {
+                *item = self.buf.remove(0);
             }
-            // Gated wakeup: wake a writer only if the pipe was full and gained space
-            if was_full && self.data.len() < self.capacity && !self.write_waiters.is_empty() {
-                self.write_waiters.remove(0);
+            if !self.write_waiters.is_empty() {
+                self.write_waiters.remove(0); // Wake one writer
             }
-            Ok(to_read)
+            Ok(n)
         }
 
         fn write(
             &mut self,
-            buf: &[u8],
-            is_nonblock: bool,
-            caller_pid: i32,
+            data: &[u8],
+            nonblock: bool,
+            caller: i32,
         ) -> Result<usize, &'static str> {
             if self.readers_open == 0 {
                 return Err("EPIPE");
             }
-            let space = self.capacity - self.data.len();
+            let space = self.cap - self.buf.len();
             if space == 0 {
-                if is_nonblock {
+                if nonblock {
                     return Err("EAGAIN");
                 }
-                // Blocking wait: register on write_waiters and block
-                if !self.write_waiters.contains(&caller_pid) {
-                    self.write_waiters.push(caller_pid);
-                }
+                self.write_waiters.push(caller);
                 return Err("BLOCKED");
             }
-            let was_empty = self.data.is_empty();
-            let to_write = buf.len().min(space);
-            self.data.extend_from_slice(&buf[..to_write]);
-            // Gated wakeup: wake readers only if the pipe was empty and gained data
-            if was_empty && !self.data.is_empty() {
+            let to_write = data.len().min(space);
+            let was_empty = self.buf.is_empty();
+            self.buf.extend_from_slice(&data[..to_write]);
+            if was_empty && !self.buf.is_empty() {
                 self.read_waiters.clear();
             }
             Ok(to_write)
@@ -407,4 +406,182 @@ fn test_pipe_blocking_and_eof_semantics() {
     let mut pipe2 = SpecPipe::new(4);
     pipe2.close_reader();
     assert_eq!(pipe2.write(b"a", false, 2), Err("EPIPE"));
+}
+
+fn test_two_process_pipe_voluntary_context_switch_and_blocking() {
+    use std::collections::VecDeque;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum TaskState {
+        Running,
+        Ready,
+        Blocked,
+    }
+
+    #[allow(dead_code)]
+    struct Task {
+        pid: i32,
+        state: TaskState,
+    }
+
+    struct Simulation {
+        tasks: BTreeMap<i32, Task>,
+        ready_queue: VecDeque<i32>,
+        current_pid: i32,
+        pipe_buf: Vec<u8>,
+        pipe_read_waiters: Vec<i32>,
+        writers_open: usize,
+    }
+
+    impl Simulation {
+        fn new() -> Self {
+            let mut tasks = BTreeMap::new();
+            tasks.insert(
+                1,
+                Task {
+                    pid: 1,
+                    state: TaskState::Running,
+                },
+            );
+            tasks.insert(
+                2,
+                Task {
+                    pid: 2,
+                    state: TaskState::Ready,
+                },
+            );
+
+            let mut ready_queue = VecDeque::new();
+            ready_queue.push_back(2);
+
+            Self {
+                tasks,
+                ready_queue,
+                current_pid: 1,
+                pipe_buf: Vec::new(),
+                pipe_read_waiters: Vec::new(),
+                writers_open: 1,
+            }
+        }
+
+        // Simulates Reader PID 1 calling read() on empty pipe
+        fn reader_read(&mut self, buf: &mut [u8]) -> Option<usize> {
+            assert_eq!(self.current_pid, 1);
+            // 1. Mark current blocked
+            self.tasks.get_mut(&1).unwrap().state = TaskState::Blocked;
+            self.pipe_read_waiters.push(1);
+
+            // 2. Re-check condition
+            if self.pipe_buf.is_empty() && self.writers_open > 0 {
+                // Switch out current task 1 to next ready task
+                let next_pid = self
+                    .ready_queue
+                    .pop_front()
+                    .expect("No ready task to switch to");
+                self.current_pid = next_pid;
+                self.tasks.get_mut(&next_pid).unwrap().state = TaskState::Running;
+                None // Blocked, execution switched
+            } else {
+                self.tasks.get_mut(&1).unwrap().state = TaskState::Running;
+                let n = buf.len().min(self.pipe_buf.len());
+                for item in buf.iter_mut().take(n) {
+                    *item = self.pipe_buf.remove(0);
+                }
+                Some(n)
+            }
+        }
+
+        // Simulates Writer PID 2 calling write() to the pipe
+        fn writer_write(&mut self, data: &[u8]) -> usize {
+            assert_eq!(self.current_pid, 2);
+            let was_empty = self.pipe_buf.is_empty();
+            self.pipe_buf.extend_from_slice(data);
+
+            if was_empty && !self.pipe_buf.is_empty() {
+                // Wake read waiters
+                let waiters: Vec<i32> = std::mem::take(&mut self.pipe_read_waiters);
+                for pid in waiters {
+                    let task = self.tasks.get_mut(&pid).unwrap();
+                    if task.state == TaskState::Blocked {
+                        task.state = TaskState::Ready;
+                        self.ready_queue.push_back(pid);
+                    }
+                }
+            }
+            data.len()
+        }
+
+        // Simulates Writer PID 2 voluntarily yielding quantum
+        fn writer_yield(&mut self) {
+            assert_eq!(self.current_pid, 2);
+            self.tasks.get_mut(&2).unwrap().state = TaskState::Ready;
+            self.ready_queue.push_back(2);
+
+            let next_pid = self
+                .ready_queue
+                .pop_front()
+                .expect("No ready task to schedule");
+            self.current_pid = next_pid;
+            self.tasks.get_mut(&next_pid).unwrap().state = TaskState::Running;
+        }
+
+        // Simulates Reader PID 1 waking up and re-reading data
+        fn reader_resume_read(&mut self, buf: &mut [u8]) -> usize {
+            assert_eq!(self.current_pid, 1);
+            assert_eq!(self.tasks.get(&1).unwrap().state, TaskState::Running);
+            let n = buf.len().min(self.pipe_buf.len());
+            for item in buf.iter_mut().take(n) {
+                *item = self.pipe_buf.remove(0);
+            }
+            n
+        }
+    }
+
+    let mut sim = Simulation::new();
+    let mut reader_buf = [0u8; 16];
+
+    // Step 1: Reader PID 1 reads from empty pipe -> Blocks and switches to Writer PID 2
+    let res = sim.reader_read(&mut reader_buf);
+    assert!(res.is_none(), "Reader should have blocked on empty pipe");
+    assert_eq!(
+        sim.current_pid, 2,
+        "CPU should have context-switched to PID 2"
+    );
+    assert_eq!(
+        sim.tasks.get(&1).unwrap().state,
+        TaskState::Blocked,
+        "Task 1 should be Blocked"
+    );
+    assert_eq!(
+        sim.tasks.get(&2).unwrap().state,
+        TaskState::Running,
+        "Task 2 should be Running"
+    );
+
+    // Step 2: Writer PID 2 writes "hello world" -> unblocks Task 1 (transitions Blocked -> Ready)
+    let written = sim.writer_write(b"hello world");
+    assert_eq!(written, 11);
+    assert_eq!(
+        sim.tasks.get(&1).unwrap().state,
+        TaskState::Ready,
+        "Task 1 should have been woken to Ready"
+    );
+    assert!(
+        sim.pipe_read_waiters.is_empty(),
+        "Read waiters queue should be cleared"
+    );
+
+    // Step 3: Writer PID 2 yields -> Task 1 is scheduled and resumes
+    sim.writer_yield();
+    assert_eq!(sim.current_pid, 1, "Scheduler should pick Task 1");
+    assert_eq!(
+        sim.tasks.get(&1).unwrap().state,
+        TaskState::Running,
+        "Task 1 should be Running"
+    );
+
+    // Step 4: Task 1 reads data from pipe
+    let read_bytes = sim.reader_resume_read(&mut reader_buf);
+    assert_eq!(read_bytes, 11);
+    assert_eq!(&reader_buf[..11], b"hello world");
 }

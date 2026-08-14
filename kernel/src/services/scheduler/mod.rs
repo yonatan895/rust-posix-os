@@ -164,16 +164,19 @@ pub fn switch_out_current() -> WakeReason {
 
     drop(curr_guard);
 
+    // Extract raw PCB AtomicUsize pointer and drop the prev_proc lock BEFORE handoff and switch
+    let prev_saved_rsp_ptr = {
+        let prev_proc = prev_proc_arc.lock();
+        prev_proc.saved_kernel_rsp.as_ptr()
+    }; // prev_proc guard dropped here while interrupts are masked by SCHEDULER lock
+
     // Lock handoff: release SCHEDULER spinlock without restoring interrupt enable flag.
     // Interrupts remain disabled across the switch until the incoming task's iretq/sti restores them.
     sched.unlock_without_restoring_interrupts();
 
-    // UP/SMP invariant: prev_proc lock is held across the switch purely to pass the field reference;
-    // since the outgoing task is not in the ready queue, no concurrent task will contest its lock while suspended.
-    let prev_proc = prev_proc_arc.lock();
-
-    // Architectural task switch via unified TrapFrame / iretq (writes directly to PCB saved_kernel_rsp)
-    crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
+    // Architectural task switch via unified TrapFrame / iretq (writes directly to PCB saved_kernel_rsp).
+    // Zero locks are held across the switch, preventing any post-resume RFLAGS/IF=0 restore leaks.
+    crate::ostd::task::switch_tasks(prev_saved_rsp_ptr, next_saved_rsp);
 
     WakeReason::Woken
 }
@@ -230,11 +233,15 @@ pub fn schedule_yield() {
 
     drop(curr_guard);
 
+    let prev_saved_rsp_ptr = {
+        let prev_proc = prev_proc_arc.lock();
+        prev_proc.saved_kernel_rsp.as_ptr()
+    };
+
     // Lock handoff: release SCHEDULER spinlock without restoring interrupt enable flag.
     sched.unlock_without_restoring_interrupts();
 
-    let prev_proc = prev_proc_arc.lock();
-    crate::ostd::task::switch_tasks(&prev_proc.saved_kernel_rsp, next_saved_rsp);
+    crate::ostd::task::switch_tasks(prev_saved_rsp_ptr, next_saved_rsp);
 }
 
 /// Invoked from the timer interrupt service routine to perform round-robin preemptive scheduling.

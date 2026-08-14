@@ -18,11 +18,14 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
     }
 }
 
-/// Safely performs a task switch from `prev_saved_rsp` to `next_saved_rsp` under interrupt masking.
-pub fn switch_tasks(prev_saved_rsp: &core::sync::atomic::AtomicUsize, next_saved_rsp: usize) {
+/// Safely performs a task switch from `prev_saved_rsp_ptr` to `next_saved_rsp` under interrupt masking.
+///
+/// In OSTD task model, caller passes raw pointer to outgoing PCB AtomicUsize field.
+#[allow(clippy::not_unsafe_ptr_arg_deref)]
+pub fn switch_tasks(prev_saved_rsp_ptr: *mut usize, next_saved_rsp: usize) {
     unsafe {
         crate::ostd::arch::cli();
-        voluntary_task_switch(prev_saved_rsp.as_ptr(), next_saved_rsp);
+        voluntary_task_switch(prev_saved_rsp_ptr, next_saved_rsp);
         crate::ostd::arch::sti();
     }
 }
