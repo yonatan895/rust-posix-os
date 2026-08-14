@@ -53,12 +53,21 @@ jobs:
             New-Item -ItemType Directory -Force -Path $p | Out-Null
             Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
           }
+      - name: Cache rustup toolchain
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.rustup/toolchains
+            ~/.rustup/update-hashes
+            ~/.rustup/settings.toml
+          key: rustup-${{ runner.os }}-nightly-rust-src
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
           components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
+          prefix-key: dbg0
           cache-on-failure: true
       - name: Cache Limine BOOTX64.EFI
         uses: actions/cache@v4
