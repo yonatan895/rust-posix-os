@@ -1,4 +1,7 @@
 //! POSIX Signals and IPC - De-privileged Safe Service.
+//!
+//! Lock hierarchy tier (ADR-0002):
+//! PROCESS_TABLE -> SCHEDULER -> IPC (SignalManager) -> VFS Mount/Table -> Inode -> Devices
 
 use crate::ostd::sync::SpinLock;
 use alloc::collections::BTreeMap;
@@ -21,10 +24,13 @@ impl SignalManager {
 
     /// Sends a POSIX signal to a target process PID.
     ///
-    /// Signal numbers are strictly validated against `SIG_MIN..=SIG_MAX` (`1..=31`).
+    /// Target PID must be positive (`pid > 0`), as process groups (pid <= 0)
+    /// are not yet implemented. Signal numbers are strictly validated against
+    /// `SIG_MIN..=SIG_MAX` (`1..=31`).
+    ///
     /// If the target process is blocked, wakes it to enable EINTR interruption.
     pub fn send_signal(&self, pid: i32, sig: i32) -> Result<(), i32> {
-        if !(SIG_MIN..=SIG_MAX).contains(&sig) {
+        if pid <= 0 || !(SIG_MIN..=SIG_MAX).contains(&sig) {
             return Err(EINVAL);
         }
 
@@ -68,6 +74,13 @@ impl SignalManager {
     /// Gets the blocked signal mask for a process.
     pub fn get_procmask(&self, pid: i32) -> SigSet {
         self.blocked_masks.lock().get(&pid).copied().unwrap_or(0)
+    }
+
+    /// Checks if a process has any pending signals that are not blocked.
+    pub fn has_unblocked_signals(&self, pid: i32) -> bool {
+        let pending = self.get_pending(pid);
+        let blocked = self.get_procmask(pid);
+        (pending & !blocked) != 0
     }
 
     /// Updates the blocked signal mask for a process (`how: SIG_BLOCK, SIG_UNBLOCK, SIG_SETMASK`).

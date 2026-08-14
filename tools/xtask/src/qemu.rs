@@ -54,6 +54,19 @@ pub fn find_qemu() -> String {
             return q.to_string();
         }
     }
+    if let Ok(home) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
+        let qemu_dir = PathBuf::from(&home).join("scoop/apps/qemu");
+        if qemu_dir.exists() {
+            if let Ok(entries) = fs::read_dir(qemu_dir) {
+                for entry in entries.flatten() {
+                    let exe = entry.path().join("qemu-system-x86_64.exe");
+                    if exe.exists() {
+                        return exe.to_string_lossy().to_string();
+                    }
+                }
+            }
+        }
+    }
     eprintln!("[xtask] qemu-system-x86_64 not found. Install QEMU or set QEMU=...");
     std::process::exit(1);
 }
@@ -79,8 +92,16 @@ pub fn find_ovmf() -> PathBuf {
         candidates
             .push(PathBuf::from(&home).join("scoop/apps/qemu/current/share/edk2-x86_64-code.fd"));
         candidates.push(
-            PathBuf::from(home).join("scoop/apps/qemu/current/share/edk2-x86_64-secure-code.fd"),
+            PathBuf::from(&home).join("scoop/apps/qemu/current/share/edk2-x86_64-secure-code.fd"),
         );
+        let qemu_dir = PathBuf::from(&home).join("scoop/apps/qemu");
+        if qemu_dir.exists() {
+            if let Ok(entries) = fs::read_dir(qemu_dir) {
+                for entry in entries.flatten() {
+                    candidates.push(entry.path().join("share/edk2-x86_64-code.fd"));
+                }
+            }
+        }
     }
     for c in &candidates {
         if c.exists() {

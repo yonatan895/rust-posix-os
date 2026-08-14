@@ -1,11 +1,18 @@
 //! POSIX Process Lifecycle & Signal System Calls.
 
 use super::{copy_user_path, map_user_error};
+use crate::ostd::arch::gdt::USER_CODE_SEL;
+use crate::ostd::arch::idt::TrapFrame;
 use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::ostd::mm::{USER_STR_MAX, UserPtr};
 use crate::services::ipc::SIGNALS;
 use crate::services::process::*;
+use core::sync::atomic::Ordering;
 use posix_abi::*;
+
+const RED_ZONE_SIZE: usize = 128;
+const USER_RFLAGS_MASK: usize = 0xCD5; // User arithmetic/status flags + direction
+const USER_RFLAGS_RESERVED: usize = 0x202; // Bit 1 is fixed 1, Bit 9 is IF (interrupt enable)
 
 /// POSIX fork system call.
 ///
@@ -51,10 +58,7 @@ pub fn sys_execve(
 }
 
 pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
-    let calling_pid = match get_current_process() {
-        Some(proc) => proc.lock().pid,
-        None => return -(ESRCH as isize),
-    };
+    let calling_pid = CURRENT_PID.load(Ordering::SeqCst);
 
     loop {
         let mut has_children = false;
@@ -160,16 +164,16 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
 
         if should_switch {
             crate::services::scheduler::switch_out_current();
+            crate::services::scheduler::mark_current_running();
+            if SIGNALS.has_unblocked_signals(calling_pid) {
+                return -(EINTR as isize);
+            }
         }
     }
 }
 
 pub fn sys_getpid() -> isize {
-    if let Some(proc) = get_current_process() {
-        proc.lock().pid as isize
-    } else {
-        1
-    }
+    CURRENT_PID.load(Ordering::SeqCst) as isize
 }
 
 pub fn sys_getppid() -> isize {
@@ -222,7 +226,7 @@ pub fn sys_exit_signal(sig: i32) -> ! {
 }
 
 pub fn sys_kill(pid: i32, sig: i32) -> isize {
-    if !(SIG_MIN..=SIG_MAX).contains(&sig) {
+    if pid <= 0 || !(SIG_MIN..=SIG_MAX).contains(&sig) {
         return -(EINVAL as isize);
     }
     match SIGNALS.send_signal(pid, sig) {
@@ -247,10 +251,7 @@ pub fn sys_rt_sigaction(
         return -(EINVAL as isize);
     }
 
-    let pid = match get_current_process() {
-        Some(proc) => proc.lock().pid,
-        None => return -(ESRCH as isize),
-    };
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
 
     if !oldact_ptr.is_null() {
         let old_act = SIGNALS.get_action(pid, sig);
@@ -290,10 +291,7 @@ pub fn sys_rt_sigprocmask(
         return -(EINVAL as isize);
     }
 
-    let pid = match get_current_process() {
-        Some(proc) => proc.lock().pid,
-        None => return -(ESRCH as isize),
-    };
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
 
     if !oldset_ptr.is_null() {
         let old_mask = SIGNALS.get_procmask(pid);
@@ -324,7 +322,11 @@ pub fn sys_rt_sigprocmask(
 }
 
 pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
-    let frame_ptr = match UserPtr::<SignalFrame>::from_raw(r.rsp) {
+    // When the user signal handler finishes with `ret`, it pops the 8-byte restorer address
+    // from [new_rsp], jumping into `__restore_rt` with `rsp = new_rsp + 8`.
+    // The syscall instruction does not touch `rsp`. Therefore, the SignalFrame base is at `r.rsp - 8`.
+    let frame_addr = r.rsp.saturating_sub(core::mem::size_of::<u64>());
+    let frame_ptr = match UserPtr::<SignalFrame>::from_raw(frame_addr) {
         Ok(p) => p,
         Err(e) => return -(map_user_error(e) as isize),
     };
@@ -333,10 +335,7 @@ pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
         Err(e) => return -(map_user_error(e) as isize),
     };
 
-    let pid = match get_current_process() {
-        Some(proc) => proc.lock().pid,
-        None => return -(ESRCH as isize),
-    };
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
 
     // Restore previous blocked signals mask
     let _ = SIGNALS.set_procmask(pid, SIG_SETMASK, frame.old_mask);
@@ -356,7 +355,10 @@ pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
     r.rdi = frame.rdi as usize;
     r.rax = frame.rax as usize;
     r.rcx = frame.rcx as usize; // Saved user RIP
-    r.r11 = frame.r11 as usize; // Saved user RFLAGS
+
+    // Mask user-controlled RFLAGS to prevent forged IOPL/NT
+    r.r11 = (frame.r11 as usize & USER_RFLAGS_MASK) | USER_RFLAGS_RESERVED;
+
     r.rsp = frame.rsp as usize; // Saved user RSP
 
     r.rax as isize
@@ -364,10 +366,7 @@ pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
 
 /// Checks pending unblocked signals on the return-to-userland path and delivers them.
 pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
-    let pid = match get_current_process() {
-        Some(proc) => proc.lock().pid,
-        None => return,
-    };
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
 
     let pending = SIGNALS.get_pending(pid);
     let blocked = SIGNALS.get_procmask(pid);
@@ -378,14 +377,22 @@ pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
 
     for sig in SIG_MIN..=SIG_MAX {
         if (unblocked_pending & (1 << (sig - 1))) != 0 {
-            SIGNALS.clear_pending(pid, sig);
             let action = SIGNALS.get_action(pid, sig);
 
             if action.sa_handler == SIG_IGN
                 || (action.sa_handler == SIG_DFL && is_default_ignore(sig))
             {
+                SIGNALS.clear_pending(pid, sig);
                 continue;
             }
+
+            if action.sa_handler == SIG_DFL && is_default_stop(sig) {
+                // POSIX stop-class signals under SIG_DFL pause the process.
+                // Leave pending bit set and skip delivery until job control is implemented.
+                continue;
+            }
+
+            SIGNALS.clear_pending(pid, sig);
 
             if action.sa_handler == SIG_DFL {
                 // Default action: Terminate
@@ -399,8 +406,12 @@ pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
     }
 }
 
-fn is_default_ignore(sig: i32) -> bool {
+pub fn is_default_ignore(sig: i32) -> bool {
     sig == SIGCHLD || sig == SIGURG || sig == SIGWINCH
+}
+
+pub fn is_default_stop(sig: i32) -> bool {
+    sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU
 }
 
 fn deliver_signal_to_user(
@@ -411,8 +422,8 @@ fn deliver_signal_to_user(
     r: &mut SyscallRegisters,
 ) {
     let frame_size = core::mem::size_of::<SignalFrame>();
-    // Align user RSP down by 16 bytes for System V AMD64 ABI stack discipline
-    let new_rsp = (r.rsp.saturating_sub(frame_size)) & !0xF;
+    // SysV AMD64 ABI: allocate below the 128-byte red zone, 16-byte aligned
+    let new_rsp = (r.rsp.saturating_sub(RED_ZONE_SIZE + frame_size)) & !0xF;
 
     let frame = SignalFrame {
         restorer: action.sa_restorer as u64,
@@ -457,4 +468,116 @@ fn deliver_signal_to_user(
         new_mask |= 1 << (sig - 1);
     }
     let _ = SIGNALS.set_procmask(pid, SIG_SETMASK, new_mask);
+
+    if (action.sa_flags & SA_RESETHAND) != 0 {
+        let _ = SIGNALS.set_action(pid, sig, SigAction::default());
+    }
+}
+
+/// Checks pending signals when returning from an interrupt to ring 3 (user mode).
+///
+/// Modifies the hardware TrapFrame on the kernel stack so `iretq` lands in the
+/// user signal handler, or terminates CPU-bound tasks on `SIGKILL`/`SIGTERM`.
+pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
+    // Only deliver signals when returning to ring 3 (user mode)
+    if (frame.cs as u16) != USER_CODE_SEL {
+        return false;
+    }
+
+    let pending = SIGNALS.get_pending(pid);
+    let blocked = SIGNALS.get_procmask(pid);
+    let unblocked_pending = pending & !blocked;
+    if unblocked_pending == 0 {
+        return false;
+    }
+
+    for sig in SIG_MIN..=SIG_MAX {
+        if (unblocked_pending & (1 << (sig - 1))) != 0 {
+            let action = SIGNALS.get_action(pid, sig);
+
+            if action.sa_handler == SIG_IGN
+                || (action.sa_handler == SIG_DFL && is_default_ignore(sig))
+            {
+                SIGNALS.clear_pending(pid, sig);
+                continue;
+            }
+
+            if action.sa_handler == SIG_DFL && is_default_stop(sig) {
+                continue;
+            }
+
+            SIGNALS.clear_pending(pid, sig);
+
+            if action.sa_handler == SIG_DFL {
+                // Default action: Terminate CPU-bound task
+                let ppid = if let Some(proc_lock) = get_current_process() {
+                    let mut proc = proc_lock.lock();
+                    proc.state = ProcessState::Zombie;
+                    proc.exit_code = sig & 0x7f;
+                    proc.killed_by_sig = Some(sig);
+                    proc.ppid
+                } else {
+                    0
+                };
+                if ppid > 0 {
+                    crate::services::scheduler::wake_tasks(&[ppid]);
+                }
+                SIGNALS.cleanup_process(pid);
+                return true;
+            }
+
+            // Custom user handler: construct SignalFrame on user stack
+            let frame_size = core::mem::size_of::<SignalFrame>();
+            let new_rsp = (frame
+                .rsp
+                .saturating_sub(RED_ZONE_SIZE as u64 + frame_size as u64))
+                & !0xF;
+
+            let sig_frame = SignalFrame {
+                restorer: action.sa_restorer as u64,
+                signum: sig as u64,
+                old_mask: blocked,
+                r15: frame.r15,
+                r14: frame.r14,
+                r13: frame.r13,
+                r12: frame.r12,
+                rbp: frame.rbp,
+                rbx: frame.rbx,
+                r9: frame.r9,
+                r8: frame.r8,
+                r10: frame.r10,
+                rdx: frame.rdx,
+                rsi: frame.rsi,
+                rdi: frame.rdi,
+                rax: frame.rax,
+                rcx: frame.rip,
+                r11: frame.rflags,
+                rsp: frame.rsp,
+            };
+
+            if let Ok(user_ptr) = UserPtr::<SignalFrame>::from_raw(new_rsp as usize)
+                && user_ptr.write(sig_frame).is_ok()
+            {
+                frame.rsp = new_rsp;
+                frame.rip = action.sa_handler as u64;
+                frame.rdi = sig as u64;
+                frame.rsi = 0;
+                frame.rdx = new_rsp;
+
+                let mut new_mask = blocked | action.sa_mask;
+                if (action.sa_flags & SA_NODEFER) == 0 {
+                    new_mask |= 1 << (sig - 1);
+                }
+                let _ = SIGNALS.set_procmask(pid, SIG_SETMASK, new_mask);
+
+                if (action.sa_flags & SA_RESETHAND) != 0 {
+                    let _ = SIGNALS.set_action(pid, sig, SigAction::default());
+                }
+            }
+
+            return false;
+        }
+    }
+
+    false
 }
