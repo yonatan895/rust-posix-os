@@ -1,7 +1,7 @@
 //! POSIX File Information (sys/stat.h).
 
-use posix_abi::*;
 use crate::syscall::*;
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn stat(pathname: *const u8, statbuf: *mut Stat) -> i32 {

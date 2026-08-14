@@ -16,7 +16,10 @@ pub unsafe extern "C" fn _start() -> ! {
     // Test malloc / free in userspace
     let ptr = malloc(128);
     if !ptr.is_null() {
-        strcpy(ptr, b"Memory allocation via mmap-backed malloc works!\0".as_ptr());
+        strcpy(
+            ptr,
+            b"Memory allocation via mmap-backed malloc works!\0".as_ptr(),
+        );
         printf(b"[init] Userspace heap test: %s\n\0".as_ptr(), ptr);
         free(ptr);
     }

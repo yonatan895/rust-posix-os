@@ -1,19 +1,29 @@
 //! Memory Management Subsystem in OSTD.
 
-pub mod pmm;
-pub mod vmm;
-pub mod heap;
-pub mod user;
-pub mod pod;
 pub mod boot;
+pub mod heap;
+pub mod pmm;
+pub mod pod;
+pub mod user;
+pub mod vmm;
 
-pub use pmm::{alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats, PAGE_SIZE};
-pub use vmm::{phys_to_virt, virt_to_phys, zero_phys_frame, VmSpace, PAGE_PRESENT, PAGE_WRITABLE, PAGE_USER, PAGE_NX};
+pub use boot::{BootBlob, boot_modules, with_syscall_regs};
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
-pub use user::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SPACE_END, USER_STR_MAX};
+pub use pmm::{PAGE_SIZE, alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats};
 pub use pod::read_pod;
-pub use boot::{boot_modules, with_syscall_regs, BootBlob};
+pub use user::{
+    USER_SPACE_END, USER_STR_MAX, UserAccessError, UserPtr, UserSlice, copy_cstr_from_user,
+};
+pub use vmm::{
+    PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, phys_to_virt, virt_to_phys,
+    zero_phys_frame,
+};
 
+/// Initializes the kernel memory management subsystem (PMM, VMM, and global heap).
+///
+/// # Safety
+///
+/// Must be invoked during early boot with valid bootloader memory responses.
 pub unsafe fn mm_init() {
     let memmap_response = crate::ostd::limine::memmap_response();
     let hhdm_offset = crate::ostd::limine::hhdm_offset();

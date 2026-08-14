@@ -1,7 +1,7 @@
 //! Preemptive / MLFQ Scheduler - De-privileged Safe Service.
 
-use alloc::collections::VecDeque;
 use crate::ostd::sync::SpinLock;
+use alloc::collections::VecDeque;
 
 pub struct Scheduler {
     ready_queue: VecDeque<i32>,
@@ -20,6 +20,12 @@ impl Scheduler {
 
     pub fn pick_next(&mut self) -> Option<i32> {
         self.ready_queue.pop_front()
+    }
+}
+
+impl Default for Scheduler {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

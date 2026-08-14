@@ -59,8 +59,7 @@ pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
     if strcmp(applet, b"help\0".as_ptr()) == 0 || strcmp(applet, b"--help\0".as_ptr()) == 0 {
         print_usage();
         0
-    }
- else if strcmp(applet, b"ls\0".as_ptr()) == 0 {
+    } else if strcmp(applet, b"ls\0".as_ptr()) == 0 {
         cmd_ls(sub_argc, sub_argv)
     } else if strcmp(applet, b"cat\0".as_ptr()) == 0 {
         cmd_cat(sub_argc, sub_argv)
@@ -87,7 +86,11 @@ pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
 }
 
 pub unsafe fn cmd_ls(argc: usize, argv: *const *const u8) -> i32 {
-    let path = if argc > 1 && !(*argv.add(1)).is_null() { *argv.add(1) } else { b".\0".as_ptr() };
+    let path = if argc > 1 && !(*argv.add(1)).is_null() {
+        *argv.add(1)
+    } else {
+        b".\0".as_ptr()
+    };
     let fd = open(path, O_RDONLY | O_DIRECTORY, 0);
     if fd < 0 {
         let mut st = Stat::default();
@@ -101,8 +104,15 @@ pub unsafe fn cmd_ls(argc: usize, argv: *const *const u8) -> i32 {
 
     let mut buf = [0u8; 1024];
     loop {
-        let n = syscall::syscall3(SYS_GETDENTS64, fd as usize, buf.as_mut_ptr() as usize, buf.len()) as isize;
-        if n <= 0 { break; }
+        let n = syscall::syscall3(
+            SYS_GETDENTS64,
+            fd as usize,
+            buf.as_mut_ptr() as usize,
+            buf.len(),
+        ) as isize;
+        if n <= 0 {
+            break;
+        }
         let mut offset = 0;
         while offset < n as usize {
             let dirent = &*(buf.as_ptr().add(offset) as *const Dirent64);
@@ -124,7 +134,9 @@ pub unsafe fn cmd_cat(argc: usize, argv: *const *const u8) -> i32 {
         let mut buf = [0u8; 512];
         loop {
             let n = read(STDIN_FILENO, buf.as_mut_ptr(), buf.len());
-            if n <= 0 { break; }
+            if n <= 0 {
+                break;
+            }
             write(STDOUT_FILENO, buf.as_ptr(), n as usize);
         }
         return 0;
@@ -133,7 +145,9 @@ pub unsafe fn cmd_cat(argc: usize, argv: *const *const u8) -> i32 {
     let mut ret = 0;
     for i in 1..argc {
         let path = *argv.add(i);
-        if path.is_null() { continue; }
+        if path.is_null() {
+            continue;
+        }
         let fd = open(path, O_RDONLY, 0);
         if fd < 0 {
             printf(b"cat: '%s': No such file or directory\n\0".as_ptr(), path);
@@ -143,7 +157,9 @@ pub unsafe fn cmd_cat(argc: usize, argv: *const *const u8) -> i32 {
         let mut buf = [0u8; 512];
         loop {
             let n = read(fd, buf.as_mut_ptr(), buf.len());
-            if n <= 0 { break; }
+            if n <= 0 {
+                break;
+            }
             write(STDOUT_FILENO, buf.as_ptr(), n as usize);
         }
         close(fd);
@@ -194,7 +210,9 @@ pub unsafe fn cmd_touch(argc: usize, argv: *const *const u8) -> i32 {
     let mut ret = 0;
     for i in 1..argc {
         let path = *argv.add(i);
-        if path.is_null() { continue; }
+        if path.is_null() {
+            continue;
+        }
         let fd = open(path, O_RDWR | O_CREAT, 0o644);
         if fd < 0 {
             printf(b"touch: cannot touch '%s'\n\0".as_ptr(), path);
@@ -214,7 +232,9 @@ pub unsafe fn cmd_mkdir(argc: usize, argv: *const *const u8) -> i32 {
     let mut ret = 0;
     for i in 1..argc {
         let path = *argv.add(i);
-        if path.is_null() { continue; }
+        if path.is_null() {
+            continue;
+        }
         let res = mkdir(path, 0o755);
         if res < 0 {
             printf(b"mkdir: cannot create directory '%s'\n\0".as_ptr(), path);
@@ -232,7 +252,9 @@ pub unsafe fn cmd_rm(argc: usize, argv: *const *const u8) -> i32 {
     let mut ret = 0;
     for i in 1..argc {
         let path = *argv.add(i);
-        if path.is_null() { continue; }
+        if path.is_null() {
+            continue;
+        }
         let res = unlink(path);
         if res < 0 {
             printf(b"rm: cannot remove '%s'\n\0".as_ptr(), path);
@@ -263,7 +285,9 @@ pub unsafe fn cmd_cp(argc: usize, argv: *const *const u8) -> i32 {
     let mut buf = [0u8; 1024];
     loop {
         let n = read(in_fd, buf.as_mut_ptr(), buf.len());
-        if n <= 0 { break; }
+        if n <= 0 {
+            break;
+        }
         write(out_fd, buf.as_ptr(), n as usize);
     }
     close(in_fd);

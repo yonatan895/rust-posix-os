@@ -16,6 +16,12 @@ impl TaskId {
     }
 }
 
+impl Default for TaskId {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct Task {
     pub id: TaskId,
     pub future: Pin<Box<dyn Future<Output = ()> + Send + 'static>>,
@@ -34,12 +40,8 @@ impl Task {
     }
 }
 
-static WAKER_VTABLE: RawWakerVTable = RawWakerVTable::new(
-    clone_raw,
-    wake_raw,
-    wake_by_ref_raw,
-    drop_raw,
-);
+static WAKER_VTABLE: RawWakerVTable =
+    RawWakerVTable::new(clone_raw, wake_raw, wake_by_ref_raw, drop_raw);
 
 pub fn create_waker(task_id: TaskId) -> Waker {
     let raw = RawWaker::new(task_id.0 as usize as *const (), &WAKER_VTABLE);

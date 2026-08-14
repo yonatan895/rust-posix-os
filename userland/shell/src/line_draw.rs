@@ -69,7 +69,12 @@ pub unsafe fn cmd_span(buf: &[u8], len: usize) -> (usize, usize) {
     (start, end)
 }
 
-pub unsafe fn paint_prompt(cwd: *const u8, buf: &[u8], len: usize, is_known: impl Fn(&str) -> bool) {
+pub unsafe fn paint_prompt(
+    cwd: *const u8,
+    buf: &[u8],
+    len: usize,
+    is_known: impl Fn(&str) -> bool,
+) {
     let mut scratch = [0u8; 1024];
     let mut out = LineBuffer::new(&mut scratch);
     // Hide cursor so it does not flash at column 0 during the rewrite.

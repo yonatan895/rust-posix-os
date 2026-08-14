@@ -1,7 +1,7 @@
 //! ELF64 Executable Loader & System V AMD64 ABI User Stack Setup.
 
+use crate::ostd::mm::{PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, read_pod};
 use posix_abi::*;
-use crate::ostd::mm::{read_pod, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, PAGE_NX, VmSpace};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const ELF_CLASS_64: u8 = 2;
@@ -115,7 +115,11 @@ pub fn load_elf(
     }
 
     let stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
-    vm_space.alloc_and_map_range(stack_bottom, USER_STACK_SIZE, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE)?;
+    vm_space.alloc_and_map_range(
+        stack_bottom,
+        USER_STACK_SIZE,
+        PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE,
+    )?;
 
     let initial_rsp = setup_user_stack(
         vm_space,
@@ -208,7 +212,9 @@ pub fn setup_user_stack(
     let total_bytes = total_words * 8;
 
     // Align final stack pointer so that rsp % 16 == 0
-    let target_sp = sp.checked_sub(total_bytes).ok_or("Stack pointer underflow")?;
+    let target_sp = sp
+        .checked_sub(total_bytes)
+        .ok_or("Stack pointer underflow")?;
     let aligned_sp = target_sp & !0xF;
     if aligned_sp < stack_bottom {
         return Err("User stack frame exceeds user stack limit (E2BIG)");

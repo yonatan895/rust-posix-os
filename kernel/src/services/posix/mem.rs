@@ -1,14 +1,14 @@
 //! POSIX Virtual Memory Management System Calls.
 
-use posix_abi::*;
-use crate::ostd::mm::{alloc_frame, zero_phys_frame, PAGE_SIZE};
+use crate::ostd::mm::{PAGE_SIZE, alloc_frame, zero_phys_frame};
 use crate::services::process::get_current_process;
+use posix_abi::*;
 
 pub fn sys_mmap(addr: usize, length: usize, prot: i32, _flags: i32) -> isize {
     if length == 0 {
         return -(EINVAL as isize);
     }
-    let pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    let pages = length.div_ceil(PAGE_SIZE);
 
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -44,10 +44,10 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, _flags: i32) -> isize {
 }
 
 pub fn sys_munmap(addr: usize, length: usize) -> isize {
-    if addr % PAGE_SIZE != 0 || length == 0 {
+    if !addr.is_multiple_of(PAGE_SIZE) || length == 0 {
         return -(EINVAL as isize);
     }
-    let pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    let pages = length.div_ceil(PAGE_SIZE);
 
     let proc_lock = match get_current_process() {
         Some(p) => p,

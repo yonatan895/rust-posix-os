@@ -1,9 +1,9 @@
 //! Standard General Utilities Library (stdlib.h).
 
-use posix_abi::*;
-use crate::syscall::*;
-use crate::sys_mman::*;
 use crate::string::memcpy;
+use crate::sys_mman::*;
+use crate::syscall::*;
+use posix_abi::*;
 
 #[repr(C)]
 struct BlockHeader {

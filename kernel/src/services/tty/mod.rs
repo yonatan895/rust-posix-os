@@ -1,10 +1,10 @@
 //! TTY Subsystem & Line Discipline - De-privileged Safe Service.
 
+use crate::ostd::sync::SpinLock;
+use crate::services::vfs::{FileType, Inode};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
-use crate::services::vfs::{FileType, Inode};
 
 pub struct LineDiscipline {
     pub input_buffer: Vec<u8>,
@@ -14,8 +14,10 @@ pub struct LineDiscipline {
 
 impl LineDiscipline {
     pub fn new() -> Self {
-        let mut termios = Termios::default();
-        termios.c_lflag = ECHO | ICANON | ISIG;
+        let termios = Termios {
+            c_lflag: ECHO | ICANON | ISIG,
+            ..Default::default()
+        };
         Self {
             input_buffer: Vec::with_capacity(256),
             canonical_queue: Vec::with_capacity(1024),
@@ -31,32 +33,29 @@ impl LineDiscipline {
             if c == 0x08 || c == 0x7F {
                 // Backspace / Delete
                 if self.input_buffer.pop().is_some() && is_echo {
-                    return Some(0x08);
+                    Some(0x08)
+                } else {
+                    None
                 }
-                return None;
             } else if c == b'\r' || c == b'\n' {
                 self.input_buffer.push(b'\n');
                 self.canonical_queue.extend_from_slice(&self.input_buffer);
                 self.input_buffer.clear();
-                if is_echo {
-                    return Some(b'\n');
-                }
-                return None;
+                if is_echo { Some(b'\n') } else { None }
             } else {
                 self.input_buffer.push(c);
-                if is_echo {
-                    return Some(c);
-                }
-                return None;
+                if is_echo { Some(c) } else { None }
             }
         } else {
             self.canonical_queue.push(c);
-            if is_echo {
-                Some(c)
-            } else {
-                None
-            }
+            if is_echo { Some(c) } else { None }
         }
+    }
+}
+
+impl Default for LineDiscipline {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -73,7 +72,9 @@ impl TtyDevice {
 }
 
 impl Inode for TtyDevice {
-    fn file_type(&self) -> FileType { FileType::CharacterDevice }
+    fn file_type(&self) -> FileType {
+        FileType::CharacterDevice
+    }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         let mut ldisc = self.ldisc.lock();
@@ -81,8 +82,8 @@ impl Inode for TtyDevice {
             return Err(EAGAIN);
         }
         let to_read = buf.len().min(ldisc.canonical_queue.len());
-        for i in 0..to_read {
-            buf[i] = ldisc.canonical_queue.remove(0);
+        for item in buf.iter_mut().take(to_read) {
+            *item = ldisc.canonical_queue.remove(0);
         }
         Ok(to_read)
     }
@@ -95,12 +96,17 @@ impl Inode for TtyDevice {
         Ok(buf.len())
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFCHR | 0o620;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFCHR | 0o620,
+            ..Default::default()
+        })
     }
 }

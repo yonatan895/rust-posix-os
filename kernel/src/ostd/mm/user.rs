@@ -22,7 +22,7 @@
 
 use core::marker::PhantomData;
 
-use super::{phys_to_virt, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE};
+use super::{PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, phys_to_virt};
 
 /// Exclusive upper bound of the user address space (lower canonical half).
 pub const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
@@ -55,7 +55,9 @@ pub enum UserAccessError {
 fn current_root_table() -> usize {
     let cr3: usize;
     // SAFETY: reading CR3 is always valid in ring 0 and has no side effects.
-    unsafe { core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags)) };
+    unsafe {
+        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags))
+    };
     cr3 & (PT_ADDR_MASK as usize)
 }
 
@@ -106,7 +108,9 @@ fn validate_user_range(addr: usize, len: usize, need_write: bool) -> Result<(), 
     let mut page = addr & !PAGE_MASK;
     while page < end {
         validate_user_page(page, need_write)?;
-        page = page.checked_add(PAGE_MASK + 1).ok_or(UserAccessError::Overflow)?;
+        page = page
+            .checked_add(PAGE_MASK + 1)
+            .ok_or(UserAccessError::Overflow)?;
     }
     Ok(())
 }
@@ -133,7 +137,10 @@ impl<T> UserPtr<T> {
         if end > USER_SPACE_END {
             return Err(UserAccessError::OutOfUserRange);
         }
-        Ok(Self { addr, _marker: PhantomData })
+        Ok(Self {
+            addr,
+            _marker: PhantomData,
+        })
     }
 
     pub fn addr(&self) -> usize {

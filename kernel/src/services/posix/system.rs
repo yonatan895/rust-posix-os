@@ -4,12 +4,12 @@
 //! the dispatcher and are converted via `super::{copy_user_path, map_user_error}`
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
-use posix_abi::*;
+use super::{copy_user_path, map_user_error};
+use crate::ostd::mm::{USER_STR_MAX, UserPtr, UserSlice};
+use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::*;
-use crate::services::audit::log_audit_event;
-use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
-use super::{copy_user_path, map_user_error};
+use posix_abi::*;
 
 pub fn sys_uname(buf: *mut Utsname) -> isize {
     let out = match UserPtr::<Utsname>::from_raw(buf as usize) {
@@ -41,14 +41,16 @@ pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
     crate::services::monitor::update_system_metrics();
     let mon = crate::services::monitor::SYSTEM_MONITOR.lock();
 
-    let mut si = Sysinfo::default();
-    si.uptime = mon.sample_tick as i64;
-    si.totalram = mon.total_memory_bytes as u64;
-    si.freeram = mon.free_memory_bytes as u64;
-    si.bufferram = mon.total_heap_bytes as u64;
-    si.sharedram = mon.used_heap_bytes as u64;
-    si.procs = mon.total_processes as u16;
-    si.mem_unit = 1;
+    let si = Sysinfo {
+        uptime: mon.sample_tick as i64,
+        totalram: mon.total_memory_bytes as u64,
+        freeram: mon.free_memory_bytes as u64,
+        bufferram: mon.total_heap_bytes as u64,
+        sharedram: mon.used_heap_bytes as u64,
+        procs: mon.total_processes as u16,
+        mem_unit: 1,
+        ..Default::default()
+    };
 
     match out.write(si) {
         Ok(()) => 0,
@@ -113,6 +115,13 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
     let pid = proc.pid;
     drop(proc);
 
-    log_audit_event(pid, 0, AUDIT_TYPE_DIR_CHANGE, 0, &target_norm, "Working directory changed");
+    log_audit_event(
+        pid,
+        0,
+        AUDIT_TYPE_DIR_CHANGE,
+        0,
+        &target_norm,
+        "Working directory changed",
+    );
     0
 }

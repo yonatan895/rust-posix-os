@@ -4,14 +4,14 @@
 //! the dispatcher and are converted via `super::{copy_user_path, map_user_error}`
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
+use super::{copy_user_path, map_user_error};
+use crate::ostd::mm::{USER_STR_MAX, UserPtr, UserSlice};
+use crate::services::audit::log_audit_event;
+use crate::services::process::get_current_process;
+use crate::services::vfs::pipe::PipeBuffer;
+use crate::services::vfs::*;
 use alloc::sync::Arc;
 use posix_abi::*;
-use crate::services::process::get_current_process;
-use crate::services::vfs::*;
-use crate::services::vfs::pipe::PipeBuffer;
-use crate::services::audit::log_audit_event;
-use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
-use super::{copy_user_path, map_user_error};
 
 /// Upper bound on a single read/write bounce buffer, mirroring Linux's
 /// MAX_RW_COUNT. Prevents a user-controlled `count` from triggering a huge
@@ -133,7 +133,14 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
     match proc.alloc_fd(handle) {
         Ok(fd) => {
             if is_created {
-                log_audit_event(pid, 0, AUDIT_TYPE_FILE_CREATE, 0, path, "File created via open(O_CREAT)");
+                log_audit_event(
+                    pid,
+                    0,
+                    AUDIT_TYPE_FILE_CREATE,
+                    0,
+                    path,
+                    "File created via open(O_CREAT)",
+                );
             }
             fd as isize
         }
@@ -287,7 +294,7 @@ pub fn sys_dup(oldfd: i32) -> isize {
 }
 
 pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
-    if newfd < 0 || newfd >= 256 {
+    if !(0..256).contains(&newfd) {
         return -(EBADF as isize);
     }
     if oldfd == newfd {
@@ -326,7 +333,14 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
     let (parent, basename) = match resolve_parent_and_basename(path) {
         Ok(res) => res,
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -(err as i32), path, "Directory create failed (parent unresolved)");
+            log_audit_event(
+                pid,
+                0,
+                AUDIT_TYPE_DIR_CREATE,
+                -err,
+                path,
+                "Directory create failed (parent unresolved)",
+            );
             return -(err as isize);
         }
     };
@@ -337,7 +351,14 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
             0
         }
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_DIR_CREATE, -(err as i32), path, "Directory create failed");
+            log_audit_event(
+                pid,
+                0,
+                AUDIT_TYPE_DIR_CREATE,
+                -err,
+                path,
+                "Directory create failed",
+            );
             -(err as isize)
         }
     }
@@ -357,18 +378,32 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
     let (parent, basename) = match resolve_parent_and_basename(path) {
         Ok(res) => res,
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -(err as i32), path, "Unlink failed (parent unresolved)");
+            log_audit_event(
+                pid,
+                0,
+                AUDIT_TYPE_FILE_UNLINK,
+                -err,
+                path,
+                "Unlink failed (parent unresolved)",
+            );
             return -(err as isize);
         }
     };
 
     match parent.unlink(&basename) {
         Ok(()) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, 0, path, "File or directory unlinked");
+            log_audit_event(
+                pid,
+                0,
+                AUDIT_TYPE_FILE_UNLINK,
+                0,
+                path,
+                "File or directory unlinked",
+            );
             0
         }
         Err(err) => {
-            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -(err as i32), path, "Unlink failed");
+            log_audit_event(pid, 0, AUDIT_TYPE_FILE_UNLINK, -err, path, "Unlink failed");
             -(err as isize)
         }
     }
@@ -405,10 +440,14 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
     };
 
     if let Ok(target_inode) = new_parent.lookup(&new_basename) {
-        if source_inode.file_type() == FileType::Directory && target_inode.file_type() != FileType::Directory {
+        if source_inode.file_type() == FileType::Directory
+            && target_inode.file_type() != FileType::Directory
+        {
             return -(ENOTDIR as isize);
         }
-        if source_inode.file_type() != FileType::Directory && target_inode.file_type() == FileType::Directory {
+        if source_inode.file_type() != FileType::Directory
+            && target_inode.file_type() == FileType::Directory
+        {
             return -(EISDIR as isize);
         }
     }
@@ -420,7 +459,14 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
         return -(err as isize);
     }
 
-    log_audit_event(pid, 0, AUDIT_TYPE_FILE_MODIFY, 0, newpath, "File or directory renamed/moved");
+    log_audit_event(
+        pid,
+        0,
+        AUDIT_TYPE_FILE_MODIFY,
+        0,
+        newpath,
+        "File or directory renamed/moved",
+    );
     0
 }
 
@@ -460,7 +506,7 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
     let mut written = 0;
     let mut entries_written = 0;
 
-    for i in current_idx..entries.len() {
+    for entry in entries.iter().skip(current_idx) {
         if written + dirent_size > count {
             break;
         }
@@ -468,7 +514,7 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
             Ok(p) => p,
             Err(e) => return -(map_user_error(e) as isize),
         };
-        if let Err(e) = target.write(entries[i]) {
+        if let Err(e) = target.write(*entry) {
             return -(map_user_error(e) as isize);
         }
         written += dirent_size;

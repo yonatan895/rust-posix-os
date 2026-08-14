@@ -1,8 +1,8 @@
 //! 16550 UART Serial Driver for Kernel Logging and Buffered Console I/O.
 
-use core::fmt::{self, Write};
 use crate::ostd::arch::{inb, outb};
 use crate::ostd::sync::SpinLock;
+use core::fmt::{self, Write};
 use log::{Level, Metadata, Record};
 
 const COM1: u16 = 0x3F8;
@@ -25,10 +25,15 @@ impl SerialPort {
         }
     }
 
+    /// Initializes the UART 16550 serial port registers.
+    ///
+    /// # Safety
+    ///
+    /// Directly programs UART hardware registers over I/O ports.
     pub unsafe fn init(&mut self) {
         outb(self.port + 1, 0x00); // Disable interrupts
         outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
-        outb(self.port + 0, 0x03); // Set divisor to 3 (38400 baud)
+        outb(self.port, 0x03); // Set divisor to 3 (38400 baud)
         outb(self.port + 1, 0x00);
         outb(self.port + 3, 0x03); // 8 bits, no parity, one stop bit
         outb(self.port + 2, 0xC7); // Enable FIFO, clear them, with 14-byte threshold
@@ -111,8 +116,8 @@ impl log::Log for KernelLogger {
         if self.enabled(record.metadata()) {
             let level_color = match record.level() {
                 Level::Error => "\x1b[31;1m[ERROR]\x1b[0m",
-                Level::Warn  => "\x1b[33;1m[WARN ]\x1b[0m",
-                Level::Info  => "\x1b[32;1m[INFO ]\x1b[0m",
+                Level::Warn => "\x1b[33;1m[WARN ]\x1b[0m",
+                Level::Info => "\x1b[32;1m[INFO ]\x1b[0m",
                 Level::Debug => "\x1b[36;1m[DEBUG]\x1b[0m",
                 Level::Trace => "\x1b[90;1m[TRACE]\x1b[0m",
             };
@@ -131,6 +136,11 @@ impl log::Log for KernelLogger {
     fn flush(&self) {}
 }
 
+/// Initializes COM1 serial port and configures the kernel logger.
+///
+/// # Safety
+///
+/// Must be called during single-threaded boot initialization.
 pub unsafe fn serial_init() {
     SERIAL1.lock().init();
     let _ = log::set_logger(&LOGGER);

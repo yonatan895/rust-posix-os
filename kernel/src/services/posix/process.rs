@@ -1,10 +1,10 @@
 //! POSIX Process Lifecycle & Signal System Calls.
 
-use posix_abi::*;
-use crate::services::process::*;
-use crate::services::ipc::SIGNALS;
-use crate::ostd::mm::{UserPtr, USER_STR_MAX};
 use super::{copy_user_path, map_user_error};
+use crate::ostd::mm::{USER_STR_MAX, UserPtr};
+use crate::services::ipc::SIGNALS;
+use crate::services::process::*;
+use posix_abi::*;
 
 /// POSIX fork system call.
 ///
@@ -115,7 +115,7 @@ pub fn sys_exit(code: i32) -> isize {
 }
 
 pub fn sys_kill(pid: i32, sig: i32) -> isize {
-    if sig < 1 || sig > 31 {
+    if !(1..=31).contains(&sig) {
         return -(EINVAL as isize);
     }
     match SIGNALS.send_signal(pid, sig) {

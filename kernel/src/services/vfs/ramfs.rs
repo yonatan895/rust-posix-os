@@ -1,12 +1,12 @@
 //! RamFs - Safe In-Memory Filesystem.
 
 use super::{FileType, Inode};
+use crate::ostd::sync::SpinLock;
 use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 pub struct RamFsDir {
     pub entries: SpinLock<BTreeMap<String, Arc<dyn Inode>>>,
@@ -32,7 +32,9 @@ impl RamFsDir {
         }
         let new_dir = RamFsDir::new();
         subdirs.insert(name.to_string(), new_dir.clone());
-        self.entries.lock().insert(name.to_string(), new_dir.clone());
+        self.entries
+            .lock()
+            .insert(name.to_string(), new_dir.clone());
         new_dir
     }
 }
@@ -58,12 +60,15 @@ impl Inode for RamFsDir {
         let entries = self.entries.lock();
         let mut list = Vec::new();
         for (name, child) in entries.iter() {
-            let mut dirent = Dirent64::default();
-            dirent.d_type = match child.file_type() {
+            let d_type = match child.file_type() {
                 FileType::Directory => DT_DIR,
                 FileType::CharacterDevice => DT_CHR,
                 FileType::Fifo => DT_FIFO,
                 _ => DT_REG,
+            };
+            let mut dirent = Dirent64 {
+                d_type,
+                ..Default::default()
             };
             let bytes = name.as_bytes();
             let len = bytes.len().min(dirent.d_name.len() - 1);
@@ -75,9 +80,10 @@ impl Inode for RamFsDir {
     }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFDIR | 0o755;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFDIR | 0o755,
+            ..Default::default()
+        })
     }
 
     fn create_file(&self, name: &str) -> Result<Arc<dyn Inode>, i32> {
@@ -96,7 +102,9 @@ impl Inode for RamFsDir {
             return Err(EEXIST);
         }
         let new_dir = RamFsDir::new();
-        self.subdirs.lock().insert(name.to_string(), new_dir.clone());
+        self.subdirs
+            .lock()
+            .insert(name.to_string(), new_dir.clone());
         entries.insert(name.to_string(), new_dir.clone());
         Ok(new_dir)
     }
@@ -168,10 +176,11 @@ impl Inode for RamFsFile {
     }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFREG | 0o644;
-        s.st_size = self.data.lock().len() as i64;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFREG | 0o644,
+            st_size: self.data.lock().len() as i64,
+            ..Default::default()
+        })
     }
 
     fn truncate(&self) -> Result<(), i32> {

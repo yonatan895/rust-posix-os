@@ -1,11 +1,11 @@
 //! POSIX Epoll Non-blocking Event Multiplexing System Calls.
 
-use alloc::sync::Arc;
-use posix_abi::*;
+use super::map_user_error;
+use crate::ostd::mm::UserPtr;
 use crate::services::process::get_current_process;
 use crate::services::vfs::FileHandle;
-use crate::ostd::mm::UserPtr;
-use super::map_user_error;
+use alloc::sync::Arc;
+use posix_abi::*;
 
 pub fn sys_epoll_create1(_flags: i32) -> isize {
     let proc_lock = match get_current_process() {
@@ -56,7 +56,12 @@ pub fn sys_epoll_ctl(epfd: i32, op: i32, fd: i32, event_ptr: *const EpollEvent) 
     }
 }
 
-pub fn sys_epoll_wait(epfd: i32, events_ptr: *mut EpollEvent, maxevents: i32, _timeout: i32) -> isize {
+pub fn sys_epoll_wait(
+    epfd: i32,
+    events_ptr: *mut EpollEvent,
+    maxevents: i32,
+    _timeout: i32,
+) -> isize {
     if maxevents <= 0 || events_ptr.is_null() {
         return -(EINVAL as isize);
     }
@@ -81,13 +86,13 @@ pub fn sys_epoll_wait(epfd: i32, events_ptr: *mut EpollEvent, maxevents: i32, _t
     match epoll.wait(&mut kbuf, maxevents as usize) {
         Ok(count) => {
             let size = core::mem::size_of::<EpollEvent>();
-            for i in 0..count {
+            for (i, &event) in kbuf.iter().enumerate().take(count) {
                 let addr = (events_ptr as usize).saturating_add(i.saturating_mul(size));
                 let out = match UserPtr::<EpollEvent>::from_raw(addr) {
                     Ok(p) => p,
                     Err(e) => return -(map_user_error(e) as isize),
                 };
-                if let Err(e) = out.write(kbuf[i]) {
+                if let Err(e) = out.write(event) {
                     return -(map_user_error(e) as isize);
                 }
             }

@@ -1,9 +1,9 @@
 //! Initramfs TAR Archive Parser.
 
+use crate::ostd::mm::read_pod;
+use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
-use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
-use crate::ostd::mm::read_pod;
 
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
@@ -30,7 +30,7 @@ struct TarHeader {
 fn parse_octal(bytes: &[u8]) -> usize {
     let mut val = 0;
     for &b in bytes {
-        if b >= b'0' && b <= b'7' {
+        if (b'0'..=b'7').contains(&b) {
             val = (val << 3) | (b - b'0') as usize;
         } else if b == 0 || b == b' ' {
             break;
@@ -39,7 +39,10 @@ fn parse_octal(bytes: &[u8]) -> usize {
     val
 }
 
-pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<usize, &'static str> {
+pub fn unpack_tar_archive(
+    tar_data: &[u8],
+    root_dir: &Arc<RamFsDir>,
+) -> Result<usize, &'static str> {
     let mut offset = 0;
     let mut files_unpacked = 0;
 
@@ -52,7 +55,8 @@ pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<u
         let header: TarHeader = read_pod(header_slice, 0).ok_or("Tar header truncated")?;
         let name = header.name;
         let name_len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
-        let path = core::str::from_utf8(&name[..name_len]).map_err(|_| "Invalid UTF-8 filename in tar")?;
+        let path =
+            core::str::from_utf8(&name[..name_len]).map_err(|_| "Invalid UTF-8 filename in tar")?;
         let size = parse_octal(&header.size);
         let typeflag = header.typeflag;
 
@@ -80,7 +84,7 @@ pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<u
             }
         }
 
-        let data_blocks = (size + 511) / 512;
+        let data_blocks = size.div_ceil(512);
         offset += data_blocks * 512;
     }
 

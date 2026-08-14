@@ -1,8 +1,8 @@
 //! POSIX Signals (signal.h).
 
-use posix_abi::*;
 use crate::syscall::*;
 use crate::unistd::getpid;
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn sigaction(

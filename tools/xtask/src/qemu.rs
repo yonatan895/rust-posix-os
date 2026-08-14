@@ -22,13 +22,22 @@ pub fn setup_iso_root() {
             .unwrap_or(false);
         if !downloaded {
             let _ = Command::new("powershell")
-                .args(["-Command", &format!("Invoke-WebRequest -Uri '{}' -OutFile 'BOOTX64.EFI'", url)])
+                .args([
+                    "-Command",
+                    &format!("Invoke-WebRequest -Uri '{}' -OutFile 'BOOTX64.EFI'", url),
+                ])
                 .status();
         }
     }
     let _ = fs::copy("BOOTX64.EFI", efi_boot.join("BOOTX64.EFI"));
-    let _ = fs::copy("target/x86_64-unknown-none/debug/kernel", boot_dir.join("kernel"));
-    let _ = fs::copy("target/x86_64-unknown-none/debug/initramfs.tar", boot_dir.join("initramfs.tar"));
+    let _ = fs::copy(
+        "target/x86_64-unknown-none/debug/kernel",
+        boot_dir.join("kernel"),
+    );
+    let _ = fs::copy(
+        "target/x86_64-unknown-none/debug/initramfs.tar",
+        boot_dir.join("initramfs.tar"),
+    );
     let limine_cfg = "timeout: 0\nserial: yes\nverbose: yes\n\n/Rust POSIX OS\n    protocol: limine\n    kernel_path: boot():/boot/kernel\n    module_path: boot():/boot/initramfs.tar\n";
     let _ = fs::write(iso_root.join("limine.conf"), limine_cfg);
     let _ = fs::write(boot_dir.join("limine.conf"), limine_cfg);
@@ -67,8 +76,11 @@ pub fn find_ovmf() -> PathBuf {
         candidates.push(PathBuf::from(pf).join("qemu/share/edk2-x86_64-code.fd"));
     }
     if let Ok(home) = env::var("USERPROFILE").or_else(|_| env::var("HOME")) {
-        candidates.push(PathBuf::from(&home).join("scoop/apps/qemu/current/share/edk2-x86_64-code.fd"));
-        candidates.push(PathBuf::from(home).join("scoop/apps/qemu/current/share/edk2-x86_64-secure-code.fd"));
+        candidates
+            .push(PathBuf::from(&home).join("scoop/apps/qemu/current/share/edk2-x86_64-code.fd"));
+        candidates.push(
+            PathBuf::from(home).join("scoop/apps/qemu/current/share/edk2-x86_64-secure-code.fd"),
+        );
     }
     for c in &candidates {
         if c.exists() {

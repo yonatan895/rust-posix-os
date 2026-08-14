@@ -1,10 +1,10 @@
 //! Asynchronous Task Executor and Global Async Runtime.
 
+use super::async_task::{Task, TaskId, create_waker};
+use crate::ostd::sync::SpinLock;
 use alloc::collections::{BTreeMap, VecDeque};
 use core::future::Future;
 use core::task::{Context, Poll};
-use crate::ostd::sync::SpinLock;
-use super::async_task::{create_waker, Task, TaskId};
 
 pub static WAKE_QUEUE: SpinLock<VecDeque<TaskId>> = SpinLock::new(VecDeque::new());
 
@@ -22,7 +22,15 @@ impl Executor {
             tasks: BTreeMap::new(),
         }
     }
+}
 
+impl Default for Executor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Executor {
     pub fn spawn(&mut self, future: impl Future<Output = ()> + Send + 'static) -> TaskId {
         let task = Task::new(future);
         let task_id = task.id;
@@ -74,9 +82,16 @@ pub fn async_init() {
 }
 
 pub fn spawn(future: impl Future<Output = ()> + Send + 'static) -> Option<TaskId> {
-    GLOBAL_EXECUTOR.lock().as_mut().map(|exec| exec.spawn(future))
+    GLOBAL_EXECUTOR
+        .lock()
+        .as_mut()
+        .map(|exec| exec.spawn(future))
 }
 
 pub fn run_async_tasks() -> usize {
-    GLOBAL_EXECUTOR.lock().as_mut().map(|exec| exec.run_ready_tasks()).unwrap_or(0)
+    GLOBAL_EXECUTOR
+        .lock()
+        .as_mut()
+        .map(|exec| exec.run_ready_tasks())
+        .unwrap_or(0)
 }

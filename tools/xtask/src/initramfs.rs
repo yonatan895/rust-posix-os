@@ -1,9 +1,9 @@
 //! POSIX Tarball Packaging for Userland Initramfs.
 
+use crate::build::strip_binary;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
-use crate::build::strip_binary;
 
 pub fn create_initramfs() {
     println!("[xtask] Packaging initramfs.tar archive...");
@@ -12,7 +12,11 @@ pub fn create_initramfs() {
     let mut tar_file = File::create(&initramfs_path).expect("Failed to create initramfs.tar");
     pack_bin(&mut tar_file, &target_dir.join("init"), "bin/init");
     pack_bin(&mut tar_file, &target_dir.join("shell"), "bin/sh");
-    pack_bin(&mut tar_file, &target_dir.join("coreutils"), "bin/coreutils");
+    pack_bin(
+        &mut tar_file,
+        &target_dir.join("coreutils"),
+        "bin/coreutils",
+    );
     let motd = b"Welcome to Rust POSIX OS\nPOSIX.1-2024 Compliant Framekernel\n\n";
     write_tar_entry(&mut tar_file, "etc/motd", motd, false);
     let zero = [0u8; 512];

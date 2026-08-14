@@ -1,13 +1,13 @@
 //! Kernel Security Audit Journal and System Snapshot Subsystem.
 
+use crate::ostd::mm::{get_heap_stats, get_pmm_stats};
+use crate::ostd::sync::SpinLock;
+use crate::services::monitor::SYSTEM_MONITOR;
+use crate::services::process::PROCESS_TABLE;
 use alloc::string::String;
 use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
-use crate::ostd::mm::{get_pmm_stats, get_heap_stats};
-use crate::services::process::PROCESS_TABLE;
-use crate::services::monitor::SYSTEM_MONITOR;
 
 pub const MAX_JOURNAL_ENTRIES: usize = 512;
 pub const MAX_SNAPSHOTS: usize = 64;
@@ -43,6 +43,12 @@ impl AuditJournal {
         }
         self.entries.push(event);
         self.total_logged += 1;
+    }
+}
+
+impl Default for AuditJournal {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -84,9 +90,22 @@ impl SnapshotManager {
     }
 }
 
+impl Default for SnapshotManager {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub static SNAPSHOT_MANAGER: SpinLock<SnapshotManager> = SpinLock::new(SnapshotManager::new());
 
-pub fn log_audit_event(pid: i32, uid: u32, event_type: u32, status: i32, target: &str, details: &str) -> u64 {
+pub fn log_audit_event(
+    pid: i32,
+    uid: u32,
+    event_type: u32,
+    status: i32,
+    target: &str,
+    details: &str,
+) -> u64 {
     let seq = NEXT_EVENT_SEQ.fetch_add(1, Ordering::Relaxed);
     let ticks = {
         let mon = SYSTEM_MONITOR.lock();
@@ -178,7 +197,11 @@ pub fn create_audit_snapshot(label: &str) -> u64 {
         AUDIT_TYPE_SNAPSHOT_CREATED,
         0,
         label,
-        &alloc::format!("Snapshot #{} created (covered up to journal seq {})", id, current_seq),
+        &alloc::format!(
+            "Snapshot #{} created (covered up to journal seq {})",
+            id,
+            current_seq
+        ),
     );
 
     id
@@ -204,5 +227,8 @@ pub fn audit_init() {
         "Kernel audit logging initialized",
     );
     let boot_snap = create_audit_snapshot("boot_baseline");
-    log::info!("[AUDIT] Subsystem initialized. Created baseline snapshot #{}.", boot_snap);
+    log::info!(
+        "[AUDIT] Subsystem initialized. Created baseline snapshot #{}.",
+        boot_snap
+    );
 }

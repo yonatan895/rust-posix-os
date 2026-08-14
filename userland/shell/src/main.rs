@@ -3,24 +3,41 @@
 
 //! Rust POSIX Shell - Interactive Ring 3 Terminal & Command Interpreter.
 
-mod line_draw;
-mod history;
+mod builtins;
 mod completion;
 mod editor;
+mod history;
+mod line_draw;
 mod pipeline;
-mod builtins;
 
-use core::panic::PanicInfo;
-use libc::*;
-use posix_abi::*;
-use editor::read_line_with_history;
-use pipeline::execute_pipeline_line;
 use builtins::*;
+use core::panic::PanicInfo;
+use editor::read_line_with_history;
+use libc::*;
+use pipeline::execute_pipeline_line;
+use posix_abi::*;
 
 pub static KNOWN_COMMANDS: [&str; 20] = [
-    "help", "uname", "pwd", "cd", "ls", "cp", "mv", "cat", "touch", "mkdir", "rm",
-    "ps", "top", "monitor", "journal", "snapshot", "echo", "async-demo",
-    "clear", "exit",
+    "help",
+    "uname",
+    "pwd",
+    "cd",
+    "ls",
+    "cp",
+    "mv",
+    "cat",
+    "touch",
+    "mkdir",
+    "rm",
+    "ps",
+    "top",
+    "monitor",
+    "journal",
+    "snapshot",
+    "echo",
+    "async-demo",
+    "clear",
+    "exit",
 ];
 
 #[no_mangle]
@@ -51,7 +68,13 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     } else if strcmp(cmd, b"uname\0".as_ptr()) == 0 {
         let mut uts = Utsname::default();
         syscall::syscall1(SYS_UNAME, &mut uts as *mut _ as usize);
-        printf(b"%s %s %s %s\n\0".as_ptr(), uts.sysname.as_ptr(), uts.release.as_ptr(), uts.version.as_ptr(), uts.machine.as_ptr());
+        printf(
+            b"%s %s %s %s\n\0".as_ptr(),
+            uts.sysname.as_ptr(),
+            uts.release.as_ptr(),
+            uts.version.as_ptr(),
+            uts.machine.as_ptr(),
+        );
     } else if strcmp(cmd, b"pwd\0".as_ptr()) == 0 {
         let mut buf = [0u8; 128];
         getcwd(buf.as_mut_ptr(), buf.len());

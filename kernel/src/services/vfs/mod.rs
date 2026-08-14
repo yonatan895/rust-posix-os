@@ -1,17 +1,17 @@
 //! Virtual File System (VFS) Layer - De-privileged Safe Service.
 
-pub mod ramfs;
 pub mod devfs;
-pub mod pipe;
-pub mod tar;
 pub mod epoll;
+pub mod pipe;
 pub mod procfs;
+pub mod ramfs;
+pub mod tar;
 
+use crate::ostd::sync::SpinLock;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FileType {
@@ -201,7 +201,10 @@ pub fn resolve_path_with_cwd(cwd: &str, path: &str) -> Result<Arc<dyn Inode>, i3
     Ok(current)
 }
 
-pub fn resolve_parent_and_basename_with_cwd(cwd: &str, path: &str) -> Result<(Arc<dyn Inode>, String), i32> {
+pub fn resolve_parent_and_basename_with_cwd(
+    cwd: &str,
+    path: &str,
+) -> Result<(Arc<dyn Inode>, String), i32> {
     let norm = normalize_path(cwd, path);
 
     if norm == "/" {

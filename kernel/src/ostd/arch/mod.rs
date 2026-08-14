@@ -6,11 +6,21 @@ pub mod syscall;
 
 use core::arch::asm;
 
+/// Writes an 8-bit value to the specified I/O port.
+///
+/// # Safety
+///
+/// Writing to an I/O port can directly affect hardware state and may cause system instability.
 #[inline(always)]
 pub unsafe fn outb(port: u16, val: u8) {
     asm!("out dx, al", in("dx") port, in("al") val, options(nomem, nostack, preserves_flags));
 }
 
+/// Reads an 8-bit value from the specified I/O port.
+///
+/// # Safety
+///
+/// Reading from an I/O port can have hardware side effects.
 #[inline(always)]
 pub unsafe fn inb(port: u16) -> u8 {
     let val: u8;
@@ -18,11 +28,21 @@ pub unsafe fn inb(port: u16) -> u8 {
     val
 }
 
+/// Writes a 16-bit value to the specified I/O port.
+///
+/// # Safety
+///
+/// Writing to an I/O port can directly affect hardware state and may cause system instability.
 #[inline(always)]
 pub unsafe fn outw(port: u16, val: u16) {
     asm!("out dx, ax", in("dx") port, in("ax") val, options(nomem, nostack, preserves_flags));
 }
 
+/// Reads a 16-bit value from the specified I/O port.
+///
+/// # Safety
+///
+/// Reading from an I/O port can have hardware side effects.
 #[inline(always)]
 pub unsafe fn inw(port: u16) -> u16 {
     let val: u16;
@@ -30,11 +50,21 @@ pub unsafe fn inw(port: u16) -> u16 {
     val
 }
 
+/// Writes a 32-bit value to the specified I/O port.
+///
+/// # Safety
+///
+/// Writing to an I/O port can directly affect hardware state and may cause system instability.
 #[inline(always)]
 pub unsafe fn outl(port: u16, val: u32) {
     asm!("out dx, eax", in("dx") port, in("eax") val, options(nomem, nostack, preserves_flags));
 }
 
+/// Reads a 32-bit value from the specified I/O port.
+///
+/// # Safety
+///
+/// Reading from an I/O port can have hardware side effects.
 #[inline(always)]
 pub unsafe fn inl(port: u16) -> u32 {
     let val: u32;
@@ -42,11 +72,21 @@ pub unsafe fn inl(port: u16) -> u32 {
     val
 }
 
+/// Waits for an I/O operation to complete by writing to port 0x80.
+///
+/// # Safety
+///
+/// Modifies port 0x80 diagnostics port state.
 #[inline(always)]
 pub unsafe fn io_wait() {
     outb(0x80, 0);
 }
 
+/// Writes a 64-bit value to a Model-Specific Register (MSR).
+///
+/// # Safety
+///
+/// Writing invalid values or writing to unsupported MSRs causes CPU general protection faults.
 #[inline(always)]
 pub unsafe fn wrmsr(msr: u32, val: u64) {
     let low = val as u32;
@@ -54,6 +94,11 @@ pub unsafe fn wrmsr(msr: u32, val: u64) {
     asm!("wrmsr", in("ecx") msr, in("eax") low, in("edx") high, options(nostack, preserves_flags));
 }
 
+/// Reads a 64-bit value from a Model-Specific Register (MSR).
+///
+/// # Safety
+///
+/// Reading from unsupported MSRs causes CPU general protection faults.
 #[inline(always)]
 pub unsafe fn rdmsr(msr: u32) -> u64 {
     let low: u32;
@@ -62,22 +107,41 @@ pub unsafe fn rdmsr(msr: u32) -> u64 {
     ((high as u64) << 32) | (low as u64)
 }
 
+/// Halts the CPU until the next external interrupt.
+///
+/// # Safety
+///
+/// Execution stops until an interrupt occurs.
 #[inline(always)]
 pub unsafe fn hlt() {
     asm!("hlt", options(nomem, nostack));
 }
 
+/// Clears the interrupt flag (disables interrupts).
+///
+/// # Safety
+///
+/// Disabling interrupts affects scheduling and device responsiveness.
 #[inline(always)]
 pub unsafe fn cli() {
     asm!("cli", options(nomem, nostack));
 }
 
+/// Sets the interrupt flag (enables interrupts).
+///
+/// # Safety
+///
+/// Enabling interrupts allows CPU interrupt handlers to execute.
 #[inline(always)]
 pub unsafe fn sti() {
     asm!("sti", options(nomem, nostack));
 }
 
 /// Read the current CPU RFLAGS register.
+///
+/// # Safety
+///
+/// Reads architectural CPU flags register directly.
 #[inline(always)]
 pub unsafe fn read_rflags() -> u64 {
     let val: u64;
@@ -86,11 +150,20 @@ pub unsafe fn read_rflags() -> u64 {
 }
 
 /// Restore the CPU RFLAGS register (including interrupt enable state).
+///
+/// # Safety
+///
+/// Restoring invalid CPU flags or changing interrupt state can disrupt kernel execution.
 #[inline(always)]
 pub unsafe fn restore_rflags(val: u64) {
     asm!("push {}", "popfq", in(reg) val, options(nomem));
 }
 
+/// Reads the CR2 register containing the linear address that caused a page fault.
+///
+/// # Safety
+///
+/// Reads architectural CPU control register directly.
 #[inline(always)]
 pub unsafe fn read_cr2() -> u64 {
     let val: u64;
@@ -98,6 +171,11 @@ pub unsafe fn read_cr2() -> u64 {
     val
 }
 
+/// Reads the CR3 register containing the physical address of the active PML4 table.
+///
+/// # Safety
+///
+/// Reads architectural CPU control register directly.
 #[inline(always)]
 pub unsafe fn read_cr3() -> u64 {
     let val: u64;
@@ -105,6 +183,11 @@ pub unsafe fn read_cr3() -> u64 {
     val
 }
 
+/// Writes a new physical base address to the CR3 register, switching the page table.
+///
+/// # Safety
+///
+/// Writing an invalid PML4 physical address causes immediate page faults and triple faults.
 #[inline(always)]
 pub unsafe fn write_cr3(val: u64) {
     asm!("mov cr3, {}", in(reg) val, options(nostack));

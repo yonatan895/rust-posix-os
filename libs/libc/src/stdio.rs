@@ -1,8 +1,8 @@
 //! Standard Input/Output Library (stdio.h).
 
-use posix_abi::*;
-use crate::unistd::{read, write};
 use crate::string::strlen;
+use crate::unistd::{read, write};
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn putchar(c: i32) -> i32 {
@@ -24,11 +24,7 @@ pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
 pub unsafe extern "C" fn getchar() -> i32 {
     let mut buf = 0u8;
     let n = read(STDIN_FILENO, &mut buf as *mut u8, 1);
-    if n == 1 {
-        buf as i32
-    } else {
-        -1
-    }
+    if n == 1 { buf as i32 } else { -1 }
 }
 
 #[no_mangle]
@@ -242,7 +238,11 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
     }
 
     let written = fmt_buf.written;
-    let actual_len = if written < buf.len() { written } else { buf.len() - 1 };
+    let actual_len = if written < buf.len() {
+        written
+    } else {
+        buf.len() - 1
+    };
     write(STDOUT_FILENO, buf.as_ptr(), actual_len);
     written as i32
 }

@@ -1,12 +1,14 @@
 //! Zero-Flicker Line Editor with History Traversal & Autocompletion Integration.
 
-use crate::line_draw::LineBuffer;
-use crate::history::*;
 use crate::completion::handle_tab_completion;
+use crate::history::*;
+use crate::line_draw::LineBuffer;
 
 pub fn is_known_command(cmd: &str, known_commands: &[&str]) -> bool {
     for &k in known_commands {
-        if cmd == k { return true; }
+        if cmd == k {
+            return true;
+        }
     }
     false
 }
@@ -23,7 +25,11 @@ pub unsafe fn clear_menu_line(cwd: *const u8, buf: &[u8], len: usize, known_comm
     repaint_prompt_line(cwd, buf, len, known_commands);
 }
 
-pub unsafe fn read_line_with_history(cwd: *const u8, buf: &mut [u8], known_commands: &[&str]) -> usize {
+pub unsafe fn read_line_with_history(
+    cwd: *const u8,
+    buf: &mut [u8],
+    known_commands: &[&str],
+) -> usize {
     let mut idx = 0;
     let mut history_cursor = 0;
     let mut draft_buf = [0u8; MAX_CMD_LEN];
@@ -33,7 +39,9 @@ pub unsafe fn read_line_with_history(cwd: *const u8, buf: &mut [u8], known_comma
 
     loop {
         let b = libc::getchar();
-        if b < 0 { continue; }
+        if b < 0 {
+            continue;
+        }
         let ch = b as u8;
 
         if ch == b'\n' || ch == b'\r' {

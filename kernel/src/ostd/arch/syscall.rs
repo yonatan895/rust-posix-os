@@ -1,8 +1,8 @@
 //! Fast x86_64 System Call Subsystem (MSR LSTAR).
 
-use core::arch::naked_asm;
-use super::{rdmsr, wrmsr};
 use super::gdt::KERNEL_CODE_SEL;
+use super::{rdmsr, wrmsr};
+use core::arch::naked_asm;
 
 const IA32_EFER: u32 = 0xC0000080;
 const IA32_STAR: u32 = 0xC0000081;
@@ -42,36 +42,38 @@ pub struct SyscallRegisters {
     pub rsp: usize, // User RSP
 }
 
+/// Naked entry point for the x86_64 fast `syscall` instruction.
+///
+/// # Safety
+///
+/// Must only be jumped to directly by CPU hardware during the `syscall` instruction.
 #[unsafe(naked)]
 pub unsafe extern "C" fn syscall_entry() {
     naked_asm!(
         // Swap to kernel GS base
         "swapgs",
-        "mov gs:[8], rsp",       // Save user RSP in PerCpuData.user_rsp
-        "mov rsp, gs:[0]",       // Load kernel RSP from PerCpuData.kernel_rsp
-
+        "mov gs:[8], rsp", // Save user RSP in PerCpuData.user_rsp
+        "mov rsp, gs:[0]", // Load kernel RSP from PerCpuData.kernel_rsp
         // Push registers to build SyscallRegisters structure
-        "push gs:[8]",           // User RSP
-        "push r11",              // User RFLAGS
-        "push rcx",              // User RIP
-        "push rax",              // Syscall number
-        "push rdi",              // Arg 1
-        "push rsi",              // Arg 2
-        "push rdx",              // Arg 3
-        "push r10",              // Arg 4 (POSIX x86_64 ABI uses r10 for syscall arg 4)
-        "push r8",               // Arg 5
-        "push r9",               // Arg 6
+        "push gs:[8]", // User RSP
+        "push r11",    // User RFLAGS
+        "push rcx",    // User RIP
+        "push rax",    // Syscall number
+        "push rdi",    // Arg 1
+        "push rsi",    // Arg 2
+        "push rdx",    // Arg 3
+        "push r10",    // Arg 4 (POSIX x86_64 ABI uses r10 for syscall arg 4)
+        "push r8",     // Arg 5
+        "push r9",     // Arg 6
         "push rbx",
         "push rbp",
         "push r12",
         "push r13",
         "push r14",
         "push r15",
-
         // Pass pointer to SyscallRegisters as first argument (rdi)
         "mov rdi, rsp",
         "call rust_syscall_dispatcher",
-
         // Restore registers
         "pop r15",
         "pop r14",
@@ -85,15 +87,20 @@ pub unsafe extern "C" fn syscall_entry() {
         "pop rdx",
         "pop rsi",
         "pop rdi",
-        "pop rax",               // Return value from syscall dispatcher
-        "pop rcx",               // Restore RIP
-        "pop r11",              // Restore RFLAGS
-        "pop rsp",               // Restore user RSP
+        "pop rax", // Return value from syscall dispatcher
+        "pop rcx", // Restore RIP
+        "pop r11", // Restore RFLAGS
+        "pop rsp", // Restore user RSP
         "swapgs",
         "sysretq"
     );
 }
 
+/// Programs CPU Model-Specific Registers (STAR, LSTAR, FMASK, EFER) for fast system call dispatch.
+///
+/// # Safety
+///
+/// Must be invoked during boot before entering user mode with a valid kernel stack address.
 pub unsafe fn syscall_init(kernel_stack_top: u64) {
     // 0. Initialize PerCpuData and Kernel GS Base
     BSP_PER_CPU.kernel_rsp = kernel_stack_top;
@@ -115,4 +122,14 @@ pub unsafe fn syscall_init(kernel_stack_top: u64) {
     // 4. Configure FMASK MSR to clear IF (interrupts), DF, TF upon syscall entry
     let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
     wrmsr(IA32_FMASK, fmask);
+}
+
+/// Syscall dispatcher bridge called from `syscall_entry` assembly.
+///
+/// # Safety
+///
+/// `regs` must either be null or point to a live `SyscallRegisters` frame on the current stack.
+#[no_mangle]
+pub unsafe extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
+    crate::ostd::mm::with_syscall_regs(regs, crate::services::posix::dispatch_syscall)
 }

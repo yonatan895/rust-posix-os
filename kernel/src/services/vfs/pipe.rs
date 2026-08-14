@@ -1,10 +1,10 @@
 //! POSIX Anonymous Pipe Implementation.
 
 use super::{FileType, Inode, InodePollFlags};
+use crate::ostd::sync::SpinLock;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
-use crate::ostd::sync::SpinLock;
 
 pub const PIPE_BUFFER_SIZE: usize = 4096;
 
@@ -26,6 +26,7 @@ pub struct PipeWriteEnd {
 }
 
 impl PipeBuffer {
+    #[allow(clippy::new_ret_no_self)]
     pub fn new() -> (Arc<PipeReadEnd>, Arc<PipeWriteEnd>) {
         let buffer = Arc::new(SpinLock::new(PipeBuffer {
             data: [0; PIPE_BUFFER_SIZE],
@@ -36,14 +37,18 @@ impl PipeBuffer {
             writers_open: 1,
         }));
         (
-            Arc::new(PipeReadEnd { buf: buffer.clone() }),
+            Arc::new(PipeReadEnd {
+                buf: buffer.clone(),
+            }),
             Arc::new(PipeWriteEnd { buf: buffer }),
         )
     }
 }
 
 impl Inode for PipeReadEnd {
-    fn file_type(&self) -> FileType { FileType::Fifo }
+    fn file_type(&self) -> FileType {
+        FileType::Fifo
+    }
 
     fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
@@ -54,22 +59,29 @@ impl Inode for PipeReadEnd {
             return Err(EAGAIN);
         }
         let to_read = buf.len().min(pipe.len);
-        for i in 0..to_read {
-            buf[i] = pipe.data[pipe.read_pos];
+        for item in buf.iter_mut().take(to_read) {
+            *item = pipe.data[pipe.read_pos];
             pipe.read_pos = (pipe.read_pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len -= to_read;
         Ok(to_read)
     }
 
-    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize, i32> { Err(EBADF) }
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn write(&self, _offset: usize, _buf: &[u8]) -> Result<usize, i32> {
+        Err(EBADF)
+    }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFIFO | 0o600;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFIFO | 0o600,
+            ..Default::default()
+        })
     }
 
     fn poll(&self) -> InodePollFlags {
@@ -84,9 +96,13 @@ impl Inode for PipeReadEnd {
 }
 
 impl Inode for PipeWriteEnd {
-    fn file_type(&self) -> FileType { FileType::Fifo }
+    fn file_type(&self) -> FileType {
+        FileType::Fifo
+    }
 
-    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> { Err(EBADF) }
+    fn read(&self, _offset: usize, _buf: &mut [u8]) -> Result<usize, i32> {
+        Err(EBADF)
+    }
 
     fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
@@ -98,22 +114,27 @@ impl Inode for PipeWriteEnd {
             return Err(EAGAIN);
         }
         let to_write = buf.len().min(space);
-        for i in 0..to_write {
+        for &byte in buf.iter().take(to_write) {
             let pos = pipe.write_pos;
-            pipe.data[pos] = buf[i];
+            pipe.data[pos] = byte;
             pipe.write_pos = (pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len += to_write;
         Ok(to_write)
     }
 
-    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> { Err(ENOTDIR) }
-    fn readdir(&self) -> Result<Vec<Dirent64>, i32> { Err(ENOTDIR) }
+    fn lookup(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
+        Err(ENOTDIR)
+    }
+    fn readdir(&self) -> Result<Vec<Dirent64>, i32> {
+        Err(ENOTDIR)
+    }
 
     fn stat(&self) -> Result<Stat, i32> {
-        let mut s = Stat::default();
-        s.st_mode = S_IFIFO | 0o600;
-        Ok(s)
+        Ok(Stat {
+            st_mode: S_IFIFO | 0o600,
+            ..Default::default()
+        })
     }
 
     fn poll(&self) -> InodePollFlags {
@@ -130,17 +151,13 @@ impl Inode for PipeWriteEnd {
 impl Drop for PipeReadEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
-        if pipe.readers_open > 0 {
-            pipe.readers_open -= 1;
-        }
+        pipe.readers_open = pipe.readers_open.saturating_sub(1);
     }
 }
 
 impl Drop for PipeWriteEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
-        if pipe.writers_open > 0 {
-            pipe.writers_open -= 1;
-        }
+        pipe.writers_open = pipe.writers_open.saturating_sub(1);
     }
 }

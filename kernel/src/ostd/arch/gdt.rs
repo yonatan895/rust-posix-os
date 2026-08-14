@@ -5,9 +5,9 @@ use core::mem::size_of;
 
 pub const KERNEL_CODE_SEL: u16 = 0x08;
 pub const KERNEL_DATA_SEL: u16 = 0x10;
-pub const USER_DATA_SEL: u16   = 0x18 | 3;
-pub const USER_CODE_SEL: u16   = 0x20 | 3;
-pub const TSS_SEL: u16         = 0x28;
+pub const USER_DATA_SEL: u16 = 0x18 | 3;
+pub const USER_CODE_SEL: u16 = 0x20 | 3;
+pub const TSS_SEL: u16 = 0x28;
 
 #[repr(C, packed)]
 pub struct TSS {
@@ -50,6 +50,12 @@ impl TSS {
     }
 }
 
+impl Default for TSS {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 #[repr(C, packed)]
 pub struct GdtDescriptor {
     pub limit: u16,
@@ -64,6 +70,11 @@ pub struct Gdt {
 static mut GLOBAL_TSS: TSS = TSS::new();
 static mut GLOBAL_GDT: Gdt = Gdt { entries: [0; 7] };
 
+/// Initializes the GDT and loads the 64-bit Task State Segment (TSS).
+///
+/// # Safety
+///
+/// Must be called during single-threaded boot initialization with a valid kernel stack address.
 pub unsafe fn gdt_init(kernel_stack_top: u64) {
     GLOBAL_TSS.rsp0 = kernel_stack_top;
 
@@ -117,6 +128,11 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
     );
 }
 
+/// Sets the privilege level 0 stack pointer (RSP0) in the active TSS.
+///
+/// # Safety
+///
+/// `stack_top` must be a valid, mapped kernel stack memory address.
 pub unsafe fn set_kernel_stack(stack_top: u64) {
     GLOBAL_TSS.rsp0 = stack_top;
 }

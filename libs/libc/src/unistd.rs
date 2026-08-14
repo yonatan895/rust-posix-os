@@ -1,7 +1,7 @@
 //! POSIX Standard Symbolic Constants & Types (unistd).
 
-use posix_abi::*;
 use crate::syscall::*;
+use posix_abi::*;
 
 #[no_mangle]
 pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
@@ -49,7 +49,11 @@ pub unsafe extern "C" fn fork() -> i32 {
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn execve(path: *const u8, argv: *const *const u8, envp: *const *const u8) -> i32 {
+pub unsafe extern "C" fn execve(
+    path: *const u8,
+    argv: *const *const u8,
+    envp: *const *const u8,
+) -> i32 {
     syscall3(SYS_EXECVE, path as usize, argv as usize, envp as usize) as i32
 }
 
@@ -66,7 +70,12 @@ pub unsafe extern "C" fn getppid() -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
     let mut term = Termios::default();
-    let res = syscall3(SYS_IOCTL, fd as usize, 0x5401 /* TCGETS */, &mut term as *mut _ as usize);
+    let res = syscall3(
+        SYS_IOCTL,
+        fd as usize,
+        0x5401, /* TCGETS */
+        &mut term as *mut _ as usize,
+    );
     if res == 0 { 1 } else { 0 }
 }
 
@@ -78,11 +87,7 @@ pub unsafe extern "C" fn chdir(path: *const u8) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn getcwd(buf: *mut u8, size: usize) -> *mut u8 {
     let res = syscall2(SYS_GETCWD, buf as usize, size) as isize;
-    if res >= 0 {
-        buf
-    } else {
-        core::ptr::null_mut()
-    }
+    if res >= 0 { buf } else { core::ptr::null_mut() }
 }
 
 #[no_mangle]
@@ -107,7 +112,11 @@ pub unsafe extern "C" fn sleep(seconds: u32) -> u32 {
         tv_nsec: 0,
     };
     let mut rem = Timespec::default();
-    syscall2(SYS_NANOSLEEP, &req as *const _ as usize, &mut rem as *mut _ as usize);
+    syscall2(
+        SYS_NANOSLEEP,
+        &req as *const _ as usize,
+        &mut rem as *mut _ as usize,
+    );
     rem.tv_sec as u32
 }
 
@@ -127,7 +136,12 @@ pub unsafe extern "C" fn sysinfo(info: *mut Sysinfo) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn audit_log(event_type: u32, target: *const u8, details: *const u8) -> i32 {
-    syscall3(SYS_AUDIT_LOG, event_type as usize, target as usize, details as usize) as i32
+    syscall3(
+        SYS_AUDIT_LOG,
+        event_type as usize,
+        target as usize,
+        details as usize,
+    ) as i32
 }
 
 #[no_mangle]

@@ -1,7 +1,7 @@
 //! Kernel Global Heap Allocator.
 
-use core::alloc::{GlobalAlloc, Layout};
 use crate::ostd::sync::SpinLock;
+use core::alloc::{GlobalAlloc, Layout};
 
 pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
@@ -22,9 +22,17 @@ pub struct LinkedListAllocator {
 
 impl LinkedListAllocator {
     pub const fn new() -> Self {
-        Self { head: ListNode::new(0) }
+        Self {
+            head: ListNode::new(0),
+        }
     }
 
+    /// Initializes the allocator with a backing memory buffer.
+    ///
+    /// # Safety
+    ///
+    /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
+    /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
         self.add_free_region(heap_start, heap_size);
     }
@@ -65,6 +73,12 @@ impl LinkedListAllocator {
     }
 }
 
+impl Default for LinkedListAllocator {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 pub struct LockedHeap(SpinLock<LinkedListAllocator>);
 
 impl LockedHeap {
@@ -72,8 +86,20 @@ impl LockedHeap {
         Self(SpinLock::new(LinkedListAllocator::new()))
     }
 
+    /// Initializes the locked global heap allocator.
+    ///
+    /// # Safety
+    ///
+    /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
+    /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
         self.0.lock().init(heap_start, heap_size);
+    }
+}
+
+impl Default for LockedHeap {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
