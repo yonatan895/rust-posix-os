@@ -704,6 +704,10 @@ pub fn sys_getegid() -> isize {
     }
 }
 
+// TODO: saved-uid for seteuid — the setuid privilege-drop-and-regain pattern
+// requires a saved set-user-ID field on Process. The current implementation handles
+// the two main cases (root setuid drops everything, non-root no-op), but the model
+// is incomplete without saved-uid/saved-gid.
 pub fn sys_setuid(uid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -719,6 +723,7 @@ pub fn sys_setuid(uid: u32) -> isize {
     }
 }
 
+// TODO: saved-gid for setegid (see sys_setuid TODO above).
 pub fn sys_setgid(gid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,

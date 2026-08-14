@@ -1,6 +1,8 @@
 #![no_std]
 #![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
+// Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
+// raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
 #![allow(clippy::all)]
 
 //! Rust POSIX Shell - Interactive Ring 3 Terminal & Command Interpreter.

@@ -145,7 +145,9 @@ pub fn create_audit_snapshot(label: &str) -> u64 {
 
 pub fn create_audit_snapshot_with_creds(pid: i32, uid: u32, label: &str) -> u64 {
     let id = NEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
-    let current_seq = NEXT_EVENT_SEQ.load(Ordering::Relaxed);
+    let current_seq = NEXT_EVENT_SEQ.load(Ordering::Relaxed).saturating_sub(1);
+    // Note: Memory/heap stats come from the monitor's last sample and may be slightly
+    // stale if the monitor hasn't polled recently. This is acceptable for audit snapshots.
     let (total_ram_kb, used_ram_kb, heap_used_kb, ticks) = {
         let mon = SYSTEM_MONITOR.lock();
         (
