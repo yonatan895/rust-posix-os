@@ -7,8 +7,8 @@ use core::panic::PanicInfo;
 use libc::*;
 use posix_abi::*;
 
-static KNOWN_COMMANDS: [&str; 18] = [
-    "help", "uname", "pwd", "cd", "ls", "cat", "touch", "mkdir", "rm",
+static KNOWN_COMMANDS: [&str; 20] = [
+    "help", "uname", "pwd", "cd", "ls", "cp", "mv", "cat", "touch", "mkdir", "rm",
     "ps", "top", "monitor", "journal", "snapshot", "echo", "async-demo",
     "clear", "exit",
 ];
@@ -217,7 +217,7 @@ unsafe fn handle_tab_completion(cwd: *const u8, buf: &mut [u8], len: &mut usize)
     for i in start..*len {
         if buf[i] == b' ' || buf[i] == b'\t' { is_command_name = false; break; }
     }
-    let mut matches: [MatchCandidate; 18] = [MatchCandidate::default(); 18];
+    let mut matches: [MatchCandidate; 24] = [MatchCandidate::default(); 24];
     let mut match_count = 0;
     let replace_start: usize;
     if is_command_name {
@@ -225,7 +225,7 @@ unsafe fn handle_tab_completion(cwd: *const u8, buf: &mut [u8], len: &mut usize)
         let prefix = match core::str::from_utf8(&buf[start..*len]) { Ok(s) => s, Err(_) => return };
         for &cmd in KNOWN_COMMANDS.iter() {
             if let Some(sc) = fuzzy_score(prefix, cmd) {
-                if match_count < 18 {
+                if match_count < 24 {
                     let bytes = cmd.as_bytes();
                     let item_len = bytes.len().min(63);
                     matches[match_count].name[..item_len].copy_from_slice(&bytes[..item_len]);
@@ -249,7 +249,7 @@ unsafe fn handle_tab_completion(cwd: *const u8, buf: &mut [u8], len: &mut usize)
             close(fd);
             if n > 0 {
                 let mut offset = 0;
-                while offset < n as usize && match_count < 18 {
+                while offset < n as usize && match_count < 24 {
                     let dirent = &*(dir_buf.as_ptr().add(offset) as *const Dirent64);
                     let mut name_len = 0;
                     while name_len < dirent.d_name.len() && dirent.d_name[name_len] != 0 { name_len += 1; }
@@ -589,7 +589,7 @@ unsafe fn print_error(action: *const u8, target: *const u8, err: i32) {
 unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     let cmd = argv[0];
     if strcmp(cmd, b"help\0".as_ptr()) == 0 {
-        puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, cd, ls, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
+        puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
     } else if strcmp(cmd, b"uname\0".as_ptr()) == 0 {
         let mut uts = Utsname::default();
         syscall::syscall1(SYS_UNAME, &mut uts as *mut _ as usize);
@@ -610,6 +610,10 @@ unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
         handle_cd(argc, argv);
     } else if strcmp(cmd, b"ls\0".as_ptr()) == 0 {
         handle_ls(argc, argv);
+    } else if strcmp(cmd, b"cp\0".as_ptr()) == 0 {
+        handle_cp(argc, argv);
+    } else if strcmp(cmd, b"mv\0".as_ptr()) == 0 {
+        handle_mv(argc, argv);
     } else if strcmp(cmd, b"cat\0".as_ptr()) == 0 {
         handle_cat(argc, argv);
     } else if strcmp(cmd, b"touch\0".as_ptr()) == 0 {
@@ -890,6 +894,260 @@ unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
     }
     let res = unlink(path);
     if res < 0 && !force { print_error(b"rm\0".as_ptr(), path, res); }
+}
+
+unsafe fn get_basename(path: *const u8) -> *const u8 {
+    let mut last_slash = path;
+    let mut ptr = path;
+    while *ptr != 0 {
+        if *ptr == b'/' && *ptr.add(1) != 0 {
+            last_slash = ptr.add(1);
+        }
+        ptr = ptr.add(1);
+    }
+    last_slash
+}
+
+unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
+    let in_fd = open(src, O_RDONLY, 0);
+    if in_fd < 0 {
+        if !force {
+            print_error(b"cp\0".as_ptr(), src, in_fd);
+        }
+        return in_fd;
+    }
+
+    let out_fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0o644);
+    if out_fd < 0 {
+        close(in_fd);
+        if !force {
+            print_error(b"cp\0".as_ptr(), dest, out_fd);
+        }
+        return out_fd;
+    }
+
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = read(in_fd, buf.as_mut_ptr(), buf.len());
+        if n <= 0 {
+            break;
+        }
+        write(out_fd, buf.as_ptr(), n as usize);
+    }
+
+    close(in_fd);
+    close(out_fd);
+    0
+}
+
+unsafe fn copy_path(src: *const u8, dest: *const u8, recursive: bool, force: bool) -> i32 {
+    let mut st = Stat::default();
+    let res = stat(src, &mut st);
+    if res != 0 {
+        if !force {
+            print_error(b"cp\0".as_ptr(), src, res);
+        }
+        return res;
+    }
+
+    if (st.st_mode & S_IFDIR) != 0 {
+        if !recursive {
+            printf(b"cp: -r not specified; omitting directory '%s'\n\0".as_ptr(), src);
+            return -EISDIR;
+        }
+
+        let _ = mkdir(dest, 0o755);
+
+        let fd = open(src, O_RDONLY | O_DIRECTORY, 0);
+        if fd >= 0 {
+            let mut buf = [0u8; 4096];
+            loop {
+                let n = syscall::syscall3(SYS_GETDENTS64, fd as usize, buf.as_mut_ptr() as usize, buf.len()) as isize;
+                if n <= 0 {
+                    break;
+                }
+                let mut offset = 0;
+                while offset < n as usize {
+                    let dirent = &*(buf.as_ptr().add(offset) as *const Dirent64);
+                    let name_ptr = dirent.d_name.as_ptr();
+                    if strcmp(name_ptr, b".\0".as_ptr()) != 0 && strcmp(name_ptr, b"..\0".as_ptr()) != 0 {
+                        let mut sub_src = [0u8; 256];
+                        let mut sub_dest = [0u8; 256];
+                        let src_len = strlen(src);
+                        let dest_len = strlen(dest);
+                        let name_len = strlen(name_ptr);
+
+                        let src_slash = if src_len > 0 && *src.add(src_len - 1) != b'/' { 1 } else { 0 };
+                        let dest_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' { 1 } else { 0 };
+
+                        if src_len + src_slash + name_len < 255 && dest_len + dest_slash + name_len < 255 {
+                            core::ptr::copy_nonoverlapping(src, sub_src.as_mut_ptr(), src_len);
+                            if src_slash == 1 { sub_src[src_len] = b'/'; }
+                            core::ptr::copy_nonoverlapping(name_ptr, sub_src.as_mut_ptr().add(src_len + src_slash), name_len);
+                            sub_src[src_len + src_slash + name_len] = 0;
+
+                            core::ptr::copy_nonoverlapping(dest, sub_dest.as_mut_ptr(), dest_len);
+                            if dest_slash == 1 { sub_dest[dest_len] = b'/'; }
+                            core::ptr::copy_nonoverlapping(name_ptr, sub_dest.as_mut_ptr().add(dest_len + dest_slash), name_len);
+                            sub_dest[dest_len + dest_slash + name_len] = 0;
+
+                            copy_path(sub_src.as_ptr(), sub_dest.as_ptr(), true, force);
+                        }
+                    }
+                    offset += core::mem::size_of::<Dirent64>();
+                }
+            }
+            close(fd);
+        }
+        0
+    } else {
+        copy_file(src, dest, force)
+    }
+}
+
+unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
+    let mut recursive = false;
+    let mut force = false;
+    let mut operands: [*const u8; 16] = [core::ptr::null(); 16];
+    let mut operand_count = 0;
+
+    for i in 1..argc {
+        let arg = argv[i];
+        if arg.is_null() { continue; }
+        if *arg == b'-' && *arg.add(1) != 0 {
+            let mut ptr = arg.add(1);
+            while *ptr != 0 {
+                match *ptr {
+                    b'r' | b'R' => recursive = true,
+                    b'f' => force = true,
+                    _ => {}
+                }
+                ptr = ptr.add(1);
+            }
+        } else if operand_count < 16 {
+            operands[operand_count] = arg;
+            operand_count += 1;
+        }
+    }
+
+    if operand_count == 0 {
+        puts(b"cp: missing file operand\0".as_ptr());
+        return;
+    }
+    if operand_count == 1 {
+        printf(b"cp: missing destination file operand after '%s'\n\0".as_ptr(), operands[0]);
+        return;
+    }
+
+    let dest = operands[operand_count - 1];
+    let mut dest_st = Stat::default();
+    let dest_is_dir = stat(dest, &mut dest_st) == 0 && (dest_st.st_mode & S_IFDIR) != 0;
+
+    if operand_count > 2 && !dest_is_dir {
+        printf(b"cp: target '%s' is not a directory\n\0".as_ptr(), dest);
+        return;
+    }
+
+    if operand_count == 2 && !dest_is_dir {
+        copy_path(operands[0], dest, recursive, force);
+    } else {
+        for i in 0..operand_count - 1 {
+            let src = operands[i];
+            let base = get_basename(src);
+            let mut full_target = [0u8; 256];
+            let dest_len = strlen(dest);
+            let base_len = strlen(base);
+            let need_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' { 1 } else { 0 };
+
+            if dest_len + need_slash + base_len < 255 {
+                core::ptr::copy_nonoverlapping(dest, full_target.as_mut_ptr(), dest_len);
+                if need_slash == 1 { full_target[dest_len] = b'/'; }
+                core::ptr::copy_nonoverlapping(base, full_target.as_mut_ptr().add(dest_len + need_slash), base_len);
+                full_target[dest_len + need_slash + base_len] = 0;
+                copy_path(src, full_target.as_ptr(), recursive, force);
+            }
+        }
+    }
+}
+
+unsafe fn move_path(src: *const u8, dest: *const u8, force: bool) -> i32 {
+    let res = rename(src, dest);
+    if res == 0 {
+        return 0;
+    }
+    let cp_res = copy_path(src, dest, true, force);
+    if cp_res == 0 {
+        remove_path(src, true, true);
+        0
+    } else {
+        if !force {
+            print_error(b"mv\0".as_ptr(), src, res);
+        }
+        res
+    }
+}
+
+unsafe fn handle_mv(argc: usize, argv: &[*const u8; 16]) {
+    let mut force = false;
+    let mut operands: [*const u8; 16] = [core::ptr::null(); 16];
+    let mut operand_count = 0;
+
+    for i in 1..argc {
+        let arg = argv[i];
+        if arg.is_null() { continue; }
+        if *arg == b'-' && *arg.add(1) != 0 {
+            let mut ptr = arg.add(1);
+            while *ptr != 0 {
+                match *ptr {
+                    b'f' => force = true,
+                    _ => {}
+                }
+                ptr = ptr.add(1);
+            }
+        } else if operand_count < 16 {
+            operands[operand_count] = arg;
+            operand_count += 1;
+        }
+    }
+
+    if operand_count == 0 {
+        puts(b"mv: missing file operand\0".as_ptr());
+        return;
+    }
+    if operand_count == 1 {
+        printf(b"mv: missing destination file operand after '%s'\n\0".as_ptr(), operands[0]);
+        return;
+    }
+
+    let dest = operands[operand_count - 1];
+    let mut dest_st = Stat::default();
+    let dest_is_dir = stat(dest, &mut dest_st) == 0 && (dest_st.st_mode & S_IFDIR) != 0;
+
+    if operand_count > 2 && !dest_is_dir {
+        printf(b"mv: target '%s' is not a directory\n\0".as_ptr(), dest);
+        return;
+    }
+
+    if operand_count == 2 && !dest_is_dir {
+        move_path(operands[0], dest, force);
+    } else {
+        for i in 0..operand_count - 1 {
+            let src = operands[i];
+            let base = get_basename(src);
+            let mut full_target = [0u8; 256];
+            let dest_len = strlen(dest);
+            let base_len = strlen(base);
+            let need_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' { 1 } else { 0 };
+
+            if dest_len + need_slash + base_len < 255 {
+                core::ptr::copy_nonoverlapping(dest, full_target.as_mut_ptr(), dest_len);
+                if need_slash == 1 { full_target[dest_len] = b'/'; }
+                core::ptr::copy_nonoverlapping(base, full_target.as_mut_ptr().add(dest_len + need_slash), base_len);
+                full_target[dest_len + need_slash + base_len] = 0;
+                move_path(src, full_target.as_ptr(), force);
+            }
+        }
+    }
 }
 
 unsafe fn handle_cat(argc: usize, argv: &[*const u8; 16]) {
