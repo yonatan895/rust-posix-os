@@ -868,9 +868,6 @@ fn test_fork_and_address_space_isolation() {
                 return Err(EINVAL);
             }
             let end = addr + len;
-            if !self.contains_range(addr, end) {
-                return Err(EINVAL);
-            }
             self.vmas.retain(|v| !(v.start >= addr && v.end <= end));
             Ok(())
         }
@@ -884,20 +881,32 @@ fn test_fork_and_address_space_isolation() {
                 // Return -ENOMEM when trying to mprotect an unmapped gap per Linux/POSIX
                 return Err(ENOMEM);
             }
-            self.insert_vma(addr, end, new_prot, 0);
+            let flags = self
+                .vmas
+                .iter()
+                .find(|v| v.start <= addr && addr < v.end)
+                .map(|v| v.flags)
+                .unwrap_or(0);
+            self.insert_vma(addr, end, new_prot, flags);
             Ok(())
         }
     }
 
     let mut vm = MockVmSpace::new();
-    vm.insert_vma(0x6000_0000, 0x6000_2000, (PROT_READ | PROT_WRITE) as u32, 0);
+    const MAP_ANON: u32 = 0x20;
+    vm.insert_vma(
+        0x6000_0000,
+        0x6000_2000,
+        (PROT_READ | PROT_WRITE) as u32,
+        MAP_ANON,
+    );
 
     assert!(vm.contains_range(0x6000_0000, 0x6000_2000));
     assert!(vm.contains_range(0x6000_0000, 0x6000_1000));
     assert!(!vm.contains_range(0x6000_0000, 0x6000_3000)); // Gap beyond mapped VMA
 
-    // Test munmap on unmapped range returns -EINVAL
-    assert_eq!(vm.munmap(0x7000_0000, 4096), Err(EINVAL));
+    // Test munmap on unmapped range succeeds with 0 per Linux
+    assert_eq!(vm.munmap(0x7000_0000, 4096), Ok(()));
 
     // Test mprotect on unmapped gap returns -ENOMEM
     assert_eq!(
@@ -905,8 +914,12 @@ fn test_fork_and_address_space_isolation() {
         Err(ENOMEM)
     );
 
-    // Test mprotect on valid mapped region succeeds
+    // Test mprotect on valid mapped region succeeds and PRESERVES VMA flags
     assert_eq!(vm.mprotect(0x6000_0000, 4096, PROT_READ as u32), Ok(()));
+    assert_eq!(
+        vm.vmas[0].flags, MAP_ANON,
+        "mprotect must preserve existing VMA flags"
+    );
 
     // 2. Real Process Fork & Address Space Isolation Simulation
     struct ProcessMemory {

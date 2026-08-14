@@ -127,7 +127,13 @@ pub static PROCESS_TABLE: SpinLock<BTreeMap<i32, Arc<SpinLock<Process>>>> =
 pub static CURRENT_PID: AtomicI32 = AtomicI32::new(1);
 
 pub fn alloc_pid() -> i32 {
-    NEXT_PID.fetch_add(1, Ordering::SeqCst)
+    let pid = NEXT_PID.fetch_add(1, Ordering::SeqCst);
+    if pid <= 0 {
+        NEXT_PID.store(2, Ordering::SeqCst);
+        2
+    } else {
+        pid
+    }
 }
 
 pub fn get_current_process() -> Option<Arc<SpinLock<Process>>> {

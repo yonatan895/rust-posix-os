@@ -61,9 +61,6 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     let mut proc = proc_lock.lock();
 
     if let Some(ref mut vm) = proc.vm_space {
-        if !vm.contains_range(addr, end_addr) {
-            return -(EINVAL as isize);
-        }
         vm.remove_vma_range(addr, end_addr);
     }
 

@@ -23,32 +23,45 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let parent = parent_arc.lock();
+
+    // Extract all needed parent state and duplicate address space before dropping parent lock.
+    // Adheres strictly to ADR-0002 lock ordering: no process lock may be held while acquiring
+    // PROCESS_TABLE, SCHEDULER, or IPC locks.
+    let (parent_pid, parent_cwd, parent_vm, entry_point, user_stack_top, mmap_next_vaddr, fds) = {
+        let parent = parent_arc.lock();
+        let vm_clone = if let Some(ref parent_vm) = parent.vm_space {
+            match parent_vm.clone_from() {
+                Some(vm) => Some(vm),
+                None => return -(ENOMEM as isize),
+            }
+        } else {
+            None
+        };
+        (
+            parent.pid,
+            parent.cwd.clone(),
+            vm_clone,
+            parent.entry_point,
+            parent.user_stack_top,
+            parent.mmap_next_vaddr,
+            parent.fds.clone(),
+        )
+    };
 
     let child_pid = alloc_pid();
-    let mut child = Process::new(child_pid, parent.pid, parent.cwd.clone());
-
-    // Clone parent's VmSpace eagerly (duplicating page frames)
-    if let Some(ref parent_vm) = parent.vm_space {
-        match parent_vm.clone_from() {
-            Some(vm) => child.vm_space = Some(vm),
-            None => return -(ENOMEM as isize),
-        }
-    }
-
-    child.entry_point = parent.entry_point;
-    child.user_stack_top = parent.user_stack_top;
-    child.mmap_next_vaddr = parent.mmap_next_vaddr;
+    let mut child = Process::new(child_pid, parent_pid, parent_cwd);
+    child.vm_space = parent_vm;
+    child.entry_point = entry_point;
+    child.user_stack_top = user_stack_top;
+    child.mmap_next_vaddr = mmap_next_vaddr;
     child.has_started = true;
+    child.fds = fds;
 
-    // Clone open file descriptors
-    child.fds = parent.fds.clone();
-
-    // Clone signal mask and signal dispositions from parent
-    let parent_mask = SIGNALS.get_procmask(parent.pid);
+    // Clone signal mask and signal dispositions from parent (IPC tier)
+    let parent_mask = SIGNALS.get_procmask(parent_pid);
     let _ = SIGNALS.set_procmask(child_pid, SIG_SETMASK, parent_mask);
     for sig in SIG_MIN..=SIG_MAX {
-        let act = SIGNALS.get_action(parent.pid, sig);
+        let act = SIGNALS.get_action(parent_pid, sig);
         let _ = SIGNALS.set_action(child_pid, sig, act);
     }
 
@@ -61,13 +74,13 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
 
     let child_arc = alloc::sync::Arc::new(crate::ostd::sync::SpinLock::new(child));
 
-    // Register child in PROCESS_TABLE
+    // Register child in PROCESS_TABLE (PROCESS_TABLE tier)
     {
         let mut table = PROCESS_TABLE.lock();
         table.insert(child_pid, child_arc.clone());
     }
 
-    // Add child to scheduler ready queue
+    // Add child to scheduler ready queue (SCHEDULER tier)
     crate::services::scheduler::SCHEDULER
         .lock()
         .add_task(child_arc);

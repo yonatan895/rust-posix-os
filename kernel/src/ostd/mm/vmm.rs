@@ -241,6 +241,7 @@ impl VmSpace {
     }
 
     /// Modifies protection permissions for all pages and VMAs in `[start, end)`.
+    /// Preserves existing VMA flags (e.g. MAP_ANONYMOUS, MAP_SHARED) across the range.
     pub fn mprotect_range(
         &mut self,
         start: usize,
@@ -268,12 +269,27 @@ impl VmSpace {
             page_vaddr += PAGE_SIZE;
         }
 
-        self.insert_vma(start, end, new_prot, 0);
+        // Collect existing VMA flags for the segments in [start, end) to preserve them
+        let mut segments: Vec<(usize, usize, u32)> = Vec::new();
+        for vma in &self.vmas {
+            let seg_start = vma.start.max(start);
+            let seg_end = vma.end.min(end);
+            if seg_start < seg_end {
+                segments.push((seg_start, seg_end, vma.flags));
+            }
+        }
+
+        for (seg_start, seg_end, vma_flags) in segments {
+            self.insert_vma(seg_start, seg_end, new_prot, vma_flags);
+        }
 
         Ok(())
     }
 
     /// Updates page table flags for a mapped virtual page.
+    ///
+    /// Note: `invlpg` invalidates the local CPU TLB for `virt_addr` under the uniprocessor
+    /// model where active process mutations occur on the current CR3.
     pub fn set_page_flags(&mut self, virt_addr: usize, new_flags: u64) {
         let pml4_idx = (virt_addr >> 39) & 0x1FF;
         let pdpt_idx = (virt_addr >> 30) & 0x1FF;
@@ -545,17 +561,7 @@ impl VmSpace {
 
 impl Drop for VmSpace {
     fn drop(&mut self) {
-        // Free user frames across all VMAs
-        let vmas = core::mem::take(&mut self.vmas);
-        for vma in &vmas {
-            let mut vaddr = vma.start & !0xFFF;
-            let end_vaddr = (vma.end + PAGE_SIZE - 1) & !0xFFF;
-            while vaddr < end_vaddr {
-                self.unmap_page(vaddr);
-                vaddr += PAGE_SIZE;
-            }
-        }
-        // Free lower-half page table hierarchy
+        // Free lower-half page table hierarchy and all mapped leaf data frames (even for non-VMA pages).
         // SAFETY: `pml4_phys` was allocated by alloc_frame and is valid HHDM memory.
         unsafe {
             let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
@@ -571,6 +577,14 @@ impl Drop for VmSpace {
                                 if (*pd).entries[k] & PAGE_PRESENT != 0 {
                                     let pt_phys =
                                         ((*pd).entries[k] & 0x000F_FFFF_FFFF_F000) as usize;
+                                    let pt = phys_to_virt(pt_phys) as *mut PageTable;
+                                    for l in 0..512 {
+                                        if (*pt).entries[l] & PAGE_PRESENT != 0 {
+                                            let leaf_phys =
+                                                ((*pt).entries[l] & 0x000F_FFFF_FFFF_F000) as usize;
+                                            free_frame(leaf_phys);
+                                        }
+                                    }
                                     free_frame(pt_phys);
                                 }
                             }
@@ -582,5 +596,6 @@ impl Drop for VmSpace {
             }
             free_frame(self.pml4_phys);
         }
+        self.vmas.clear();
     }
 }
