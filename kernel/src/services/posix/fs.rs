@@ -1,8 +1,8 @@
 //! POSIX Filesystem & I/O System Calls.
 //!
 //! ADR-0001 R2: no raw user-pointer derefs here. Raw pointers arrive from
-//! the dispatcher, are converted to `UserPtr`/`UserSlice`/`copy_cstr_from_user`
-//! (ostd::mm::user), and are only ever used as integers.
+//! the dispatcher and are converted via `super::{copy_user_path, map_user_error}`
+//! and `ostd::mm::{UserPtr, UserSlice}`.
 
 use alloc::sync::Arc;
 use posix_abi::*;
@@ -10,28 +10,13 @@ use crate::services::process::get_current_process;
 use crate::services::vfs::*;
 use crate::services::vfs::pipe::PipeBuffer;
 use crate::services::audit::log_audit_event;
-use crate::ostd::mm::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_STR_MAX};
+use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
+use super::{copy_user_path, map_user_error};
 
 /// Upper bound on a single read/write bounce buffer, mirroring Linux's
 /// MAX_RW_COUNT. Prevents a user-controlled `count` from triggering a huge
 /// kernel allocation.
 const MAX_RW_COUNT: usize = 1 << 20;
-
-/// Map a user-memory validation failure to errno (ADR-0001 R2).
-/// TODO: centralize in services/posix/mod.rs when the dispatcher boundary
-/// is converted to UserPtr/UserSlice.
-fn map_uerr(e: UserAccessError) -> i32 {
-    match e {
-        UserAccessError::TooLong => ENAMETOOLONG,
-        _ => EFAULT,
-    }
-}
-
-/// Copy a NUL-terminated user path into a kernel buffer and validate UTF-8.
-fn copy_path<'a>(path_ptr: *const u8, kbuf: &'a mut [u8; USER_STR_MAX]) -> Result<&'a str, i32> {
-    let len = copy_cstr_from_user(path_ptr as usize, kbuf).map_err(map_uerr)?;
-    core::str::from_utf8(&kbuf[..len]).map_err(|_| EINVAL)
-}
 
 pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     let proc_lock = match get_current_process() {
@@ -49,10 +34,10 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     let count = count.min(MAX_RW_COUNT);
     let uslice = match UserSlice::from_raw(buf as usize, count) {
         Ok(s) => s,
-        Err(e) => return -(map_uerr(e) as isize),
+        Err(e) => return -(map_user_error(e) as isize),
     };
     if let Err(e) = uslice.validate(true) {
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
 
     let mut kbuf = alloc::vec![0u8; count];
@@ -60,11 +45,11 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
         Ok(n) => {
             let out = match UserSlice::from_raw(buf as usize, n) {
                 Ok(s) => s,
-                Err(e) => return -(map_uerr(e) as isize),
+                Err(e) => return -(map_user_error(e) as isize),
             };
             match out.copy_to_user(&kbuf[..n]) {
                 Ok(_) => n as isize,
-                Err(e) => -(map_uerr(e) as isize),
+                Err(e) => -(map_user_error(e) as isize),
             }
         }
         Err(err) => -(err as isize),
@@ -87,15 +72,15 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
     let count = count.min(MAX_RW_COUNT);
     let uslice = match UserSlice::from_raw(buf as usize, count) {
         Ok(s) => s,
-        Err(e) => return -(map_uerr(e) as isize),
+        Err(e) => return -(map_user_error(e) as isize),
     };
     if let Err(e) = uslice.validate(false) {
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
 
     let mut kbuf = alloc::vec![0u8; count];
     if let Err(e) = uslice.copy_from_user(&mut kbuf) {
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
     match handle.write(&kbuf) {
         Ok(n) => n as isize,
@@ -105,7 +90,7 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
 
 pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
     let mut kpath = [0u8; USER_STR_MAX];
-    let path = match copy_path(path_ptr, &mut kpath) {
+    let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
@@ -170,7 +155,7 @@ pub fn sys_close(fd: i32) -> isize {
 
 pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
     let mut kpath = [0u8; USER_STR_MAX];
-    let path = match copy_path(path_ptr, &mut kpath) {
+    let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
@@ -184,11 +169,11 @@ pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
         Ok(st) => {
             let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
                 Ok(p) => p,
-                Err(e) => return -(map_uerr(e) as isize),
+                Err(e) => return -(map_user_error(e) as isize),
             };
             match out.write(st) {
                 Ok(()) => 0,
-                Err(e) => -(map_uerr(e) as isize),
+                Err(e) => -(map_user_error(e) as isize),
             }
         }
         Err(err) => -(err as isize),
@@ -212,11 +197,11 @@ pub fn sys_fstat(fd: i32, statbuf: *mut Stat) -> isize {
         Ok(st) => {
             let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
                 Ok(p) => p,
-                Err(e) => return -(map_uerr(e) as isize),
+                Err(e) => return -(map_user_error(e) as isize),
             };
             match out.write(st) {
                 Ok(()) => 0,
-                Err(e) => -(map_uerr(e) as isize),
+                Err(e) => -(map_user_error(e) as isize),
             }
         }
         Err(err) => -(err as isize),
@@ -246,10 +231,10 @@ pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
     // Validate BEFORE allocating fds: a bad user pointer must not leak them.
     let out = match UserPtr::<[i32; 2]>::from_raw(pipefd_ptr as usize) {
         Ok(p) => p,
-        Err(e) => return -(map_uerr(e) as isize),
+        Err(e) => return -(map_user_error(e) as isize),
     };
     if let Err(e) = out.validate(true) {
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
 
     let (read_end, write_end) = PipeBuffer::new();
@@ -278,7 +263,7 @@ pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
     if let Err(e) = out.write([fd0, fd1]) {
         let _ = proc.close_fd(fd0);
         let _ = proc.close_fd(fd1);
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
 
     0
@@ -333,7 +318,7 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
         None => 0,
     };
     let mut kpath = [0u8; USER_STR_MAX];
-    let path = match copy_path(path_ptr, &mut kpath) {
+    let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
@@ -364,7 +349,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
         None => 0,
     };
     let mut kpath = [0u8; USER_STR_MAX];
-    let path = match copy_path(path_ptr, &mut kpath) {
+    let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
@@ -395,12 +380,12 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
         None => 0,
     };
     let mut kold = [0u8; USER_STR_MAX];
-    let oldpath = match copy_path(oldpath_ptr, &mut kold) {
+    let oldpath = match copy_user_path(oldpath_ptr, &mut kold) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
     let mut knew = [0u8; USER_STR_MAX];
-    let newpath = match copy_path(newpath_ptr, &mut knew) {
+    let newpath = match copy_user_path(newpath_ptr, &mut knew) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
@@ -452,13 +437,12 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
         }
     };
 
-    // Validate the whole user buffer before doing any work (ADR-0001 R2).
     let ubuf = match UserSlice::from_raw(dirp as usize, count) {
         Ok(s) => s,
-        Err(e) => return -(map_uerr(e) as isize),
+        Err(e) => return -(map_user_error(e) as isize),
     };
     if let Err(e) = ubuf.validate(true) {
-        return -(map_uerr(e) as isize);
+        return -(map_user_error(e) as isize);
     }
 
     let entries = match handle.inode.readdir() {
@@ -482,10 +466,10 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
         }
         let target = match UserPtr::<Dirent64>::from_raw(dirp as usize + written) {
             Ok(p) => p,
-            Err(e) => return -(map_uerr(e) as isize),
+            Err(e) => return -(map_user_error(e) as isize),
         };
         if let Err(e) = target.write(entries[i]) {
-            return -(map_uerr(e) as isize);
+            return -(map_user_error(e) as isize);
         }
         written += dirent_size;
         entries_written += 1;

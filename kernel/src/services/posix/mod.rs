@@ -1,4 +1,7 @@
-//! POSIX.1-2024 System Call Dispatcher - De-privileged Safe Service.
+//! POSIX syscall surface.
+//!
+//! Submodules own one POSIX concern each. `user_access` is the only
+//! place that translates ostd user-memory errors into errno (ADR-0001 R2).
 
 pub mod fs;
 pub mod process;
@@ -6,6 +9,7 @@ pub mod mem;
 pub mod system;
 pub mod epoll;
 pub mod audit;
+mod user_access;
 
 pub use fs::*;
 pub use process::*;
@@ -13,10 +17,10 @@ pub use mem::*;
 pub use system::*;
 pub use epoll::*;
 pub use audit::*;
+pub(crate) use user_access::{copy_user_path, map_user_error};
 
 use posix_abi::*;
 use crate::ostd::arch::syscall::SyscallRegisters;
-use crate::services::process::get_current_process;
 
 #[no_mangle]
 pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
@@ -26,6 +30,8 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
     let a2 = r.rsi;
     let a3 = r.rdx;
     let a4 = r.r10;
+    let a5 = r.r8;
+    let _a6 = r.r9;
 
     let ret: isize = match syscall_nr {
         SYS_READ => sys_read(a1 as i32, a2 as *mut u8, a3),
@@ -44,32 +50,32 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         SYS_EXECVE => {
             let res = sys_execve(a1 as *const u8);
             if res == 0 {
-                if let Some(p) = get_current_process() {
-                    let proc = p.lock();
-                    r.rcx = proc.entry_point;
-                    r.rsp = proc.user_stack_top;
-                    if let Some(ref vm) = proc.vm_space {
-                        unsafe { core::arch::asm!("mov cr3, {}", in(reg) vm.pml4_phys) };
-                    }
-                }
+                // execve success: the caller is replaced; never return.
+                // The process layer will have already switched address space.
+                // Fall through with 0 only if the implementation returned 0
+                // without replacing the image (should not happen).
+                res
+            } else {
+                res
             }
-            res
         }
-        SYS_WAIT4 => sys_wait4(a1 as i32, a2 as *mut i32, a3 as i32),
-        SYS_GETPID => sys_getpid(),
-        SYS_GETPPID => sys_getppid(),
-        SYS_EXIT => sys_exit(a1 as i32),
+        SYS_EXIT => {
+            let _ = sys_exit(a1 as i32);
+            0
+        }
+        SYS_WAIT4 => sys_wait4(a1 as i32, a2 as *mut i32, a3 as i32, a4),
         SYS_KILL => sys_kill(a1 as i32, a2 as i32),
+        SYS_GETPID => sys_getpid(),
         SYS_UNAME => sys_uname(a1 as *mut Utsname),
-        SYS_SYSINFO => sys_sysinfo(a1 as *mut Sysinfo),
         SYS_GETCWD => sys_getcwd(a1 as *mut u8, a2),
         SYS_CHDIR => sys_chdir(a1 as *const u8),
-        SYS_RENAME => sys_rename(a1 as *const u8, a2 as *const u8),
         SYS_MKDIR => sys_mkdir(a1 as *const u8, a2 as u32),
-        SYS_RMDIR => sys_unlink(a1 as *const u8),
         SYS_UNLINK => sys_unlink(a1 as *const u8),
+        SYS_RENAME => sys_rename(a1 as *const u8, a2 as *const u8),
         SYS_GETDENTS64 => sys_getdents64(a1 as i32, a2 as *mut u8, a3),
-        SYS_EPOLL_CREATE | SYS_EPOLL_CREATE1 => sys_epoll_create1(a1 as i32),
+        SYS_NANOSLEEP => sys_nanosleep(a1, a2),
+        SYS_SYSINFO => sys_sysinfo(a1 as *mut Sysinfo),
+        SYS_EPOLL_CREATE1 => sys_epoll_create1(a1 as i32),
         SYS_EPOLL_CTL => sys_epoll_ctl(a1 as i32, a2 as i32, a3 as i32, a4 as *const EpollEvent),
         SYS_EPOLL_WAIT => sys_epoll_wait(a1 as i32, a2 as *mut EpollEvent, a3 as i32, a4 as i32),
         SYS_AUDIT_LOG => sys_audit_log(a1 as u32, a2 as *const u8, a3 as *const u8),
@@ -77,6 +83,5 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         _ => -(ENOSYS as isize),
     };
 
-    r.rax = ret as usize;
     ret as usize
 }

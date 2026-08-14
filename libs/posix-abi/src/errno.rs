@@ -1,4 +1,4 @@
-//! POSIX.1-2024 Error Numbers (errno).
+//! POSIX error numbers (Linux x86-64 ABI values).
 
 pub const EPERM: i32 = 1;      // Operation not permitted
 pub const ENOENT: i32 = 2;     // No such file or directory
@@ -24,6 +24,7 @@ pub const EINVAL: i32 = 22;    // Invalid argument
 pub const ENFILE: i32 = 23;    // File table overflow
 pub const EMFILE: i32 = 24;    // Too many open files
 pub const ENOTTY: i32 = 25;    // Not a typewriter
+pub const ETXTBSY: i32 = 26;   // Text file busy
 pub const EFBIG: i32 = 27;     // File too large
 pub const ENOSPC: i32 = 28;    // No space left on device
 pub const ESPIPE: i32 = 29;    // Illegal seek
@@ -31,4 +32,5 @@ pub const EROFS: i32 = 30;     // Read-only file system
 pub const EMLINK: i32 = 31;    // Too many links
 pub const EPIPE: i32 = 32;     // Broken pipe
 pub const ERANGE: i32 = 34;    // Math result not representable
+pub const ENAMETOOLONG: i32 = 36; // File name too long
 pub const ENOSYS: i32 = 38;    // Invalid system call number
