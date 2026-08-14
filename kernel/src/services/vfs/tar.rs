@@ -3,8 +3,10 @@
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
+use crate::ostd::mm::read_pod;
 
 #[repr(C, packed)]
+#[derive(Clone, Copy)]
 struct TarHeader {
     name: [u8; 100],
     mode: [u8; 8],
@@ -47,17 +49,19 @@ pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<u
             break;
         }
 
-        let header = unsafe { &*(header_slice.as_ptr() as *const TarHeader) };
-        let name_len = header.name.iter().position(|&b| b == 0).unwrap_or(header.name.len());
-        let path = core::str::from_utf8(&header.name[..name_len]).map_err(|_| "Invalid UTF-8 filename in tar")?;
+        let header: TarHeader = read_pod(header_slice, 0).ok_or("Tar header truncated")?;
+        let name = header.name;
+        let name_len = name.iter().position(|&b| b == 0).unwrap_or(name.len());
+        let path = core::str::from_utf8(&name[..name_len]).map_err(|_| "Invalid UTF-8 filename in tar")?;
         let size = parse_octal(&header.size);
+        let typeflag = header.typeflag;
 
         offset += 512;
         if offset + size > tar_data.len() {
             return Err("Tar file entry payload truncated");
         }
 
-        let is_dir = header.typeflag == b'5' || path.ends_with('/');
+        let is_dir = typeflag == b'5' || path.ends_with('/');
         let trimmed_path = path.trim_matches('/');
 
         if !trimmed_path.is_empty() {
@@ -76,7 +80,6 @@ pub fn unpack_tar_archive(tar_data: &[u8], root_dir: &Arc<RamFsDir>) -> Result<u
             }
         }
 
-        // Advance past data blocks (512-byte aligned)
         let data_blocks = (size + 511) / 512;
         offset += data_blocks * 512;
     }

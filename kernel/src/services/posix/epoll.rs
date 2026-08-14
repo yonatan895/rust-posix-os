@@ -4,6 +4,8 @@ use alloc::sync::Arc;
 use posix_abi::*;
 use crate::services::process::get_current_process;
 use crate::services::vfs::FileHandle;
+use crate::ostd::mm::UserPtr;
+use super::map_user_error;
 
 pub fn sys_epoll_create1(_flags: i32) -> isize {
     let proc_lock = match get_current_process() {
@@ -36,7 +38,14 @@ pub fn sys_epoll_ctl(epfd: i32, op: i32, fd: i32, event_ptr: *const EpollEvent) 
     };
 
     let event = if !event_ptr.is_null() && op != EPOLL_CTL_DEL {
-        unsafe { *event_ptr }
+        let up = match UserPtr::<EpollEvent>::from_raw(event_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        match up.read() {
+            Ok(ev) => ev,
+            Err(e) => return -(map_user_error(e) as isize),
+        }
     } else {
         EpollEvent::default()
     };
@@ -66,11 +75,24 @@ pub fn sys_epoll_wait(epfd: i32, events_ptr: *mut EpollEvent, maxevents: i32, _t
         None => return -(EINVAL as isize),
     };
 
-    let slice = unsafe { core::slice::from_raw_parts_mut(events_ptr, maxevents as usize) };
+    let mut kbuf = alloc::vec![EpollEvent::default(); maxevents as usize];
     drop(proc);
 
-    match epoll.wait(slice, maxevents as usize) {
-        Ok(count) => count as isize,
+    match epoll.wait(&mut kbuf, maxevents as usize) {
+        Ok(count) => {
+            let size = core::mem::size_of::<EpollEvent>();
+            for i in 0..count {
+                let addr = (events_ptr as usize).saturating_add(i.saturating_mul(size));
+                let out = match UserPtr::<EpollEvent>::from_raw(addr) {
+                    Ok(p) => p,
+                    Err(e) => return -(map_user_error(e) as isize),
+                };
+                if let Err(e) = out.write(kbuf[i]) {
+                    return -(map_user_error(e) as isize);
+                }
+            }
+            count as isize
+        }
         Err(err) => -(err as isize),
     }
 }

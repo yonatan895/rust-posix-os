@@ -1,7 +1,7 @@
 //! POSIX Virtual Memory Management System Calls.
 
 use posix_abi::*;
-use crate::ostd::mm::PAGE_SIZE;
+use crate::ostd::mm::{alloc_frame, zero_phys_frame, PAGE_SIZE};
 use crate::services::process::get_current_process;
 
 pub fn sys_mmap(addr: usize, length: usize, prot: i32, _flags: i32) -> isize {
@@ -30,15 +30,13 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, _flags: i32) -> isize {
     if let Some(ref mut vm) = proc.vm_space {
         for i in 0..pages {
             let page_vaddr = vaddr + i * PAGE_SIZE;
-            if let Some(frame) = crate::ostd::mm::alloc_frame() {
+            if let Some(frame) = alloc_frame() {
                 let mut pte_flags = crate::ostd::mm::PAGE_PRESENT | crate::ostd::mm::PAGE_USER;
                 if prot & PROT_WRITE != 0 {
                     pte_flags |= crate::ostd::mm::PAGE_WRITABLE;
                 }
-                unsafe { let _ = vm.map_page(page_vaddr, frame, pte_flags); };
-
-                let virt = crate::ostd::mm::phys_to_virt(frame);
-                unsafe { core::ptr::write_bytes(virt as *mut u8, 0, PAGE_SIZE) };
+                let _ = vm.map_page(page_vaddr, frame, pte_flags);
+                zero_phys_frame(frame);
             } else {
                 return -(ENOMEM as isize);
             }
@@ -63,7 +61,7 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     if let Some(ref mut vm) = proc.vm_space {
         for i in 0..pages {
             let page_vaddr = addr + i * PAGE_SIZE;
-            unsafe { vm.unmap_page(page_vaddr) };
+            vm.unmap_page(page_vaddr);
         }
     }
 

@@ -29,6 +29,14 @@ pub fn virt_to_phys(virt: usize) -> usize {
     virt.saturating_sub(*HHDM_OFFSET.lock())
 }
 
+/// Zero one 4 KiB physical frame via the HHDM. Safe: `phys` must be a frame
+/// this kernel allocated (or is otherwise HHDM-mapped).
+pub fn zero_phys_frame(phys: usize) {
+    let virt = phys_to_virt(phys) as *mut u8;
+    // SAFETY: HHDM covers all RAM. Caller passes a 4 KiB frame base.
+    unsafe { core::ptr::write_bytes(virt, 0, PAGE_SIZE) };
+}
+
 pub unsafe fn vmm_init(hhdm: usize) {
     *HHDM_OFFSET.lock() = hhdm;
 }
@@ -52,7 +60,20 @@ impl VmSpace {
         Some(Self { pml4_phys })
     }
 
-    pub unsafe fn map_page(
+    /// Load this address space into CR3.
+    pub fn activate(&self) {
+        // SAFETY: `pml4_phys` is a 4 KiB-aligned page-table root we allocated
+        // and initialized in `new`. Reloading CR3 is valid in ring 0.
+        unsafe {
+            core::arch::asm!(
+                "mov cr3, {}",
+                in(reg) self.pml4_phys,
+                options(nostack, preserves_flags)
+            );
+        }
+    }
+
+    pub fn map_page(
         &mut self,
         virt_addr: usize,
         phys_addr: usize,
@@ -63,61 +84,64 @@ impl VmSpace {
         let pd_idx   = (virt_addr >> 21) & 0x1FF;
         let pt_idx   = (virt_addr >> 12) & 0x1FF;
 
-        let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
+        // SAFETY: all table pointers are HHDM views of frames we allocated
+        // (or copied from the kernel PML4). Indices are masked to 0..512.
+        unsafe {
+            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
 
-        // PDPT
-        if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
-            let frame = alloc_frame().ok_or("Out of memory for PDPT")?;
-            core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE);
-            (*pml4).entries[pml4_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 {
+                let frame = alloc_frame().ok_or("Out of memory for PDPT")?;
+                zero_phys_frame(frame);
+                (*pml4).entries[pml4_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+            }
+            let pdpt_phys = ((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize;
+            let pdpt = phys_to_virt(pdpt_phys) as *mut PageTable;
+
+            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
+                let frame = alloc_frame().ok_or("Out of memory for PD")?;
+                zero_phys_frame(frame);
+                (*pdpt).entries[pdpt_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+            }
+            let pd_phys = ((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize;
+            let pd = phys_to_virt(pd_phys) as *mut PageTable;
+
+            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
+                let frame = alloc_frame().ok_or("Out of memory for PT")?;
+                zero_phys_frame(frame);
+                (*pd).entries[pd_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
+            }
+            let pt_phys = ((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize;
+            let pt = phys_to_virt(pt_phys) as *mut PageTable;
+
+            (*pt).entries[pt_idx] = (phys_addr as u64) | flags | PAGE_PRESENT;
         }
-        let pdpt_phys = ((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-        let pdpt = phys_to_virt(pdpt_phys) as *mut PageTable;
-
-        // PD
-        if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 {
-            let frame = alloc_frame().ok_or("Out of memory for PD")?;
-            core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE);
-            (*pdpt).entries[pdpt_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-        }
-        let pd_phys = ((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-        let pd = phys_to_virt(pd_phys) as *mut PageTable;
-
-        // PT
-        if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 {
-            let frame = alloc_frame().ok_or("Out of memory for PT")?;
-            core::ptr::write_bytes(phys_to_virt(frame) as *mut u8, 0, PAGE_SIZE);
-            (*pd).entries[pd_idx] = (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-        }
-        let pt_phys = ((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize;
-        let pt = phys_to_virt(pt_phys) as *mut PageTable;
-
-        // Map page
-        (*pt).entries[pt_idx] = (phys_addr as u64) | flags | PAGE_PRESENT;
         Ok(())
     }
 
-    pub unsafe fn unmap_page(&mut self, virt_addr: usize) {
+    pub fn unmap_page(&mut self, virt_addr: usize) {
         let pml4_idx = (virt_addr >> 39) & 0x1FF;
         let pdpt_idx = (virt_addr >> 30) & 0x1FF;
         let pd_idx   = (virt_addr >> 21) & 0x1FF;
         let pt_idx   = (virt_addr >> 12) & 0x1FF;
 
-        let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-        if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 { return; }
-        let pdpt = phys_to_virt(((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
+        // SAFETY: same contract as `map_page`.
+        unsafe {
+            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
+            if (*pml4).entries[pml4_idx] & PAGE_PRESENT == 0 { return; }
+            let pdpt = phys_to_virt(((*pml4).entries[pml4_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
 
-        if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 { return; }
-        let pd = phys_to_virt(((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
+            if (*pdpt).entries[pdpt_idx] & PAGE_PRESENT == 0 { return; }
+            let pd = phys_to_virt(((*pdpt).entries[pdpt_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
 
-        if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 { return; }
-        let pt = phys_to_virt(((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
+            if (*pd).entries[pd_idx] & PAGE_PRESENT == 0 { return; }
+            let pt = phys_to_virt(((*pd).entries[pd_idx] & 0x000F_FFFF_FFFF_F000) as usize) as *mut PageTable;
 
-        let entry = (*pt).entries[pt_idx];
-        if entry & PAGE_PRESENT != 0 {
-            let phys = (entry & 0x000F_FFFF_FFFF_F000) as usize;
-            (*pt).entries[pt_idx] = 0;
-            free_frame(phys);
+            let entry = (*pt).entries[pt_idx];
+            if entry & PAGE_PRESENT != 0 {
+                let phys = (entry & 0x000F_FFFF_FFFF_F000) as usize;
+                (*pt).entries[pt_idx] = 0;
+                free_frame(phys);
+            }
         }
     }
 
@@ -159,10 +183,8 @@ impl VmSpace {
         for i in 0..page_count {
             let virt = aligned_start + i * PAGE_SIZE;
             let phys = alloc_frame().ok_or("Out of physical frames")?;
-            unsafe {
-                core::ptr::write_bytes(phys_to_virt(phys) as *mut u8, 0, PAGE_SIZE);
-                self.map_page(virt, phys, flags)?;
-            }
+            zero_phys_frame(phys);
+            self.map_page(virt, phys, flags)?;
         }
         Ok(())
     }

@@ -1,6 +1,6 @@
 //! ELF64 Executable Loader - De-privileged Safe Service.
 
-use crate::ostd::mm::{PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, PAGE_NX, VmSpace};
+use crate::ostd::mm::{read_pod, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, PAGE_NX, VmSpace};
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
 pub const ELF_CLASS_64: u8 = 2;
@@ -53,11 +53,7 @@ pub struct LoadedElf {
 }
 
 pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &'static str> {
-    if elf_bytes.len() < core::mem::size_of::<Elf64Header>() {
-        return Err("ELF file too small for header");
-    }
-
-    let header = unsafe { &*(elf_bytes.as_ptr() as *const Elf64Header) };
+    let header: Elf64Header = read_pod(elf_bytes, 0).ok_or("ELF file too small for header")?;
 
     if header.e_ident[0..4] != ELF_MAGIC {
         return Err("Invalid ELF magic");
@@ -78,10 +74,7 @@ pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &
 
     for i in 0..phnum {
         let offset = phoff + i * phentsize;
-        if offset + core::mem::size_of::<Elf64Phdr>() > elf_bytes.len() {
-            return Err("Program header out of bounds");
-        }
-        let phdr = unsafe { &*(elf_bytes.as_ptr().add(offset) as *const Elf64Phdr) };
+        let phdr: Elf64Phdr = read_pod(elf_bytes, offset).ok_or("Program header out of bounds")?;
 
         if phdr.p_type == PT_LOAD {
             let mut flags = PAGE_PRESENT | PAGE_USER;
@@ -101,10 +94,8 @@ pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &
                 return Err("Segment data out of bounds in ELF file");
             }
 
-            // Map segment pages
             vm_space.alloc_and_map_range(vaddr, memsz, flags)?;
 
-            // Copy file data into the newly mapped segment
             if filesz > 0 {
                 let segment_data = &elf_bytes[file_offset..file_offset + filesz];
                 vm_space.write_bytes_to_space(vaddr, segment_data)?;
@@ -112,7 +103,6 @@ pub fn load_elf(elf_bytes: &[u8], vm_space: &mut VmSpace) -> Result<LoadedElf, &
         }
     }
 
-    // Allocate user stack
     let stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
     vm_space.alloc_and_map_range(stack_bottom, USER_STACK_SIZE, PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE)?;
 
