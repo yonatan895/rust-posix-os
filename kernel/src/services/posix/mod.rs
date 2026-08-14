@@ -30,7 +30,7 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
     let a2 = r.rsi;
     let a3 = r.rdx;
     let a4 = r.r10;
-    let a5 = r.r8;
+    let _a5 = r.r8;
     let _a6 = r.r9;
 
     let ret: isize = match syscall_nr {
@@ -47,23 +47,12 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         SYS_DUP => sys_dup(a1 as i32),
         SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
         SYS_FORK => sys_fork(),
-        SYS_EXECVE => {
-            let res = sys_execve(a1 as *const u8);
-            if res == 0 {
-                // execve success: the caller is replaced; never return.
-                // The process layer will have already switched address space.
-                // Fall through with 0 only if the implementation returned 0
-                // without replacing the image (should not happen).
-                res
-            } else {
-                res
-            }
-        }
+        SYS_EXECVE => sys_execve(a1 as *const u8),
         SYS_EXIT => {
             let _ = sys_exit(a1 as i32);
             0
         }
-        SYS_WAIT4 => sys_wait4(a1 as i32, a2 as *mut i32, a3 as i32, a4),
+        SYS_WAIT4 => sys_wait4(a1 as i32, a2 as *mut i32, a3 as i32),
         SYS_KILL => sys_kill(a1 as i32, a2 as i32),
         SYS_GETPID => sys_getpid(),
         SYS_UNAME => sys_uname(a1 as *mut Utsname),
@@ -73,7 +62,8 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         SYS_UNLINK => sys_unlink(a1 as *const u8),
         SYS_RENAME => sys_rename(a1 as *const u8, a2 as *const u8),
         SYS_GETDENTS64 => sys_getdents64(a1 as i32, a2 as *mut u8, a3),
-        SYS_NANOSLEEP => sys_nanosleep(a1, a2),
+        // No sys_nanosleep yet. Honest stub (AGENTS.md): do not invent a sleeper.
+        SYS_NANOSLEEP => -(ENOSYS as isize),
         SYS_SYSINFO => sys_sysinfo(a1 as *mut Sysinfo),
         SYS_EPOLL_CREATE1 => sys_epoll_create1(a1 as i32),
         SYS_EPOLL_CTL => sys_epoll_ctl(a1 as i32, a2 as i32, a3 as i32, a4 as *const EpollEvent),
