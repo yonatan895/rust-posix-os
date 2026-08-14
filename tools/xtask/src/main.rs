@@ -63,9 +63,18 @@ fn build_all() {
 }
 
 fn strip_binary(path: &Path) {
-    let strip_tool = "C:\\Users\\yonat\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\llvm-strip.exe";
-    if Path::new(strip_tool).exists() {
-        let _ = Command::new(strip_tool).arg("--strip-all").arg(path).status();
+    let candidates = [
+        "llvm-strip",
+        "rust-llvm-strip",
+        "strip",
+        "C:\\Users\\yonat\\.rustup\\toolchains\\nightly-x86_64-pc-windows-msvc\\lib\\rustlib\\x86_64-pc-windows-msvc\\bin\\llvm-strip.exe",
+    ];
+    for tool in &candidates {
+        if let Ok(status) = Command::new(tool).arg("--strip-all").arg(path).status() {
+            if status.success() {
+                break;
+            }
+        }
     }
 }
 
@@ -177,12 +186,21 @@ fn setup_iso_root() {
 
     if !Path::new("BOOTX64.EFI").exists() {
         println!("[xtask] Downloading Limine BOOTX64.EFI...");
-        let _ = Command::new("powershell")
-            .args(&[
-                "-Command",
-                "Invoke-WebRequest -Uri 'https://github.com/limine-bootloader/limine/raw/v8.x-binary/BOOTX64.EFI' -OutFile 'BOOTX64.EFI'",
-            ])
-            .status();
+        let url = "https://github.com/limine-bootloader/limine/raw/v8.x-binary/BOOTX64.EFI";
+        let downloaded = Command::new("curl")
+            .args(&["-sSL", url, "-o", "BOOTX64.EFI"])
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+
+        if !downloaded {
+            let _ = Command::new("powershell")
+                .args(&[
+                    "-Command",
+                    &format!("Invoke-WebRequest -Uri '{}' -OutFile 'BOOTX64.EFI'", url),
+                ])
+                .status();
+        }
     }
 
     let _ = fs::copy("BOOTX64.EFI", efi_boot.join("BOOTX64.EFI"));
@@ -199,12 +217,38 @@ fn setup_iso_root() {
 
 fn run_qemu() {
     println!("[xtask] Launching QEMU Virtual Machine (x86_64 UEFI)...");
-    let qemu_path = "C:\\Users\\yonat\\scoop\\apps\\qemu\\current\\qemu-system-x86_64.exe";
-    let ovmf_path = "C:\\Users\\yonat\\scoop\\apps\\qemu\\current\\share\\edk2-x86_64-code.fd";
+    let qemu_candidates = [
+        "qemu-system-x86_64",
+        "C:\\Users\\yonat\\scoop\\apps\\qemu\\current\\qemu-system-x86_64.exe",
+    ];
+    let ovmf_candidates = [
+        "/usr/share/OVMF/OVMF_CODE.fd",
+        "/usr/share/ovmf/OVMF.fd",
+        "/usr/share/edk2/x64/OVMF_CODE.fd",
+        "C:\\Users\\yonat\\scoop\\apps\\qemu\\current\\share\\edk2-x86_64-code.fd",
+    ];
 
-    let mut qemu = Command::new(qemu_path);
+    let mut qemu_exec = "qemu-system-x86_64";
+    for q in &qemu_candidates {
+        if Path::new(q).exists() || Command::new(q).arg("--version").output().is_ok() {
+            qemu_exec = q;
+            break;
+        }
+    }
+
+    let mut ovmf_path = "";
+    for o in &ovmf_candidates {
+        if Path::new(o).exists() {
+            ovmf_path = o;
+            break;
+        }
+    }
+
+    let mut qemu = Command::new(qemu_exec);
+    if !ovmf_path.is_empty() {
+        qemu.args(&["-drive", &format!("if=pflash,format=raw,readonly=on,file={}", ovmf_path)]);
+    }
     qemu.args(&[
-        "-drive", &format!("if=pflash,format=raw,readonly=on,file={}", ovmf_path),
         "-drive", "file=fat:rw:target/iso_root,format=raw,media=disk",
         "-m", "512M",
         "-smp", "2",
