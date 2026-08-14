@@ -129,7 +129,7 @@ impl Default for Dirent64 {
 }
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct Termios {
     pub c_iflag: u32,
     pub c_oflag: u32,
@@ -141,41 +141,15 @@ pub struct Termios {
     pub c_ospeed: u32,
 }
 
-impl Default for Termios {
-    fn default() -> Self {
-        Self {
-            c_iflag: 0,
-            c_oflag: 0,
-            c_cflag: 0,
-            c_lflag: 0,
-            c_line: 0,
-            c_cc: [0; 32],
-            c_ispeed: 0,
-            c_ospeed: 0,
-        }
-    }
-}
-
 pub type SigSet = u64;
 
 #[repr(C)]
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, Default)]
 pub struct SigAction {
     pub sa_handler: usize,
     pub sa_flags: u64,
     pub sa_restorer: usize,
     pub sa_mask: SigSet,
-}
-
-impl Default for SigAction {
-    fn default() -> Self {
-        Self {
-            sa_handler: 0,
-            sa_flags: 0,
-            sa_restorer: 0,
-            sa_mask: 0,
-        }
-    }
 }
 
 #[repr(C)]

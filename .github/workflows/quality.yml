@@ -1,0 +1,59 @@
+name: Quality
+
+on:
+  workflow_call:
+
+jobs:
+  rust-quality:
+    name: rustfmt + clippy -D warnings
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rustfmt, clippy, rust-src
+      - uses: Swatinem/rust-cache@v2
+      - name: rustfmt (changed .rs only)
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          git fetch origin "${{ github.base_ref }}" --depth=1
+          files=$(git diff --name-only --diff-filter=ACMR \
+            "origin/${{ github.base_ref }}...HEAD" | grep '\.rs$' || true)
+          if [ -z "$files" ]; then
+            echo "No Rust files changed; skip rustfmt."
+            exit 0
+          fi
+          echo "$files" | xargs rustfmt --edition 2024 --check
+      - name: rustfmt (full tree)
+        if: github.event_name != 'pull_request'
+        run: cargo fmt --all -- --check
+      - name: clippy host crates
+        run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
+      - name: clippy kernel
+        env:
+          RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
+        run: |
+          cargo clippy -p kernel \
+            --target x86_64-unknown-none \
+            -Zbuild-std=core,compiler_builtins,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -- -D warnings \
+            -A clippy::missing_safety_doc \
+            -A clippy::new_without_default \
+            -A clippy::field_reassign_with_default \
+            -A clippy::needless_range_loop \
+            -A clippy::needless_return \
+            -A clippy::needless_lifetimes \
+            -A clippy::identity_op \
+            -A clippy::duplicated_attributes \
+            -A clippy::manual_div_ceil \
+            -A clippy::manual_range_contains \
+            -A clippy::manual_is_multiple_of \
+            -A clippy::unnecessary_cast \
+            -A clippy::new_ret_no_self \
+            -A clippy::not_unsafe_ptr_arg_deref
