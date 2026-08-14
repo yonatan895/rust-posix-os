@@ -1,34 +1,17 @@
 //! POSIX Process Lifecycle & Signal System Calls.
 
-use alloc::sync::Arc;
 use posix_abi::*;
 use crate::services::process::*;
 use crate::services::ipc::SIGNALS;
 use crate::ostd::mm::{UserPtr, USER_STR_MAX};
 use super::{copy_user_path, map_user_error};
 
+/// POSIX fork system call.
+///
+/// Returns -ENOSYS until true copy-on-write / deep address-space cloning is
+/// implemented in OSTD (ADR-0001 / AGENTS.md), avoiding silent memory faults.
 pub fn sys_fork() -> isize {
-    let parent_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let parent = parent_lock.lock();
-    let new_pid = crate::services::process::alloc_pid();
-    let mut child = Process::new(new_pid, parent.pid, parent.cwd.clone());
-
-    for handle in parent.fds.iter() {
-        child.fds.push(handle.clone());
-    }
-
-    child.vm_space = crate::ostd::mm::VmSpace::new();
-    child.entry_point = parent.entry_point;
-    child.user_stack_top = parent.user_stack_top;
-
-    let child_lock = Arc::new(crate::ostd::sync::SpinLock::new(child));
-    PROCESS_TABLE.lock().insert(new_pid, child_lock);
-    crate::services::scheduler::SCHEDULER.lock().add_task(new_pid);
-
-    new_pid as isize
+    -(ENOSYS as isize)
 }
 
 pub fn sys_execve(path_ptr: *const u8) -> isize {

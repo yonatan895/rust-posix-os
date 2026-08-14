@@ -77,6 +77,20 @@ pub unsafe fn sti() {
     asm!("sti", options(nomem, nostack));
 }
 
+/// Read the current CPU RFLAGS register.
+#[inline(always)]
+pub unsafe fn read_rflags() -> u64 {
+    let val: u64;
+    asm!("pushfq", "pop {}", out(reg) val, options(nomem, preserves_flags));
+    val
+}
+
+/// Restore the CPU RFLAGS register (including interrupt enable state).
+#[inline(always)]
+pub unsafe fn restore_rflags(val: u64) {
+    asm!("push {}", "popfq", in(reg) val, options(nomem));
+}
+
 #[inline(always)]
 pub unsafe fn read_cr2() -> u64 {
     let val: u64;

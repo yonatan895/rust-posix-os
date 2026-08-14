@@ -30,6 +30,7 @@ pub struct Process {
     pub vm_space: Option<VmSpace>,
     pub entry_point: usize,
     pub user_stack_top: usize,
+    pub mmap_next_vaddr: usize,
 }
 
 impl Process {
@@ -44,6 +45,7 @@ impl Process {
             vm_space: None,
             entry_point: 0,
             user_stack_top: 0,
+            mmap_next_vaddr: 0x6000_0000,
         }
     }
 
