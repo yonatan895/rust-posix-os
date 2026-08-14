@@ -1,16 +1,26 @@
-# Rust POSIX OS
+# rust-posix-os
 
-A 64-bit POSIX.1-2024-oriented operating system written in Rust: kernel, libc, init, and an interactive shell.
+A 64-bit POSIX.1-oriented OS in Rust: framekernel, libc, init, shell, coreutils.
+Runs under QEMU + Limine (UEFI).
 
-## Architecture
+## Status
 
-- **Target**: x86_64 bare metal, UEFI boot via Limine
-- **Memory**: bitmap PMM, 4-level paging with HHDM, 16 MiB kernel heap
-- **Syscalls**: `syscall` / `sysret` (LSTAR / STAR / FMASK)
-- **VFS**: ramfs, devfs, procfs, pipes, epoll
-- **Userland**: PID 1 init, POSIX-style shell with history, completion, and pipelines
+Working: boot, PMM/VMM/heap, IRQ-safe spinlocks, VFS (ramfs/devfs/procfs/tar initrd),
+POSIX syscalls (fs, process lifecycle except `fork`, mmap bump, epoll, signals stub,
+audit), SysV `execve` stack (argc/argv/envp/auxv), ring-3 init → shell.
 
-## Build and run
+Not done: real `fork`/COW (`sys_fork` is `-ENOSYS`), VMA list, VFS lock inversion,
+preemptive timer, SMP.
+
+Architecture and agent rules: [`AGENTS.md`](AGENTS.md). TCB decision: [`docs/adr/0001-tcb-boundary.md`](docs/adr/0001-tcb-boundary.md).
+
+```
+userland → libc → posix-abi
+kernel/services  (safe POSIX; #![deny(unsafe_code)])
+kernel/ostd      (TCB: arch, mm, irq, limine, drivers)
+```
+
+## Build
 
 Requires Rust nightly and `qemu-system-x86_64`.
 
@@ -20,17 +30,7 @@ cargo xtask run
 cargo xtask test
 ```
 
-## Layout
-
-```
-kernel/              # OSTD, memory, VFS, syscalls
-libs/libc/           # freestanding POSIX C ABI
-libs/posix-abi/      # shared syscall numbers and types
-userland/init/       # PID 1
-userland/shell/      # interactive shell
-userland/coreutils/  # extra userland binary
-tools/xtask/         # image, QEMU, and CI helpers
-```
+`xtask test` must only list checks that execute. Do not add always-`[PASS]` names.
 
 ## License
 

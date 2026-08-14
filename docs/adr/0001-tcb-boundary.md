@@ -1,74 +1,68 @@
 # ADR-0001: The TCB Boundary (ostd vs. services)
 
-- Status: Accepted
+- Status: Accepted, implemented
 - Date: 2026-08-14
-- Context: foundation review, finding #1
+- Updated: 2026-08-14
 
 ## Context
 
-The kernel declares an Asterinas-style framekernel split: `ostd/` is the
-privileged Trusted Computing Base (the only module allowed `unsafe`), and
-`services/` is "De-Privileged OS Services — 100% Safe Rust". As of
-`8af4155` that invariant is documentation, not mechanism: `unsafe` appears
-in at least 10 files under `services/` (user-pointer derefs, `mov cr3`
-inline asm, raw ELF/tar header casts, Limine boot-protocol derefs). Every
-planned feature (signals, threads, real fork, more syscalls) would multiply
-that surface.
+The kernel is an Asterinas-style framekernel: `ostd/` is the privileged TCB;
+`services/` is de-privileged POSIX policy. The split was documentation until
+unsafe user-pointer derefs, `mov cr3`, ELF/tar casts, and Limine walks lived
+in `services/`.
 
 ## Decision
 
-Rules, in force immediately:
+- R1. `unsafe` only in `kernel/src/ostd/`.
+- R2. User memory only via `ostd::mm::user` (`UserPtr`, `UserSlice`,
+  `copy_cstr_from_user`). Errno mapping only in `services/posix/user_access.rs`.
+- R3. Boot protocol only in `ostd::limine`. Services take `BootBlob`, never
+  `Limine*`.
+- R4. Address-space / context switch only in `ostd` (`VmSpace::activate`).
+- R5. Every `unsafe` block has `// SAFETY:`.
+- R6. `ostd` must not import `services`. The `#[no_mangle] extern "C"`
+  syscall stub is safe and lives in `services`. Raw `*mut` deref is
+  `ostd::mm::with_syscall_regs`.
 
-- R1. `unsafe` code lives only in `kernel/src/ostd/`. Nothing else in the
-  kernel may contain `unsafe { }`, `unsafe fn`, `unsafe impl`, or
-  `unsafe extern`.
-- R2. User memory is touched only through `ostd::mm::user`
-  (`UserPtr`, `UserSlice`, `copy_cstr_from_user`). Syscall handlers never
-  see raw pointers; the dispatcher converts registers into validated types.
-- R3. The boot protocol (Limine requests/responses, module discovery) is
-  read only inside `ostd::limine`, which hands safe references upward.
-- R4. Address-space switches (`mov cr3`) and context switches live only in
-  `ostd` (`VmSpace::activate`, `ostd::task`).
-- R5. Every `unsafe` block in `ostd` carries a `// SAFETY:` comment stating
-  why it is sound.
+## Enforcement (current)
 
-## Enforcement
-
-- CI gate `.github/workflows/tcb.yml` greps `kernel/src/services/` for
-  unsafe usage and fails the build. It is RED until the migration below is
-  complete — that is the point of the gate.
-- After migration: add `#[deny(unsafe_code)]` to `mod services;` in
-  `kernel/src/main.rs` for compiler-level enforcement (kept out of this
-  commit because it does not compile until the sites below are converted).
-- `kernel/src/ostd/mm/user.rs` lands in this commit; wire it with
-  `pub mod user;` in `kernel/src/ostd/mm/mod.rs`.
+- `.github/workflows/tcb.yml` greps `kernel/src/services/` for `unsafe` usage.
+  **Green** when services stay safe.
+- `#![deny(unsafe_code)]` on `kernel/src/services/mod.rs` and
+  `#[deny(unsafe_code)]` on `pub mod services` in `main.rs`.
+- Limine request statics live in `ostd/limine.rs` (not `pub`). Query helpers
+  are `pub(crate)` except `hhdm_offset`, `init_framebuffer`, `mm_init()`,
+  `boot_modules()`.
 
 ## Migration checklist
 
-| File | Current unsafe | Move to |
-|---|---|---|
-| services/mod.rs | Limine module response derefs | ostd::limine: safe `modules()` accessor (R3) |
-| services/posix/fs.rs | `slice::from_raw_parts(_mut)` on user bufs | `UserSlice::copy_from_user` / `copy_to_user` |
-| services/posix/mem.rs | `vm.map_page(...)`, `write_bytes` via HHDM | safe `VmSpace::map_page` + `ostd::mm::zero_frame` |
-| services/posix/mod.rs | `&mut *regs`, `mov cr3` asm | typed regs from `ostd::arch::syscall`; `VmSpace::activate()` |
-| services/posix/epoll.rs | `*event_ptr`, `from_raw_parts_mut` | `UserPtr::<EpollEvent>::read`, `UserSlice::copy_to_user` |
-| services/posix/audit.rs | user string derefs | `copy_cstr_from_user` |
-| services/posix/system.rs | `*buf = uts`, `*info = si` | `UserPtr::write` |
-| services/posix/process.rs | execve path scan, `*status_ptr` | `copy_cstr_from_user`, `UserPtr::write` |
-| services/process/elf.rs | `&*(bytes as *const Elf64Header)` | bounds-checked `read_pod` helper in ostd |
-| services/vfs/tar.rs | `&*(slice as *const TarHeader)` | same `read_pod` helper |
+| Site | Status |
+|---|---|
+| posix/fs.rs, system.rs | done — UserPtr / UserSlice / copy_user_path |
+| posix/{process,audit,epoll}.rs | done |
+| posix/mem.rs | done — safe `map_page` / `zero_phys_frame` |
+| posix/mod.rs | done — `dispatch_syscall(&mut SyscallRegisters)`; rax writeback; execve rcx/rsp + `vm.activate()` |
+| rust_syscall_dispatcher | done — safe no_mangle in services; deref in ostd |
+| services/mod.rs Limine | done — `services_init(Vec<BootBlob>)` |
+| process/elf.rs, vfs/tar.rs | done — `read_pod` |
+| `#[deny(unsafe_code)]` | done |
+
+## Implemented around the TCB (not this ADR, but current tree)
+
+- IRQ-safe `SpinLock` (save RFLAGS, cli, restore on drop).
+- Contiguous heap frames (`alloc_contiguous_frames`).
+- Honest `sys_fork` → `-ENOSYS` until VMA + page-table clone/COW.
+- Per-process `mmap_next_vaddr` (bump, not a VMA list). Reset on `exec`.
+- SysV AMD64 user stack on execve (argc, argv, envp, auxv).
+
+## Still open
+
+- VFS must take cwd/creds as arguments (no `Process` lock from VFS).
+- `VmSpace`: `Vec<Vma>`; then real `fork`.
+- One task model documented in `ostd/task`.
 
 ## Consequences
 
-- The unsafe surface shrinks to one audited module; everything planned
-  (threads, signals, COW fork) builds on validated primitives.
-- `ostd::mm::user` validates against the current CR3 and assumes a
-  single-CPU kernel; SMP/threading must revisit validate-then-copy
-  (see module docs).
-- userland (`libs/libc`, `userland/*`) is unaffected: `unsafe` is
-  legitimate there (syscall asm, `_start`).
-
-## References
-
-- Asterinas OSTD (framekernel model this project follows)
-- Review thread: foundation findings #1 and #2
+New kernel features go through ostd primitives first, then a services PR.
+Do not reconstruct the dispatcher or Limine requests from memory.
+See `AGENTS.md` PR/commit bar.
