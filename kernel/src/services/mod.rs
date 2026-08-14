@@ -97,11 +97,17 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
         Err(e) => log::warn!("[SERVICES] /bin/init not loaded (errno: {}).", e),
     }
 
-    PROCESS_TABLE
-        .lock()
-        .insert(1, Arc::new(crate::ostd::sync::SpinLock::new(init_proc)));
+    let init_arc = Arc::new(crate::ostd::sync::SpinLock::new(init_proc));
+    PROCESS_TABLE.lock().insert(1, init_arc.clone());
+    crate::services::scheduler::set_current_process(init_arc);
+
+    let idle_proc = Process::new(0, 0, "/".to_string());
+    let idle_arc = Arc::new(crate::ostd::sync::SpinLock::new(idle_proc));
+    PROCESS_TABLE.lock().insert(0, idle_arc);
 
     audit_init();
 
-    log::info!("De-privileged services initialized (VFS, DevFS, Init Process PID 1, Audit ready).");
+    log::info!(
+        "De-privileged services initialized (VFS, DevFS, Init Process PID 1, Idle Task PID 0, Audit ready)."
+    );
 }

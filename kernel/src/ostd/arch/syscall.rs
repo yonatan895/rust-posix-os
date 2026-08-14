@@ -21,6 +21,17 @@ static mut BSP_PER_CPU: PerCpuData = PerCpuData {
     user_rsp: 0,
 };
 
+/// Updates the kernel stack pointer used by the fast syscall entry.
+///
+/// # Safety
+///
+/// `stack_top` must be a valid, mapped kernel stack memory address.
+pub unsafe fn set_syscall_kernel_stack(stack_top: u64) {
+    unsafe {
+        BSP_PER_CPU.kernel_rsp = stack_top;
+    }
+}
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SyscallRegisters {
