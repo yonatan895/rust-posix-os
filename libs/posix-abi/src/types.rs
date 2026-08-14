@@ -153,6 +153,30 @@ pub struct SigAction {
 }
 
 #[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct SignalFrame {
+    pub restorer: u64,
+    pub signum: u64,
+    pub old_mask: SigSet,
+    pub r15: u64,
+    pub r14: u64,
+    pub r13: u64,
+    pub r12: u64,
+    pub rbp: u64,
+    pub rbx: u64,
+    pub r9: u64,
+    pub r8: u64,
+    pub r10: u64,
+    pub rdx: u64,
+    pub rsi: u64,
+    pub rdi: u64,
+    pub rax: u64,
+    pub rcx: u64, // Saved RIP for sysretq
+    pub r11: u64, // Saved RFLAGS for sysretq
+    pub rsp: u64, // Saved user RSP
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct AuditSnapshotHeader {
     pub id: u64,
