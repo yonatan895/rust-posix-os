@@ -20,6 +20,8 @@ permissions:
 
 env:
   CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
   rust-quality:
@@ -27,7 +29,7 @@ jobs:
     uses: ./.github/workflows/quality.yml
 
   build:
-    name: ${{ matrix.name }}
+    name: Build (${{ matrix.os }})
     needs: rust-quality
     if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
     runs-on: ${{ matrix.os }}
@@ -35,35 +37,43 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            name: Build (ubuntu)
-            task: image
-          - os: windows-latest
-            name: Host xtask (windows)
-            task: host
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
+      - name: Exclude Defender from Cargo dirs
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $paths = @(
+            "$env:USERPROFILE\.cargo",
+            "$env:USERPROFILE\.rustup",
+            "$env:GITHUB_WORKSPACE\target"
+          )
+          foreach ($p in $paths) {
+            New-Item -ItemType Directory -Force -Path $p | Out-Null
+            Add-MpPreference -ExclusionPath $p -ErrorAction SilentlyContinue
+          }
       - name: Install Rust nightly
         uses: dtolnay/rust-toolchain@nightly
         with:
-          components: ${{ matrix.task == 'image' && 'rust-src' || '' }}
+          components: rust-src
       - uses: Swatinem/rust-cache@v2
         with:
-          prefix-key: ${{ matrix.task }}
-      - name: Build host xtask
-        if: matrix.task == 'host'
-        run: cargo build -p xtask
+          cache-on-failure: true
+      - name: Cache Limine BOOTX64.EFI
+        uses: actions/cache@v4
+        with:
+          path: BOOTX64.EFI
+          key: limine-bootx64-v8
       - name: Build kernel and UEFI image
-        if: matrix.task == 'image'
         run: cargo xtask build
       - name: Stage boot artifacts
-        if: matrix.task == 'image'
+        if: runner.os == 'Linux'
         run: |
           set -euo pipefail
           test -d target/iso_root
       - name: Upload UEFI boot artifacts
-        if: matrix.task == 'image'
+        if: runner.os == 'Linux'
         uses: actions/upload-artifact@v4
         with:
           name: uefi-boot
