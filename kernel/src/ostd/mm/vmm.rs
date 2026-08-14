@@ -561,6 +561,15 @@ impl VmSpace {
 
 impl Drop for VmSpace {
     fn drop(&mut self) {
+        // INVARIANT: An address space must not be torn down while it is actively loaded in CR3.
+        // The calling task must switch to a different address space (e.g. kernel/idle PML4) before dropping.
+        // SAFETY: Reading CR3 is a non-mutating control register read safe in ring 0.
+        debug_assert_ne!(
+            (unsafe { crate::ostd::arch::read_cr3() } as usize) & !0xFFF,
+            self.pml4_phys,
+            "Attempted to drop VmSpace while it is still actively loaded in CR3"
+        );
+
         // Free lower-half page table hierarchy and all mapped leaf data frames (even for non-VMA pages).
         // SAFETY: `pml4_phys` was allocated by alloc_frame and is valid HHDM memory.
         unsafe {
