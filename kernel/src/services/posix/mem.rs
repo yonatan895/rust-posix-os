@@ -1,6 +1,6 @@
 //! POSIX Virtual Memory Management System Calls.
 
-use crate::ostd::mm::{alloc_frame, zero_phys_frame, PAGE_SIZE};
+use crate::ostd::mm::{PAGE_SIZE, alloc_frame, zero_phys_frame};
 use crate::services::process::get_current_process;
 use posix_abi::*;
 

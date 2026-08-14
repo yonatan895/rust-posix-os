@@ -1,6 +1,6 @@
 //! ELF64 Executable Loader & System V AMD64 ABI User Stack Setup.
 
-use crate::ostd::mm::{read_pod, VmSpace, PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE};
+use crate::ostd::mm::{PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, read_pod};
 use posix_abi::*;
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];

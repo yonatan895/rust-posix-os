@@ -14,12 +14,12 @@ pub mod vfs;
 
 use crate::ostd::mm::BootBlob;
 use crate::services::audit::audit_init;
-use crate::services::process::{Process, PROCESS_TABLE};
+use crate::services::process::{PROCESS_TABLE, Process};
 use crate::services::vfs::devfs::{DevConsole, DevNull, DevZero};
 use crate::services::vfs::procfs::{ProcDynamicFile, ProcKind};
 use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
 use crate::services::vfs::tar::unpack_tar_archive;
-use crate::services::vfs::{vfs_init, FileHandle};
+use crate::services::vfs::{FileHandle, vfs_init};
 use alloc::string::ToString;
 use alloc::sync::Arc;
 use posix_abi::O_RDWR;

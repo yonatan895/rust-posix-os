@@ -41,26 +41,14 @@ impl LineDiscipline {
                 self.input_buffer.push(b'\n');
                 self.canonical_queue.extend_from_slice(&self.input_buffer);
                 self.input_buffer.clear();
-                if is_echo {
-                    Some(b'\n')
-                } else {
-                    None
-                }
+                if is_echo { Some(b'\n') } else { None }
             } else {
                 self.input_buffer.push(c);
-                if is_echo {
-                    Some(c)
-                } else {
-                    None
-                }
+                if is_echo { Some(c) } else { None }
             }
         } else {
             self.canonical_queue.push(c);
-            if is_echo {
-                Some(c)
-            } else {
-                None
-            }
+            if is_echo { Some(c) } else { None }
         }
     }
 }

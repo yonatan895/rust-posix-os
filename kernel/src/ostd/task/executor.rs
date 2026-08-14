@@ -1,6 +1,6 @@
 //! Asynchronous Task Executor and Global Async Runtime.
 
-use super::async_task::{create_waker, Task, TaskId};
+use super::async_task::{Task, TaskId, create_waker};
 use crate::ostd::sync::SpinLock;
 use alloc::collections::{BTreeMap, VecDeque};
 use core::future::Future;

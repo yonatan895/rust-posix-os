@@ -8,11 +8,7 @@ use posix_abi::*;
 pub unsafe extern "C" fn putchar(c: i32) -> i32 {
     let byte = c as u8;
     let ret = write(STDOUT_FILENO, &byte as *const u8, 1);
-    if ret == 1 {
-        c
-    } else {
-        -1
-    }
+    if ret == 1 { c } else { -1 }
 }
 
 #[no_mangle]
@@ -28,11 +24,7 @@ pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
 pub unsafe extern "C" fn getchar() -> i32 {
     let mut buf = 0u8;
     let n = read(STDIN_FILENO, &mut buf as *mut u8, 1);
-    if n == 1 {
-        buf as i32
-    } else {
-        -1
-    }
+    if n == 1 { buf as i32 } else { -1 }
 }
 
 #[no_mangle]

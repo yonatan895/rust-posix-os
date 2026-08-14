@@ -1,6 +1,6 @@
 //! Physical Memory Manager (PMM) - Fast Bitmap Frame Allocator.
 
-use crate::ostd::limine::{LimineMemmapResponse, LIMINE_MEMMAP_USABLE};
+use crate::ostd::limine::{LIMINE_MEMMAP_USABLE, LimineMemmapResponse};
 use crate::ostd::sync::SpinLock;
 use core::sync::atomic::{AtomicUsize, Ordering};
 

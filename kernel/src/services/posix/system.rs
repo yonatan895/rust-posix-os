@@ -5,7 +5,7 @@
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
 use super::{copy_user_path, map_user_error};
-use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
+use crate::ostd::mm::{USER_STR_MAX, UserPtr, UserSlice};
 use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::*;

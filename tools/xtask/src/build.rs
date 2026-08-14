@@ -40,11 +40,7 @@ pub fn rustc_sysroot() -> Option<PathBuf> {
     }
     let s = String::from_utf8(out.stdout).ok()?;
     let p = PathBuf::from(s.trim());
-    if p.exists() {
-        Some(p)
-    } else {
-        None
-    }
+    if p.exists() { Some(p) } else { None }
 }
 
 pub fn find_llvm_strip() -> Option<PathBuf> {

@@ -1,7 +1,7 @@
 //! Pseudo-Filesystem (/proc) Dynamic Inodes.
 
 use crate::services::audit::{get_audit_events, get_snapshots};
-use crate::services::monitor::{update_system_metrics, SYSTEM_MONITOR};
+use crate::services::monitor::{SYSTEM_MONITOR, update_system_metrics};
 use crate::services::vfs::{FileType, Inode};
 use alloc::string::String;
 use alloc::sync::Arc;
@@ -41,7 +41,11 @@ impl ProcDynamicFile {
 
                 alloc::format!(
                     "MemTotal:       {:8} kB\nMemFree:        {:8} kB\nMemUsed:        {:8} kB\nHeapTotal:      {:8} kB\nHeapUsed:       {:8} kB\n",
-                    total_kb, free_kb, used_kb, heap_total_kb, heap_used_kb
+                    total_kb,
+                    free_kb,
+                    used_kb,
+                    heap_total_kb,
+                    heap_used_kb
                 )
             }
             ProcKind::Stat => {

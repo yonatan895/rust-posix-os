@@ -1,6 +1,6 @@
 //! Virtual Memory Manager (VMM) - 4-Level x86_64 Paging.
 
-use super::pmm::{alloc_frame, free_frame, PAGE_SIZE};
+use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
 use crate::ostd::sync::SpinLock;
 
 pub const PAGE_PRESENT: u64 = 1 << 0;

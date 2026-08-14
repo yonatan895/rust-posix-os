@@ -22,7 +22,7 @@
 
 use core::marker::PhantomData;
 
-use super::{phys_to_virt, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE};
+use super::{PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, phys_to_virt};
 
 /// Exclusive upper bound of the user address space (lower canonical half).
 pub const USER_SPACE_END: usize = 0x0000_8000_0000_0000;

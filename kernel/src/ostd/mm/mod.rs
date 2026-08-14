@@ -7,16 +7,16 @@ pub mod pod;
 pub mod user;
 pub mod vmm;
 
-pub use boot::{boot_modules, with_syscall_regs, BootBlob};
-pub use heap::{get_heap_stats, HEAP_ALLOCATOR};
-pub use pmm::{alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats, PAGE_SIZE};
+pub use boot::{BootBlob, boot_modules, with_syscall_regs};
+pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
+pub use pmm::{PAGE_SIZE, alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats};
 pub use pod::read_pod;
 pub use user::{
-    copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SPACE_END, USER_STR_MAX,
+    USER_SPACE_END, USER_STR_MAX, UserAccessError, UserPtr, UserSlice, copy_cstr_from_user,
 };
 pub use vmm::{
-    phys_to_virt, virt_to_phys, zero_phys_frame, VmSpace, PAGE_NX, PAGE_PRESENT, PAGE_USER,
-    PAGE_WRITABLE,
+    PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, phys_to_virt, virt_to_phys,
+    zero_phys_frame,
 };
 
 /// Initializes the kernel memory management subsystem (PMM, VMM, and global heap).

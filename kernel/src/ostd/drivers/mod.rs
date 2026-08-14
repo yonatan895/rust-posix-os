@@ -3,5 +3,5 @@
 pub mod framebuffer;
 pub mod serial;
 
-pub use framebuffer::{fb_init, FB_CONSOLE};
-pub use serial::{serial_init, SERIAL1};
+pub use framebuffer::{FB_CONSOLE, fb_init};
+pub use serial::{SERIAL1, serial_init};

@@ -76,11 +76,7 @@ pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
         0x5401, /* TCGETS */
         &mut term as *mut _ as usize,
     );
-    if res == 0 {
-        1
-    } else {
-        0
-    }
+    if res == 0 { 1 } else { 0 }
 }
 
 #[no_mangle]
@@ -91,11 +87,7 @@ pub unsafe extern "C" fn chdir(path: *const u8) -> i32 {
 #[no_mangle]
 pub unsafe extern "C" fn getcwd(buf: *mut u8, size: usize) -> *mut u8 {
     let res = syscall2(SYS_GETCWD, buf as usize, size) as isize;
-    if res >= 0 {
-        buf
-    } else {
-        core::ptr::null_mut()
-    }
+    if res >= 0 { buf } else { core::ptr::null_mut() }
 }
 
 #[no_mangle]

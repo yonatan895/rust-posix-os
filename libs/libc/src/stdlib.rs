@@ -125,9 +125,5 @@ pub unsafe extern "C" fn atoi(s: *const u8) -> i32 {
 
 #[no_mangle]
 pub unsafe extern "C" fn abs(j: i32) -> i32 {
-    if j < 0 {
-        -j
-    } else {
-        j
-    }
+    if j < 0 { -j } else { j }
 }

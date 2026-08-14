@@ -1,9 +1,9 @@
 //! Background System Resource & Process Monitoring Service.
 
-use crate::ostd::mm::{get_heap_stats, get_pmm_stats, PAGE_SIZE};
+use crate::ostd::mm::{PAGE_SIZE, get_heap_stats, get_pmm_stats};
 use crate::ostd::sync::SpinLock;
 use crate::ostd::task::yield_now;
-use crate::services::process::{ProcessState, PROCESS_TABLE};
+use crate::services::process::{PROCESS_TABLE, ProcessState};
 use alloc::string::String;
 use alloc::vec::Vec;
 
