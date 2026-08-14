@@ -1,4 +1,7 @@
 //! Coreutils Multi-Call Binary in Rust.
+//!
+//! Note: Full argv/argc dispatching will be enabled after execve implements
+//! standard System V user stack frame setup (argc, argv, envp, auxv).
 
 #![no_std]
 #![no_main]

@@ -12,14 +12,12 @@ pub use vmm::{phys_to_virt, virt_to_phys, zero_phys_frame, VmSpace, PAGE_PRESENT
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
 pub use user::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SPACE_END, USER_STR_MAX};
 pub use pod::read_pod;
-pub use boot::{boot_module_blobs, with_syscall_regs, BootBlob};
+pub use boot::{boot_modules, with_syscall_regs, BootBlob};
 
-use crate::ostd::limine::LimineMemmapResponse;
+pub unsafe fn mm_init() {
+    let memmap_response = crate::ostd::limine::memmap_response();
+    let hhdm_offset = crate::ostd::limine::hhdm_offset();
 
-pub unsafe fn mm_init(
-    memmap_response: *mut LimineMemmapResponse,
-    hhdm_offset: usize,
-) {
     pmm::pmm_init(memmap_response, hhdm_offset);
     vmm::vmm_init(hhdm_offset);
 

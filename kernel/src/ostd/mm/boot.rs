@@ -11,9 +11,14 @@ pub struct BootBlob {
     pub bytes: &'static [u8],
 }
 
+/// Walk the bootloader-supplied modules and return each as a safe payload slice.
+pub fn boot_modules() -> alloc::vec::Vec<BootBlob> {
+    boot_module_blobs(crate::ostd::limine::module_response())
+}
+
 /// Walk the Limine module list and return each non-empty payload.
 /// Null response / null pointers yield an empty vec, never a panic.
-pub fn boot_module_blobs(resp: *mut LimineModuleResponse) -> alloc::vec::Vec<BootBlob> {
+pub(crate) fn boot_module_blobs(resp: *mut LimineModuleResponse) -> alloc::vec::Vec<BootBlob> {
     let mut out = alloc::vec::Vec::new();
     if resp.is_null() {
         return out;
