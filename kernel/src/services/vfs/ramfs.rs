@@ -110,6 +110,16 @@ impl Inode for RamFsDir {
             Err(ENOENT)
         }
     }
+
+    fn link_entry(&self, name: &str, inode: Arc<dyn Inode>) -> Result<(), i32> {
+        let mut entries = self.entries.lock();
+        if entries.contains_key(name) {
+            entries.remove(name);
+            self.subdirs.lock().remove(name);
+        }
+        entries.insert(name.to_string(), inode);
+        Ok(())
+    }
 }
 
 pub struct RamFsFile {

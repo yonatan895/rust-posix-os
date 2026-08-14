@@ -122,6 +122,45 @@ pub unsafe fn cmd_rm(path: *const u8) -> i32 {
     0
 }
 
+pub unsafe fn cmd_cp(src: *const u8, dest: *const u8) -> i32 {
+    let in_fd = open(src, O_RDONLY, 0);
+    if in_fd < 0 {
+        printf(b"cp: cannot open '%s'\n\0".as_ptr(), src);
+        return 1;
+    }
+    let out_fd = open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0o644);
+    if out_fd < 0 {
+        close(in_fd);
+        printf(b"cp: cannot create '%s'\n\0".as_ptr(), dest);
+        return 1;
+    }
+    let mut buf = [0u8; 1024];
+    loop {
+        let n = read(in_fd, buf.as_mut_ptr(), buf.len());
+        if n <= 0 { break; }
+        write(out_fd, buf.as_ptr(), n as usize);
+    }
+    close(in_fd);
+    close(out_fd);
+    0
+}
+
+pub unsafe fn cmd_mv(src: *const u8, dest: *const u8) -> i32 {
+    let res = rename(src, dest);
+    if res < 0 {
+        let cp_res = cmd_cp(src, dest);
+        if cp_res == 0 {
+            unlink(src);
+            0
+        } else {
+            printf(b"mv: cannot move '%s' to '%s'\n\0".as_ptr(), src, dest);
+            1
+        }
+    } else {
+        0
+    }
+}
+
 #[panic_handler]
 fn panic(_info: &PanicInfo) -> ! {
     unsafe { exit(1) };

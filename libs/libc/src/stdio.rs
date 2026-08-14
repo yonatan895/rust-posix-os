@@ -31,6 +31,11 @@ pub unsafe extern "C" fn getchar() -> i32 {
     }
 }
 
+#[no_mangle]
+pub unsafe extern "C" fn rename(oldpath: *const u8, newpath: *const u8) -> i32 {
+    crate::syscall::syscall2(SYS_RENAME, oldpath as usize, newpath as usize) as i32
+}
+
 pub struct FormatBuffer<'a> {
     pub buf: &'a mut [u8],
     pub written: usize,

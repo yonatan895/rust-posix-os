@@ -56,6 +56,7 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
         SYS_SYSINFO => sys_sysinfo(a1 as *mut Sysinfo),
         SYS_GETCWD => sys_getcwd(a1 as *mut u8, a2),
         SYS_CHDIR => sys_chdir(a1 as *const u8),
+        SYS_RENAME => sys_rename(a1 as *const u8, a2 as *const u8),
         SYS_MKDIR => sys_mkdir(a1 as *const u8, a2 as u32),
         SYS_RMDIR => sys_unlink(a1 as *const u8),
         SYS_UNLINK => sys_unlink(a1 as *const u8),
@@ -658,6 +659,63 @@ fn sys_unlink(path_ptr: *const u8) -> isize {
             -(err as isize)
         }
     }
+}
+
+fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
+    let pid = match get_current_process() {
+        Some(p) => p.lock().pid,
+        None => 0,
+    };
+    if oldpath_ptr.is_null() || newpath_ptr.is_null() {
+        return -(EFAULT as isize);
+    }
+    let oldpath = unsafe {
+        let mut len = 0;
+        while *oldpath_ptr.add(len) != 0 {
+            len += 1;
+        }
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(oldpath_ptr, len))
+    };
+    let newpath = unsafe {
+        let mut len = 0;
+        while *newpath_ptr.add(len) != 0 {
+            len += 1;
+        }
+        core::str::from_utf8_unchecked(core::slice::from_raw_parts(newpath_ptr, len))
+    };
+
+    let (old_parent, old_basename) = match resolve_parent_and_basename(oldpath) {
+        Ok(res) => res,
+        Err(err) => return -(err as isize),
+    };
+    let (new_parent, new_basename) = match resolve_parent_and_basename(newpath) {
+        Ok(res) => res,
+        Err(err) => return -(err as isize),
+    };
+
+    let source_inode = match old_parent.lookup(&old_basename) {
+        Ok(i) => i,
+        Err(err) => return -(err as isize),
+    };
+
+    if let Ok(target_inode) = new_parent.lookup(&new_basename) {
+        if source_inode.file_type() == FileType::Directory && target_inode.file_type() != FileType::Directory {
+            return -(ENOTDIR as isize);
+        }
+        if source_inode.file_type() != FileType::Directory && target_inode.file_type() == FileType::Directory {
+            return -(EISDIR as isize);
+        }
+    }
+
+    if let Err(err) = new_parent.link_entry(&new_basename, source_inode) {
+        return -(err as isize);
+    }
+    if let Err(err) = old_parent.unlink(&old_basename) {
+        return -(err as isize);
+    }
+
+    log_audit_event(pid, 0, AUDIT_TYPE_FILE_MODIFY, 0, newpath, "File or directory renamed/moved");
+    0
 }
 
 fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {

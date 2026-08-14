@@ -57,6 +57,10 @@ pub trait Inode: Send + Sync {
         Ok(())
     }
 
+    fn link_entry(&self, _name: &str, _inode: Arc<dyn Inode>) -> Result<(), i32> {
+        Err(ENOTDIR)
+    }
+
     fn poll(&self) -> InodePollFlags {
         InodePollFlags {
             readable: true,
