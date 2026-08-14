@@ -2,7 +2,7 @@
 //!
 //! Submodules own one POSIX concern each. `user_access` is the only
 //! place that translates ostd user-memory errors into errno (ADR-0001 R2).
-//! The dispatcher itself is safe: register-frame deref lives in ostd.
+//! The dispatcher itself is safe: register-frame deref and CR3 switch live in ostd.
 
 pub mod fs;
 pub mod process;
@@ -23,6 +23,7 @@ pub(crate) use user_access::{copy_optional_user_str, copy_user_path, map_user_er
 use posix_abi::*;
 use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::ostd::mm::with_syscall_regs;
+use crate::services::process::get_current_process;
 
 #[no_mangle]
 pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
@@ -47,7 +48,17 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
             SYS_DUP => sys_dup(a1 as i32),
             SYS_DUP2 => sys_dup2(a1 as i32, a2 as i32),
             SYS_FORK => sys_fork(),
-            SYS_EXECVE => sys_execve(a1 as *const u8),
+            SYS_EXECVE => {
+                let res = sys_execve(a1 as *const u8);
+                if res == 0 {
+                    if let Some(proc_lock) = get_current_process() {
+                        if let Some(ref vm) = proc_lock.lock().vm_space {
+                            vm.activate();
+                        }
+                    }
+                }
+                res
+            }
             SYS_EXIT => {
                 let _ = sys_exit(a1 as i32);
                 0
@@ -72,6 +83,10 @@ pub extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize 
             SYS_AUDIT_SNAPSHOT => sys_audit_snapshot(a1 as *const u8, a2 as u32),
             _ => -(ENOSYS as isize),
         };
-        ret as usize
+
+        // The trampoline restores rax from this frame after we return.
+        // If we leave the syscall number here, getpid() prints 39 (SYS_GETPID).
+        r.rax = ret as usize;
+        r.rax
     })
 }
