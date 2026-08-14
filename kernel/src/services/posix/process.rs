@@ -16,10 +16,63 @@ const USER_RFLAGS_RESERVED: usize = 0x202; // Bit 1 is fixed 1, Bit 9 is IF (int
 
 /// POSIX fork system call.
 ///
-/// Returns -ENOSYS until true copy-on-write / deep address-space cloning is
-/// implemented in OSTD (ADR-0001 / AGENTS.md), avoiding silent memory faults.
-pub fn sys_fork() -> isize {
-    -(ENOSYS as isize)
+/// Duplicates the calling process and its virtual address space (eager cloning),
+/// returning child PID to the parent and 0 to the child.
+pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
+    let parent_arc = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let parent = parent_arc.lock();
+
+    let child_pid = alloc_pid();
+    let mut child = Process::new(child_pid, parent.pid, parent.cwd.clone());
+
+    // Clone parent's VmSpace eagerly (duplicating page frames)
+    if let Some(ref parent_vm) = parent.vm_space {
+        match parent_vm.clone_from() {
+            Some(vm) => child.vm_space = Some(vm),
+            None => return -(ENOMEM as isize),
+        }
+    }
+
+    child.entry_point = parent.entry_point;
+    child.user_stack_top = parent.user_stack_top;
+    child.mmap_next_vaddr = parent.mmap_next_vaddr;
+    child.has_started = true;
+
+    // Clone open file descriptors
+    child.fds = parent.fds.clone();
+
+    // Clone signal mask and signal dispositions from parent
+    let parent_mask = SIGNALS.get_procmask(parent.pid);
+    let _ = SIGNALS.set_procmask(child_pid, SIG_SETMASK, parent_mask);
+    for sig in SIG_MIN..=SIG_MAX {
+        let act = SIGNALS.get_action(parent.pid, sig);
+        let _ = SIGNALS.set_action(child_pid, sig, act);
+    }
+
+    // Initialize child's kernel stack with TrapFrame where rax = 0
+    let child_saved_rsp =
+        crate::ostd::task::init_fork_child_stack(&mut child.kernel_stack, parent_regs);
+    child
+        .saved_kernel_rsp
+        .store(child_saved_rsp, Ordering::Release);
+
+    let child_arc = alloc::sync::Arc::new(crate::ostd::sync::SpinLock::new(child));
+
+    // Register child in PROCESS_TABLE
+    {
+        let mut table = PROCESS_TABLE.lock();
+        table.insert(child_pid, child_arc.clone());
+    }
+
+    // Add child to scheduler ready queue
+    crate::services::scheduler::SCHEDULER
+        .lock()
+        .add_task(child_arc);
+
+    child_pid as isize
 }
 
 pub fn sys_execve(
