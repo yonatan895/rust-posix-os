@@ -7,6 +7,7 @@ use posix_abi::*;
 
 const LARGE_MAGIC: usize = 0x504F5349584D454D; // "POSIXMEM"
 const ARENA_MAGIC: usize = 0x504F53495841524E; // "POSIXARN"
+const FREE_MAGIC: usize = 0x504F534958465245; // "POSIXFRE"
 
 const ARENA_SIZE: usize = 64 * 1024; // 64 KiB chunks
 const NUM_CLASSES: usize = 8;
@@ -23,6 +24,7 @@ struct BlockHeader {
 #[repr(C)]
 struct FreeNode {
     next: *mut FreeNode,
+    magic: usize,
 }
 
 #[repr(C)]
@@ -48,6 +50,7 @@ struct AllocatorState {
     mmap_count: usize,
 }
 
+// NOTE: Allocator state is process-local and not thread-safe under shared-memory multi-threading.
 static mut STATE: AllocatorState = AllocatorState {
     free_lists: [core::ptr::null_mut(); NUM_CLASSES],
     current_arenas: [core::ptr::null_mut(); NUM_CLASSES],
@@ -107,9 +110,6 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
         while class_idx < NUM_CLASSES && SIZE_CLASSES[class_idx] < size {
             class_idx += 1;
         }
-        if class_idx >= NUM_CLASSES {
-            class_idx = NUM_CLASSES - 1;
-        }
         let b_size = SIZE_CLASSES[class_idx];
 
         // SAFETY: Operations on process-local allocator state and arena pointers.
@@ -120,6 +120,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
             let node = (*state).free_lists[class_idx];
             if !node.is_null() {
                 (*state).free_lists[class_idx] = (*node).next;
+                (*node).magic = 0; // Clear free magic upon reallocation
                 return node as *mut u8;
             }
 
@@ -132,6 +133,12 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
             }
 
             // 3. Allocate new 64 KiB arena chunk
+            let count = (*state).arena_count;
+            if count >= MAX_ARENAS {
+                // Fail-closed: cannot record more arenas in fixed table
+                return core::ptr::null_mut();
+            }
+
             let arena_ptr = mmap(
                 core::ptr::null_mut(),
                 ARENA_SIZE,
@@ -155,15 +162,12 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
             (*arena).next_arena = (*state).current_arenas[class_idx];
             (*state).current_arenas[class_idx] = arena;
 
-            let count = (*state).arena_count;
-            if count < MAX_ARENAS {
-                (*state).arena_records[count] = ArenaRecord {
-                    start: arena_ptr as usize,
-                    end: (arena_ptr as usize) + ARENA_SIZE,
-                    class_idx,
-                };
-                (*state).arena_count = count + 1;
-            }
+            (*state).arena_records[count] = ArenaRecord {
+                start: arena_ptr as usize,
+                end: (arena_ptr as usize) + ARENA_SIZE,
+                class_idx,
+            };
+            (*state).arena_count = count + 1;
 
             arena_ptr.add(hdr_size)
         }
@@ -188,6 +192,11 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
             if p >= rec.start && p < rec.end {
                 let class_idx = rec.class_idx;
                 let node = ptr as *mut FreeNode;
+                // Double-free guard: if already marked freed, skip duplicate insertion
+                if (*node).magic == FREE_MAGIC {
+                    return;
+                }
+                (*node).magic = FREE_MAGIC;
                 (*node).next = (*state).free_lists[class_idx];
                 (*state).free_lists[class_idx] = node;
                 return;
