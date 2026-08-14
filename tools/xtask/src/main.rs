@@ -16,9 +16,7 @@ fn main() {
             create_initramfs();
             setup_iso_root();
         }
-        "initramfs" => {
-            create_initramfs();
-        }
+        "initramfs" => create_initramfs(),
         "run" => {
             build_all();
             create_initramfs();
@@ -54,7 +52,6 @@ fn build_all() {
         .env("RUSTFLAGS", "-C relocation-model=static -C code-model=kernel")
         .status()
         .expect("Failed to execute cargo build");
-
     if !status.success() {
         eprintln!("[xtask] Compilation failed.");
         std::process::exit(1);
@@ -62,13 +59,79 @@ fn build_all() {
     println!("[xtask] Workspace crates compiled successfully!");
 }
 
-fn strip_binary(path: &Path) {
-    for tool in ["llvm-strip", "rust-llvm-strip", "strip"] {
-        if let Ok(status) = Command::new(tool).arg("--strip-all").arg(path).status() {
-            if status.success() {
-                return;
-            }
+fn rustc_sysroot() -> Option<PathBuf> {
+    let out = Command::new("rustc").args(["--print", "sysroot"]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let s = String::from_utf8(out.stdout).ok()?;
+    let p = PathBuf::from(s.trim());
+    if p.exists() {
+        Some(p)
+    } else {
+        None
+    }
+}
+
+fn find_llvm_strip() -> Option<PathBuf> {
+    for name in ["llvm-strip", "rust-llvm-strip", "strip", "llvm-strip.exe", "strip.exe"] {
+        if Command::new(name).arg("--version").output().map(|o| o.status.success()).unwrap_or(false) {
+            return Some(PathBuf::from(name));
         }
+    }
+    let sysroot = rustc_sysroot()?;
+    let host = env::var("HOST").ok().or_else(|| {
+        Command::new("rustc")
+            .args(["-vV"])
+            .output()
+            .ok()
+            .and_then(|o| {
+                String::from_utf8(o.stdout).ok().and_then(|s| {
+                    s.lines()
+                        .find_map(|l| l.strip_prefix("host: ").map(|h| h.trim().to_string()))
+                })
+            })
+    })?;
+    let candidates = [
+        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-strip.exe"),
+        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-strip"),
+        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-objcopy.exe"),
+        sysroot.join("lib/rustlib").join(&host).join("bin/llvm-objcopy"),
+    ];
+    candidates.into_iter().find(|p| p.exists())
+}
+
+fn strip_binary(path: &Path) {
+    let Some(tool) = find_llvm_strip() else {
+        eprintln!("[xtask] warning: llvm-strip not found (install rustup component llvm-tools-preview)");
+        return;
+    };
+    let ok = Command::new(&tool)
+        .arg("--strip-all")
+        .arg(path)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+    if !ok {
+        eprintln!("[xtask] warning: {} --strip-all {} failed", tool.display(), path.display());
+    }
+}
+
+fn pack_bin(tar: &mut File, src: &Path, dest: &str) {
+    strip_binary(src);
+    match fs::read(src) {
+        Ok(data) => {
+            if data.len() > 512 * 1024 {
+                eprintln!(
+                    "[xtask] warning: {} is {} bytes after strip; unpack may stress the kernel heap",
+                    dest,
+                    data.len()
+                );
+            }
+            write_tar_entry(tar, dest, &data, false);
+            println!("[xtask]   + Packed /{} ({} bytes)", dest, data.len());
+        }
+        Err(e) => eprintln!("[xtask] warning: skip {}: {}", src.display(), e),
     }
 }
 
@@ -76,36 +139,15 @@ fn create_initramfs() {
     println!("[xtask] Packaging initramfs.tar archive...");
     let target_dir = Path::new("target/x86_64-unknown-none/debug");
     let initramfs_path = target_dir.join("initramfs.tar");
-
-    let init_bin = target_dir.join("init");
-    let shell_bin = target_dir.join("shell");
-    let coreutils_bin = target_dir.join("coreutils");
-
-    strip_binary(&init_bin);
-    strip_binary(&shell_bin);
-    strip_binary(&coreutils_bin);
-
     let mut tar_file = File::create(&initramfs_path).expect("Failed to create initramfs.tar");
-
-    if let Ok(data) = fs::read(&init_bin) {
-        write_tar_entry(&mut tar_file, "bin/init", &data, false);
-        println!("[xtask]   + Packed /bin/init ({} bytes)", data.len());
-    }
-    if let Ok(data) = fs::read(&shell_bin) {
-        write_tar_entry(&mut tar_file, "bin/sh", &data, false);
-        println!("[xtask]   + Packed /bin/sh ({} bytes)", data.len());
-    }
-    if let Ok(data) = fs::read(&coreutils_bin) {
-        write_tar_entry(&mut tar_file, "bin/coreutils", &data, false);
-        println!("[xtask]   + Packed /bin/coreutils ({} bytes)", data.len());
-    }
-
+    pack_bin(&mut tar_file, &target_dir.join("init"), "bin/init");
+    pack_bin(&mut tar_file, &target_dir.join("shell"), "bin/sh");
+    pack_bin(&mut tar_file, &target_dir.join("coreutils"), "bin/coreutils");
     let motd = b"Welcome to Rust POSIX OS\nPOSIX.1-2024 Compliant Framekernel\n\n";
     write_tar_entry(&mut tar_file, "etc/motd", motd, false);
-
-    let zero_block = [0u8; 512];
-    tar_file.write_all(&zero_block).unwrap();
-    tar_file.write_all(&zero_block).unwrap();
+    let zero = [0u8; 512];
+    tar_file.write_all(&zero).unwrap();
+    tar_file.write_all(&zero).unwrap();
     println!("[xtask] Successfully created {}", initramfs_path.display());
 }
 
@@ -145,7 +187,6 @@ fn setup_iso_root() {
     let boot_dir = iso_root.join("boot");
     fs::create_dir_all(&efi_boot).expect("Failed to create EFI/BOOT dir");
     fs::create_dir_all(&boot_dir).expect("Failed to create boot dir");
-
     if !Path::new("BOOTX64.EFI").exists() {
         println!("[xtask] Downloading Limine BOOTX64.EFI...");
         let url = "https://github.com/limine-bootloader/limine/raw/v8.x-binary/BOOTX64.EFI";
@@ -156,21 +197,13 @@ fn setup_iso_root() {
             .unwrap_or(false);
         if !downloaded {
             let _ = Command::new("powershell")
-                .args([
-                    "-Command",
-                    &format!("Invoke-WebRequest -Uri '{}' -OutFile 'BOOTX64.EFI'", url),
-                ])
+                .args(["-Command", &format!("Invoke-WebRequest -Uri '{}' -OutFile 'BOOTX64.EFI'", url)])
                 .status();
         }
     }
-
     let _ = fs::copy("BOOTX64.EFI", efi_boot.join("BOOTX64.EFI"));
     let _ = fs::copy("target/x86_64-unknown-none/debug/kernel", boot_dir.join("kernel"));
-    let _ = fs::copy(
-        "target/x86_64-unknown-none/debug/initramfs.tar",
-        boot_dir.join("initramfs.tar"),
-    );
-
+    let _ = fs::copy("target/x86_64-unknown-none/debug/initramfs.tar", boot_dir.join("initramfs.tar"));
     let limine_cfg = "timeout: 0\nserial: yes\nverbose: yes\n\n/Rust POSIX OS\n    protocol: limine\n    kernel_path: boot():/boot/kernel\n    module_path: boot():/boot/initramfs.tar\n";
     let _ = fs::write(iso_root.join("limine.conf"), limine_cfg);
     let _ = fs::write(boot_dir.join("limine.conf"), limine_cfg);
@@ -217,8 +250,7 @@ fn find_ovmf() -> PathBuf {
             return c.clone();
         }
     }
-    eprintln!("[xtask] OVMF firmware not found. QEMU cannot UEFI-boot without it.");
-    eprintln!("[xtask] Set OVMF_PATH to edk2-x86_64-code.fd (Scoop: scoop/apps/qemu/current/share/).");
+    eprintln!("[xtask] OVMF firmware not found. Set OVMF_PATH to edk2-x86_64-code.fd");
     std::process::exit(1);
 }
 
@@ -227,10 +259,6 @@ fn run_qemu() {
     let qemu_exec = find_qemu();
     let ovmf = find_ovmf();
     println!("[xtask] QEMU={} OVMF={}", qemu_exec, ovmf.display());
-
-    // Plain -serial stdio, not mon:stdio. Kernel logs use ANSI colors;
-    // muxing the QEMU monitor onto the same stream lets those ESC sequences
-    // look like monitor commands and QEMU exits mid-boot.
     let mut qemu = Command::new(&qemu_exec);
     qemu.stdin(Stdio::inherit())
         .stdout(Stdio::inherit())
@@ -248,8 +276,9 @@ fn run_qemu() {
             "stdio",
             "-display",
             "none",
+            "-no-reboot",
         ]);
-    println!("[xtask] Interactive serial console. Type at the posix-os prompt. Ctrl-C stops QEMU.");
+    println!("[xtask] Interactive serial console. Type at posix-os:/#. Ctrl-C stops QEMU.");
     println!("[xtask] Executing: {:?}", qemu);
     let status = qemu.status().unwrap_or_else(|e| {
         eprintln!("[xtask] Failed to start QEMU: {}", e);
