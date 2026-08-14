@@ -1,4 +1,8 @@
 //! POSIX Filesystem & I/O System Calls.
+//!
+//! ADR-0001 R2: no raw user-pointer derefs here. Raw pointers arrive from
+//! the dispatcher, are converted to `UserPtr`/`UserSlice`/`copy_cstr_from_user`
+//! (ostd::mm::user), and are only ever used as integers.
 
 use alloc::sync::Arc;
 use posix_abi::*;
@@ -6,6 +10,28 @@ use crate::services::process::get_current_process;
 use crate::services::vfs::*;
 use crate::services::vfs::pipe::PipeBuffer;
 use crate::services::audit::log_audit_event;
+use crate::ostd::mm::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_STR_MAX};
+
+/// Upper bound on a single read/write bounce buffer, mirroring Linux's
+/// MAX_RW_COUNT. Prevents a user-controlled `count` from triggering a huge
+/// kernel allocation.
+const MAX_RW_COUNT: usize = 1 << 20;
+
+/// Map a user-memory validation failure to errno (ADR-0001 R2).
+/// TODO: centralize in services/posix/mod.rs when the dispatcher boundary
+/// is converted to UserPtr/UserSlice.
+fn map_uerr(e: UserAccessError) -> i32 {
+    match e {
+        UserAccessError::TooLong => ENAMETOOLONG,
+        _ => EFAULT,
+    }
+}
+
+/// Copy a NUL-terminated user path into a kernel buffer and validate UTF-8.
+fn copy_path<'a>(path_ptr: *const u8, kbuf: &'a mut [u8; USER_STR_MAX]) -> Result<&'a str, i32> {
+    let len = copy_cstr_from_user(path_ptr as usize, kbuf).map_err(map_uerr)?;
+    core::str::from_utf8(&kbuf[..len]).map_err(|_| EINVAL)
+}
 
 pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     let proc_lock = match get_current_process() {
@@ -20,9 +46,27 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
         }
     };
 
-    let slice = unsafe { core::slice::from_raw_parts_mut(buf, count) };
-    match handle.read(slice) {
-        Ok(n) => n as isize,
+    let count = count.min(MAX_RW_COUNT);
+    let uslice = match UserSlice::from_raw(buf as usize, count) {
+        Ok(s) => s,
+        Err(e) => return -(map_uerr(e) as isize),
+    };
+    if let Err(e) = uslice.validate(true) {
+        return -(map_uerr(e) as isize);
+    }
+
+    let mut kbuf = alloc::vec![0u8; count];
+    match handle.read(&mut kbuf) {
+        Ok(n) => {
+            let out = match UserSlice::from_raw(buf as usize, n) {
+                Ok(s) => s,
+                Err(e) => return -(map_uerr(e) as isize),
+            };
+            match out.copy_to_user(&kbuf[..n]) {
+                Ok(_) => n as isize,
+                Err(e) => -(map_uerr(e) as isize),
+            }
+        }
         Err(err) => -(err as isize),
     }
 }
@@ -40,20 +84,30 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
         }
     };
 
-    let slice = unsafe { core::slice::from_raw_parts(buf, count) };
-    match handle.write(slice) {
+    let count = count.min(MAX_RW_COUNT);
+    let uslice = match UserSlice::from_raw(buf as usize, count) {
+        Ok(s) => s,
+        Err(e) => return -(map_uerr(e) as isize),
+    };
+    if let Err(e) = uslice.validate(false) {
+        return -(map_uerr(e) as isize);
+    }
+
+    let mut kbuf = alloc::vec![0u8; count];
+    if let Err(e) = uslice.copy_from_user(&mut kbuf) {
+        return -(map_uerr(e) as isize);
+    }
+    match handle.write(&kbuf) {
         Ok(n) => n as isize,
         Err(err) => -(err as isize),
     }
 }
 
 pub fn sys_open(path_ptr: *const u8, flags: i32, _mode: u32) -> isize {
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let mut is_created = false;
@@ -115,12 +169,10 @@ pub fn sys_close(fd: i32) -> isize {
 }
 
 pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let inode = match resolve_path(path) {
@@ -130,8 +182,14 @@ pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
 
     match inode.stat() {
         Ok(st) => {
-            unsafe { *statbuf = st; }
-            0
+            let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
+                Ok(p) => p,
+                Err(e) => return -(map_uerr(e) as isize),
+            };
+            match out.write(st) {
+                Ok(()) => 0,
+                Err(e) => -(map_uerr(e) as isize),
+            }
         }
         Err(err) => -(err as isize),
     }
@@ -152,8 +210,14 @@ pub fn sys_fstat(fd: i32, statbuf: *mut Stat) -> isize {
 
     match handle.inode.stat() {
         Ok(st) => {
-            unsafe { *statbuf = st; }
-            0
+            let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
+                Ok(p) => p,
+                Err(e) => return -(map_uerr(e) as isize),
+            };
+            match out.write(st) {
+                Ok(()) => 0,
+                Err(e) => -(map_uerr(e) as isize),
+            }
         }
         Err(err) => -(err as isize),
     }
@@ -179,8 +243,13 @@ pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> isize {
 }
 
 pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
-    if pipefd_ptr.is_null() {
-        return -(EFAULT as isize);
+    // Validate BEFORE allocating fds: a bad user pointer must not leak them.
+    let out = match UserPtr::<[i32; 2]>::from_raw(pipefd_ptr as usize) {
+        Ok(p) => p,
+        Err(e) => return -(map_uerr(e) as isize),
+    };
+    if let Err(e) = out.validate(true) {
+        return -(map_uerr(e) as isize);
     }
 
     let (read_end, write_end) = PipeBuffer::new();
@@ -206,9 +275,10 @@ pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
         }
     };
 
-    unsafe {
-        (*pipefd_ptr)[0] = fd0;
-        (*pipefd_ptr)[1] = fd1;
+    if let Err(e) = out.write([fd0, fd1]) {
+        let _ = proc.close_fd(fd0);
+        let _ = proc.close_fd(fd1);
+        return -(map_uerr(e) as isize);
     }
 
     0
@@ -262,12 +332,10 @@ pub fn sys_mkdir(path_ptr: *const u8, _mode: u32) -> isize {
         Some(p) => p.lock().pid,
         None => 0,
     };
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let (parent, basename) = match resolve_parent_and_basename(path) {
@@ -295,12 +363,10 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
         Some(p) => p.lock().pid,
         None => 0,
     };
-    let path = unsafe {
-        let mut len = 0;
-        while *path_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(path_ptr, len))
+    let mut kpath = [0u8; USER_STR_MAX];
+    let path = match copy_path(path_ptr, &mut kpath) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let (parent, basename) = match resolve_parent_and_basename(path) {
@@ -328,22 +394,15 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
         Some(p) => p.lock().pid,
         None => 0,
     };
-    if oldpath_ptr.is_null() || newpath_ptr.is_null() {
-        return -(EFAULT as isize);
-    }
-    let oldpath = unsafe {
-        let mut len = 0;
-        while *oldpath_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(oldpath_ptr, len))
+    let mut kold = [0u8; USER_STR_MAX];
+    let oldpath = match copy_path(oldpath_ptr, &mut kold) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
-    let newpath = unsafe {
-        let mut len = 0;
-        while *newpath_ptr.add(len) != 0 {
-            len += 1;
-        }
-        core::str::from_utf8_unchecked(core::slice::from_raw_parts(newpath_ptr, len))
+    let mut knew = [0u8; USER_STR_MAX];
+    let newpath = match copy_path(newpath_ptr, &mut knew) {
+        Ok(p) => p,
+        Err(e) => return -(e as isize),
     };
 
     let (old_parent, old_basename) = match resolve_parent_and_basename(oldpath) {
@@ -392,6 +451,16 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
             None => return -(EBADF as isize),
         }
     };
+
+    // Validate the whole user buffer before doing any work (ADR-0001 R2).
+    let ubuf = match UserSlice::from_raw(dirp as usize, count) {
+        Ok(s) => s,
+        Err(e) => return -(map_uerr(e) as isize),
+    };
+    if let Err(e) = ubuf.validate(true) {
+        return -(map_uerr(e) as isize);
+    }
+
     let entries = match handle.inode.readdir() {
         Ok(e) => e,
         Err(err) => return -(err as isize),
@@ -411,9 +480,12 @@ pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
         if written + dirent_size > count {
             break;
         }
-        unsafe {
-            let target = (dirp as usize + written) as *mut Dirent64;
-            *target = entries[i];
+        let target = match UserPtr::<Dirent64>::from_raw(dirp as usize + written) {
+            Ok(p) => p,
+            Err(e) => return -(map_uerr(e) as isize),
+        };
+        if let Err(e) = target.write(entries[i]) {
+            return -(map_uerr(e) as isize);
         }
         written += dirent_size;
         entries_written += 1;

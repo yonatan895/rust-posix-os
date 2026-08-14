@@ -19,9 +19,6 @@
 //!   * Validate-then-copy is not atomic against a concurrent `munmap` from
 //!     another thread of the same process. The kernel is single-CPU with no
 //!     threads today; when threading lands, hold the address-space lock here.
-//!
-//! Wiring: add `pub mod user;` to `kernel/src/ostd/mm/mod.rs` (kept out of
-//! this commit; see ADR-0001).
 
 use core::marker::PhantomData;
 
@@ -143,6 +140,13 @@ impl<T> UserPtr<T> {
         self.addr
     }
 
+    /// Pre-validate the target range without performing the access.
+    /// Useful when a later failure would leak kernel resources (e.g. pipe
+    /// fds already allocated): validate early, then `read`/`write`.
+    pub fn validate(&self, need_write: bool) -> Result<(), UserAccessError> {
+        validate_user_range(self.addr, core::mem::size_of::<T>(), need_write)
+    }
+
     pub fn read(&self) -> Result<T, UserAccessError> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), false)?;
         // SAFETY: range just validated as in-user-range, present, and
@@ -181,6 +185,11 @@ impl UserSlice {
 
     pub fn is_empty(&self) -> bool {
         self.len == 0
+    }
+
+    /// Pre-validate the whole buffer without copying.
+    pub fn validate(&self, need_write: bool) -> Result<(), UserAccessError> {
+        validate_user_range(self.addr, self.len, need_write)
     }
 
     /// copy_from_user: read `self.len` bytes from the user buffer into `dst`.

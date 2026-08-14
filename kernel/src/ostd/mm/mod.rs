@@ -3,10 +3,12 @@
 pub mod pmm;
 pub mod vmm;
 pub mod heap;
+pub mod user;
 
 pub use pmm::{alloc_frame, free_frame, get_pmm_stats, PAGE_SIZE};
 pub use vmm::{phys_to_virt, virt_to_phys, VmSpace, PAGE_PRESENT, PAGE_WRITABLE, PAGE_USER, PAGE_NX};
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
+pub use user::{copy_cstr_from_user, UserAccessError, UserPtr, UserSlice, USER_SPACE_END, USER_STR_MAX};
 
 use crate::ostd::limine::LimineMemmapResponse;
 
