@@ -6,6 +6,7 @@ pub mod pipe;
 pub mod procfs;
 pub mod ramfs;
 pub mod tar;
+pub mod wait_queue;
 
 use crate::ostd::sync::SpinLock;
 use alloc::string::{String, ToString};
@@ -40,6 +41,14 @@ pub trait Inode: Send + Sync {
     fn lookup(&self, name: &str) -> Result<Arc<dyn Inode>, i32>;
     fn readdir(&self) -> Result<Vec<Dirent64>, i32>;
     fn stat(&self) -> Result<Stat, i32>;
+
+    fn read_with_flags(&self, offset: usize, buf: &mut [u8], _flags: i32) -> Result<usize, i32> {
+        self.read(offset, buf)
+    }
+
+    fn write_with_flags(&self, offset: usize, buf: &[u8], _flags: i32) -> Result<usize, i32> {
+        self.write(offset, buf)
+    }
 
     fn create_file(&self, _name: &str) -> Result<Arc<dyn Inode>, i32> {
         Err(ENOTDIR)
@@ -92,7 +101,7 @@ impl FileHandle {
 
     pub fn read(&self, buf: &mut [u8]) -> Result<usize, i32> {
         let mut offset_guard = self.offset.lock();
-        let bytes_read = self.inode.read(*offset_guard, buf)?;
+        let bytes_read = self.inode.read_with_flags(*offset_guard, buf, self.flags)?;
         *offset_guard += bytes_read;
         Ok(bytes_read)
     }
@@ -104,7 +113,9 @@ impl FileHandle {
         {
             *offset_guard = st.st_size as usize;
         }
-        let bytes_written = self.inode.write(*offset_guard, buf)?;
+        let bytes_written = self
+            .inode
+            .write_with_flags(*offset_guard, buf, self.flags)?;
         *offset_guard += bytes_written;
         Ok(bytes_written)
     }

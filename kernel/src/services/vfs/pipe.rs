@@ -1,5 +1,6 @@
-//! POSIX Anonymous Pipe Implementation.
+//! POSIX Anonymous Pipe Implementation - De-privileged Safe Service.
 
+use super::wait_queue::WaitQueue;
 use super::{FileType, Inode, InodePollFlags};
 use crate::ostd::sync::SpinLock;
 use alloc::sync::Arc;
@@ -15,6 +16,8 @@ pub struct PipeBuffer {
     len: usize,
     readers_open: usize,
     writers_open: usize,
+    pub read_waiters: WaitQueue,
+    pub write_waiters: WaitQueue,
 }
 
 pub struct PipeReadEnd {
@@ -35,6 +38,8 @@ impl PipeBuffer {
             len: 0,
             readers_open: 1,
             writers_open: 1,
+            read_waiters: WaitQueue::new(),
+            write_waiters: WaitQueue::new(),
         }));
         (
             Arc::new(PipeReadEnd {
@@ -50,20 +55,38 @@ impl Inode for PipeReadEnd {
         FileType::Fifo
     }
 
-    fn read(&self, _offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
+    fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
+        self.read_with_flags(offset, buf, 0)
+    }
+
+    fn read_with_flags(&self, _offset: usize, buf: &mut [u8], flags: i32) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
         if pipe.len == 0 {
             if pipe.writers_open == 0 {
                 return Ok(0); // EOF
             }
+            if flags & O_NONBLOCK != 0 {
+                return Err(EAGAIN);
+            }
+            // Blocking wait: register on read_waiters queue
+            if let Some(proc) = crate::services::process::get_current_process() {
+                let pid = proc.lock().pid;
+                pipe.read_waiters.add_waiter(pid);
+            }
+            // Cooperative placeholder for blocking path until task schedule-out (Issue #26)
             return Err(EAGAIN);
         }
+
         let to_read = buf.len().min(pipe.len);
         for item in buf.iter_mut().take(to_read) {
             *item = pipe.data[pipe.read_pos];
             pipe.read_pos = (pipe.read_pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len -= to_read;
+
+        // Wake write waiters after freeing space
+        pipe.write_waiters.wake_all();
+
         Ok(to_read)
     }
 
@@ -104,15 +127,30 @@ impl Inode for PipeWriteEnd {
         Err(EBADF)
     }
 
-    fn write(&self, _offset: usize, buf: &[u8]) -> Result<usize, i32> {
+    fn write(&self, offset: usize, buf: &[u8]) -> Result<usize, i32> {
+        self.write_with_flags(offset, buf, 0)
+    }
+
+    fn write_with_flags(&self, _offset: usize, buf: &[u8], flags: i32) -> Result<usize, i32> {
         let mut pipe = self.buf.lock();
         if pipe.readers_open == 0 {
+            // Last reader closed: return -EPIPE (and trigger SIGPIPE once signal dispatch is wired)
             return Err(EPIPE);
         }
         let space = PIPE_BUFFER_SIZE - pipe.len;
         if space == 0 {
+            if flags & O_NONBLOCK != 0 {
+                return Err(EAGAIN);
+            }
+            // Blocking wait: register on write_waiters queue
+            if let Some(proc) = crate::services::process::get_current_process() {
+                let pid = proc.lock().pid;
+                pipe.write_waiters.add_waiter(pid);
+            }
+            // Cooperative placeholder for blocking path until task schedule-out (Issue #26)
             return Err(EAGAIN);
         }
+
         let to_write = buf.len().min(space);
         for &byte in buf.iter().take(to_write) {
             let pos = pipe.write_pos;
@@ -120,6 +158,10 @@ impl Inode for PipeWriteEnd {
             pipe.write_pos = (pos + 1) % PIPE_BUFFER_SIZE;
         }
         pipe.len += to_write;
+
+        // Wake read waiters after producing data
+        pipe.read_waiters.wake_all();
+
         Ok(to_write)
     }
 
@@ -152,6 +194,9 @@ impl Drop for PipeReadEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
         pipe.readers_open = pipe.readers_open.saturating_sub(1);
+        if pipe.readers_open == 0 {
+            pipe.write_waiters.wake_all();
+        }
     }
 }
 
@@ -159,5 +204,8 @@ impl Drop for PipeWriteEnd {
     fn drop(&mut self) {
         let mut pipe = self.buf.lock();
         pipe.writers_open = pipe.writers_open.saturating_sub(1);
+        if pipe.writers_open == 0 {
+            pipe.read_waiters.wake_all();
+        }
     }
 }

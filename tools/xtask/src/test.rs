@@ -16,6 +16,7 @@ pub fn run_tests() {
     test_preemptive_timer_round_robin();
     test_waitpid_parentage_isolation();
     test_waitpid_wnohang_semantics();
+    test_pipe_blocking_and_eof_semantics();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -39,6 +40,7 @@ pub fn run_tests() {
         "Preemptive Timer Round-Robin Test",
         "waitpid Parentage Isolation Test",
         "waitpid WNOHANG Semantics Test",
+        "Pipe Blocking & EOF Semantics Test",
     ];
 
     for t in tests {
@@ -263,4 +265,122 @@ fn test_waitpid_wnohang_semantics() {
         Err(10),
         "WNOHANG failed to return -ECHILD when no children exist"
     );
+}
+
+fn test_pipe_blocking_and_eof_semantics() {
+    struct MockPipe {
+        data: Vec<u8>,
+        readers_open: usize,
+        writers_open: usize,
+        read_waiters: Vec<i32>,
+        write_waiters: Vec<i32>,
+        capacity: usize,
+    }
+
+    impl MockPipe {
+        fn new(cap: usize) -> Self {
+            Self {
+                data: Vec::new(),
+                readers_open: 1,
+                writers_open: 1,
+                read_waiters: Vec::new(),
+                write_waiters: Vec::new(),
+                capacity: cap,
+            }
+        }
+
+        fn read(
+            &mut self,
+            buf: &mut [u8],
+            is_nonblock: bool,
+            caller_pid: i32,
+        ) -> Result<usize, &'static str> {
+            if self.data.is_empty() {
+                if self.writers_open == 0 {
+                    return Ok(0); // EOF
+                }
+                if is_nonblock {
+                    return Err("EAGAIN");
+                }
+                self.read_waiters.push(caller_pid);
+                return Err("BLOCK");
+            }
+            let to_read = buf.len().min(self.data.len());
+            for (i, byte) in self.data.drain(0..to_read).enumerate() {
+                buf[i] = byte;
+            }
+            self.write_waiters.clear(); // Wakes writers
+            Ok(to_read)
+        }
+
+        fn write(
+            &mut self,
+            buf: &[u8],
+            is_nonblock: bool,
+            caller_pid: i32,
+        ) -> Result<usize, &'static str> {
+            if self.readers_open == 0 {
+                return Err("EPIPE");
+            }
+            let space = self.capacity - self.data.len();
+            if space == 0 {
+                if is_nonblock {
+                    return Err("EAGAIN");
+                }
+                self.write_waiters.push(caller_pid);
+                return Err("BLOCK");
+            }
+            let to_write = buf.len().min(space);
+            self.data.extend_from_slice(&buf[..to_write]);
+            self.read_waiters.clear(); // Wakes readers
+            Ok(to_write)
+        }
+
+        fn close_writer(&mut self) {
+            self.writers_open = self.writers_open.saturating_sub(1);
+            if self.writers_open == 0 {
+                self.read_waiters.clear(); // Wakes readers for EOF
+            }
+        }
+
+        fn close_reader(&mut self) {
+            self.readers_open = self.readers_open.saturating_sub(1);
+            if self.readers_open == 0 {
+                self.write_waiters.clear(); // Wakes writers for EPIPE
+            }
+        }
+    }
+
+    let mut pipe = MockPipe::new(4);
+    let mut buf = [0u8; 8];
+
+    // 1. Empty read with nonblock -> EAGAIN
+    assert_eq!(pipe.read(&mut buf, true, 1), Err("EAGAIN"));
+
+    // 2. Empty read without nonblock -> BLOCK (adds to read_waiters)
+    assert_eq!(pipe.read(&mut buf, false, 1), Err("BLOCK"));
+    assert_eq!(pipe.read_waiters, vec![1]);
+
+    // 3. Write data -> unblocks readers and fills buffer
+    assert_eq!(pipe.write(b"abcd", false, 2), Ok(4));
+    assert!(
+        pipe.read_waiters.is_empty(),
+        "Writers failed to wake read_waiters"
+    );
+
+    // 4. Full write with nonblock -> EAGAIN
+    assert_eq!(pipe.write(b"e", true, 2), Err("EAGAIN"));
+
+    // 5. Read data -> gets 4 bytes, unblocks write_waiters
+    assert_eq!(pipe.read(&mut buf, false, 1), Ok(4));
+    assert_eq!(&buf[..4], b"abcd");
+
+    // 6. Close writer -> reader gets EOF 0
+    pipe.close_writer();
+    assert_eq!(pipe.read(&mut buf, false, 1), Ok(0));
+
+    // 7. Close reader on new pipe -> writer gets EPIPE
+    let mut pipe2 = MockPipe::new(4);
+    pipe2.close_reader();
+    assert_eq!(pipe2.write(b"a", false, 2), Err("EPIPE"));
 }
