@@ -1,4 +1,4 @@
-//! Synchronization Primitives for the Kernel Framework (OSTD).
+//! Synchronization primitives for the kernel framework (OSTD).
 
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
@@ -25,12 +25,11 @@ impl<T> SpinLock<T> {
     }
 
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        while self.lock.compare_exchange_weak(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_err() {
+        while self
+            .lock
+            .compare_exchange_weak(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_err()
+        {
             while self.lock.load(Ordering::Relaxed) {
                 core::hint::spin_loop();
             }
@@ -39,12 +38,11 @@ impl<T> SpinLock<T> {
     }
 
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
-        if self.lock.compare_exchange(
-            false,
-            true,
-            Ordering::Acquire,
-            Ordering::Relaxed,
-        ).is_ok() {
+        if self
+            .lock
+            .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
+            .is_ok()
+        {
             Some(SpinLockGuard { lock: self })
         } else {
             None
@@ -52,55 +50,21 @@ impl<T> SpinLock<T> {
     }
 }
 
-impl<'a, T> Deref for SpinLockGuard<'a, T> {
+impl<T> Deref for SpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &*self.lock.data.get() }
     }
 }
 
-impl<'a, T> DerefMut for SpinLockGuard<'a, T> {
+impl<T> DerefMut for SpinLockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut *self.lock.data.get() }
     }
 }
 
-impl<'a, T> Drop for SpinLockGuard<'a, T> {
+impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.lock.store(false, Ordering::Release);
-    }
-}
-
-pub struct Once<T> {
-    state: AtomicBool,
-    data: UnsafeCell<Option<T>>,
-}
-
-unsafe impl<T: Send + Sync> Sync for Once<T> {}
-
-impl<T> Once<T> {
-    pub const fn new() -> Self {
-        Self {
-            state: AtomicBool::new(false),
-            data: UnsafeCell::new(None),
-        }
-    }
-
-    pub fn call_once<F: FnOnce() -> T>(&self, f: F) {
-        if !self.state.load(Ordering::Acquire) {
-            let val = f();
-            unsafe {
-                *self.data.get() = Some(val);
-            }
-            self.state.store(true, Ordering::Release);
-        }
-    }
-
-    pub fn get(&self) -> Option<&T> {
-        if self.state.load(Ordering::Acquire) {
-            unsafe { (*self.data.get()).as_ref() }
-        } else {
-            None
-        }
     }
 }
