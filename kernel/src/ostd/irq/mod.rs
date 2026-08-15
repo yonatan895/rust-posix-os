@@ -1,96 +1,25 @@
 //! Interrupt Controller & Hardware Timers in OSTD.
+//!
+//! Exposes architecture-neutral IRQ primitives, delegating architecture-specific
+//! controller (e.g. 8259 PIC) and timer (e.g. 8254 PIT) programming to `ostd::arch`.
 
-use crate::ostd::arch::{io_wait, outb};
+#[cfg(target_arch = "x86_64")]
+use crate::ostd::arch::x86_64::{io_wait, outb, pic, pit};
 
-pub const PIT_FREQUENCY_HZ: u32 = 100;
-pub const PIT_BASE_FREQUENCY_HZ: u32 = 1_193_182;
-pub const PIT_DIVISOR: u16 = (PIT_BASE_FREQUENCY_HZ / PIT_FREQUENCY_HZ) as u16; // 11931 = 0x2E9B
+#[cfg(target_arch = "x86_64")]
+pub use crate::ostd::arch::x86_64::pit::{PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ};
 
-/// Remaps the legacy dual 8259 Programmable Interrupt Controllers (PIC).
-///
-/// Master PIC IRQs (0..7) are remapped to vectors `offset1..offset1+7`.
-/// Slave PIC IRQs (8..15) are remapped to vectors `offset2..offset2+7`.
-///
-/// # Safety
-///
-/// Directly programs legacy 8259 PIC hardware ports (`0x20`, `0x21`, `0xA0`, `0xA1`).
-pub unsafe fn pic_remap(offset1: u8, offset2: u8) {
-    // SAFETY: Programming 8259 PIC initialization command words (ICW1..ICW4).
-    unsafe {
-        // ICW1: Start initialization sequence in cascade mode
-        outb(0x20, 0x11);
-        io_wait();
-        outb(0xA0, 0x11);
-        io_wait();
-
-        // ICW2: Vector offset mapping
-        outb(0x21, offset1);
-        io_wait();
-        outb(0xA1, offset2);
-        io_wait();
-
-        // ICW3: Cascade configuration (Master has Slave on IRQ2; Slave cascade identity is 2)
-        outb(0x21, 0x04);
-        io_wait();
-        outb(0xA1, 0x02);
-        io_wait();
-
-        // ICW4: Set 8086/88 mode
-        outb(0x21, 0x01);
-        io_wait();
-        outb(0xA1, 0x01);
-        io_wait();
-    }
-}
-
-/// Disables all IRQ lines on both Master and Slave PICs.
+/// Sends End of Interrupt (EOI) acknowledgment to the interrupt controller.
 ///
 /// # Safety
 ///
-/// Directly manipulates legacy 8259 PIC hardware registers.
-pub unsafe fn pic_disable() {
-    // SAFETY: Masking all IRQ lines on Master and Slave PICs via I/O ports.
-    unsafe {
-        outb(0x21, 0xFF);
-        io_wait();
-        outb(0xA1, 0xFF);
-        io_wait();
-    }
-}
-
-/// Sends End of Interrupt (EOI) acknowledgment to the 8259 PIC.
-///
-/// # Safety
-///
-/// Directly sends EOI command byte `0x20` to PIC command registers.
+/// Directly sends EOI command to the hardware interrupt controller.
+#[inline]
 pub unsafe fn send_eoi(irq: u8) {
-    // SAFETY: Sending EOI acknowledgment byte 0x20 to PIC command port.
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: Forwarding EOI to architecture-specific PIC handler.
     unsafe {
-        if irq >= 8 {
-            outb(0xA0, 0x20);
-        }
-        outb(0x20, 0x20);
-    }
-}
-
-/// Initializes the 8254 Programmable Interval Timer (PIT) Channel 0 for periodic 100 Hz interrupts.
-///
-/// # Safety
-///
-/// Directly writes configuration commands and reload counts to PIT I/O ports (`0x43`, `0x40`).
-pub unsafe fn pit_init() {
-    // SAFETY: Programming PIT Channel 0 mode 3 square wave generator with 100 Hz divisor.
-    unsafe {
-        // Mode/Command register (0x43): Channel 0, Access lo/hi byte, Mode 3 (Square Wave), Binary 16-bit
-        outb(0x43, 0x36);
-        io_wait();
-
-        // Channel 0 Data port (0x40): Write low byte, then high byte
-        let divisor = PIT_DIVISOR;
-        outb(0x40, (divisor & 0xFF) as u8);
-        io_wait();
-        outb(0x40, ((divisor >> 8) & 0xFF) as u8);
-        io_wait();
+        pic::send_eoi(irq);
     }
 }
 
@@ -103,13 +32,14 @@ pub unsafe fn pit_init() {
 ///
 /// Must be called during single-threaded kernel boot before interrupts are enabled.
 pub unsafe fn irq_init() {
+    #[cfg(target_arch = "x86_64")]
     // SAFETY: Remapping PIC, programming PIT timer, and unmasking timer IRQ0.
     unsafe {
         // Remap PIC: Master -> 0x20..0x27, Slave -> 0x28..0x2F
-        pic_remap(0x20, 0x28);
+        pic::pic_remap(0x20, 0x28);
 
         // Program PIT Channel 0 at 100 Hz
-        pit_init();
+        pit::pit_init();
 
         // Unmask IRQ0 (timer) on Master PIC (bit 0 = 0), mask all other IRQs (0xFE)
         outb(0x21, 0xFE);

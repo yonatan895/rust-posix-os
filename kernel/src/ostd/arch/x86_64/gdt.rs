@@ -1,4 +1,4 @@
-//! Global Descriptor Table (GDT) and Task State Segment (TSS).
+//! Global Descriptor Table (GDT) and Task State Segment (TSS) for x86_64.
 
 use core::arch::asm;
 use core::mem::size_of;
@@ -100,15 +100,19 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
         // Entry 3: 0x18 - User Data (Ring 3, Read/Write)
         (*gdt_ptr).entries[3] = 0x00CFF2000000FFFF;
         // Entry 4: 0x20 - User Code 64-bit (Ring 3, Exec/Read)
-        (*gdt_ptr).entries[4] = 0x00AFFA000000FFFF;
-        // Entry 5 & 6: 0x28 - 64-bit TSS Descriptor (16 bytes)
-        (*gdt_ptr).entries[5] = (tss_limit & 0xFFFF)
-            | ((tss_base & 0xFFFF) << 16)
-            | (((tss_base >> 16) & 0xFF) << 32)
-            | (0x89 << 40) // Present, 64-bit TSS (Type 9)
-            | (((tss_limit >> 16) & 0x0F) << 48)
-            | (((tss_base >> 24) & 0xFF) << 56);
-        (*gdt_ptr).entries[6] = tss_base >> 32;
+        (*gdt_ptr).entries[4] = 0x00AFF8000000FFFF;
+
+        // Entries 5-6: 0x28 - TSS Descriptor (16 bytes in 64-bit mode)
+        let mut tss_low: u64 = tss_limit & 0xFFFF;
+        tss_low |= (tss_base & 0xFFFFFF) << 16;
+        tss_low |= 0x89u64 << 40; // Present, 64-bit TSS (Available)
+        tss_low |= ((tss_limit >> 16) & 0xF) << 48;
+        tss_low |= ((tss_base >> 24) & 0xFF) << 56;
+
+        let tss_high: u64 = tss_base >> 32;
+
+        (*gdt_ptr).entries[5] = tss_low;
+        (*gdt_ptr).entries[6] = tss_high;
     }
 
     let descriptor = GdtDescriptor {
@@ -116,43 +120,45 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
         base: gdt_ptr as u64,
     };
 
-    // SAFETY: Loading GDT register and reloading segment registers with new code/data selectors.
+    // SAFETY: Loading GDT descriptor and reloading CS/DS/SS segment registers via asm.
     unsafe {
+        asm!("lgdt [{}]", in(reg) &descriptor, options(nostack));
+
+        // Reload segment registers with newly initialized GDT selectors
         asm!(
-            "lgdt [{}]",
             "push {kcs}",
             "lea {tmp}, [2f + rip]",
             "push {tmp}",
             "retfq",
             "2:",
-            "mov ax, {kds}",
-            "mov ds, ax",
-            "mov es, ax",
-            "mov ss, ax",
-            "mov fs, ax",
-            "mov gs, ax",
-            "ltr {tss_sel:x}",
-            in(reg) &descriptor,
+            "mov {tmp:x}, {kds}",
+            "mov ds, {tmp:x}",
+            "mov es, {tmp:x}",
+            "mov ss, {tmp:x}",
+            "mov fs, {tmp:x}",
+            "mov gs, {tmp:x}",
             kcs = const KERNEL_CODE_SEL,
             kds = const KERNEL_DATA_SEL,
-            tss_sel = in(reg) TSS_SEL,
             tmp = out(reg) _,
-            options(nostack)
+            options(preserves_flags)
         );
+
+        // Load Task Register (LTR) with TSS selector 0x28
+        asm!("ltr ax", in("ax") TSS_SEL, options(nomem, nostack, preserves_flags));
     }
 }
 
-/// Sets the privilege level 0 stack pointer (RSP0) in the active TSS and syscall MSR context.
+/// Updates the TSS.rsp0 privilege level 0 stack pointer on task switch.
 ///
 /// # Safety
 ///
 /// `stack_top` must be a valid, mapped kernel stack memory address.
 pub unsafe fn set_kernel_stack(stack_top: u64) {
-    // SAFETY: Updating TSS.rsp0 for the current CPU.
+    // SAFETY: Updating TSS.rsp0 for user-to-kernel interrupt/syscall stack switching.
     unsafe {
         (*GLOBAL_TSS.get()).rsp0 = stack_top;
     }
-    // SAFETY: Updating kernel stack for fast syscall instruction.
+    // SAFETY: Updating per-CPU kernel stack for fast syscall entry.
     unsafe {
         super::syscall::set_syscall_kernel_stack(stack_top);
     }
