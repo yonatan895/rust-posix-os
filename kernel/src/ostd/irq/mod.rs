@@ -9,13 +9,56 @@ use core::sync::atomic::{AtomicU64, Ordering};
 use crate::ostd::arch::x86_64::{io_wait, outb, pic, pit};
 
 #[cfg(target_arch = "x86_64")]
-pub use crate::ostd::arch::x86_64::pit::{PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ};
+pub use crate::ostd::arch::x86_64::pit::{
+    PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ, PIT_MAX_FREQUENCY_HZ,
+    PIT_MIN_FREQUENCY_HZ, pit_calc_divisor,
+};
 
-pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub(crate) static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Opaque CPU interrupt state token used for safe, portable `irq_save` and `irq_restore`.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub struct IrqFlags(pub usize);
+///
+/// The internal representation is private to prevent manual synthesis of invalid CPU flags.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct IrqFlags(usize);
+
+/// RAII guard that disables CPU interrupts upon creation and restores previous interrupt state on drop.
+pub struct IrqGuard {
+    flags: Option<IrqFlags>,
+}
+
+impl IrqGuard {
+    /// Creates a new `IrqGuard`, saving previous interrupt state and disabling CPU interrupts.
+    #[inline(always)]
+    pub fn new() -> Self {
+        Self {
+            flags: Some(irq_save()),
+        }
+    }
+}
+
+impl Default for IrqGuard {
+    #[inline(always)]
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for IrqGuard {
+    #[inline(always)]
+    fn drop(&mut self) {
+        if let Some(flags) = self.flags.take() {
+            irq_restore(flags);
+        }
+    }
+}
+
+/// Executes a closure with CPU interrupts disabled, restoring the previous interrupt state on completion.
+#[inline(always)]
+pub fn without_interrupts<R, F: FnOnce() -> R>(f: F) -> R {
+    let _guard = IrqGuard::new();
+    f()
+}
 
 /// Disables CPU interrupts and returns the previous interrupt state token.
 #[inline(always)]
@@ -119,19 +162,6 @@ pub unsafe fn send_eoi(irq: u8) {
     unimplemented!("send_eoi not implemented for this architecture");
 }
 
-/// Sends End of Interrupt (EOI) acknowledgment to the interrupt controller (alias for `send_eoi`).
-///
-/// # Safety
-///
-/// Directly sends EOI command to the hardware interrupt controller.
-#[inline(always)]
-pub unsafe fn eoi(irq: u8) {
-    // SAFETY: Forwarding to send_eoi.
-    unsafe {
-        send_eoi(irq);
-    }
-}
-
 /// Configures and starts the hardware periodic timer at a specified frequency in Hz.
 pub fn init_timer(hz: u32) {
     #[cfg(target_arch = "x86_64")]
@@ -143,7 +173,10 @@ pub fn init_timer(hz: u32) {
     unimplemented!("init_timer not implemented for this architecture");
 }
 
-/// Acknowledges the periodic timer interrupt (sends EOI for timer IRQ line).
+/// Acknowledges the periodic timer interrupt.
+///
+/// Note: On x86_64, this sends EOI to PIC IRQ0 (8254 PIT), an architecture-specific
+/// detail encapsulated behind this portable API.
 #[inline(always)]
 pub fn ack_timer() {
     #[cfg(target_arch = "x86_64")]
@@ -182,8 +215,8 @@ pub unsafe fn irq_init() {
         // Remap PIC: Master -> 0x20..0x27, Slave -> 0x28..0x2F
         pic::pic_remap(0x20, 0x28);
 
-        // Program PIT Channel 0 at 100 Hz
-        pit::pit_init();
+        // Program PIT Channel 0 at 100 Hz via portable timer abstraction
+        init_timer(PIT_FREQUENCY_HZ);
 
         // Unmask IRQ0 (timer) on Master PIC (bit 0 = 0), mask all other IRQs (0xFE)
         outb(0x21, 0xFE);

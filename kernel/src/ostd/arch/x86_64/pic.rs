@@ -1,4 +1,9 @@
 //! 8259 Programmable Interrupt Controller (PIC) Driver for x86_64.
+//!
+//! Note on Concurrency / Hardware State:
+//! The dual 8259 PIC registers (I/O ports `0x20`, `0x21`, `0xA0`, `0xA1`) are hardware resources.
+//! On this single-core (UP) architecture, IMR read-modify-write sequences are executed
+//! during early boot initialization or within interrupt-disabled critical sections (`irq_save`).
 
 use super::{inb, io_wait, outb};
 
@@ -56,10 +61,19 @@ pub unsafe fn pic_disable() {
 
 /// Masks the specified IRQ line (0..15) on the 8259 PIC.
 ///
+/// # Panics
+///
+/// Panics if `irq >= 16`.
+///
 /// # Safety
 ///
 /// Directly reads and writes PIC interrupt mask registers.
 pub unsafe fn mask(irq: u8) {
+    assert!(
+        irq < 16,
+        "PIC IRQ line out of range (must be 0..15): {}",
+        irq
+    );
     // SAFETY: Reading and modifying PIC mask register.
     unsafe {
         let port = if irq < 8 { 0x21 } else { 0xA1 };
@@ -72,10 +86,19 @@ pub unsafe fn mask(irq: u8) {
 
 /// Unmasks the specified IRQ line (0..15) on the 8259 PIC.
 ///
+/// # Panics
+///
+/// Panics if `irq >= 16`.
+///
 /// # Safety
 ///
 /// Directly reads and writes PIC interrupt mask registers.
 pub unsafe fn unmask(irq: u8) {
+    assert!(
+        irq < 16,
+        "PIC IRQ line out of range (must be 0..15): {}",
+        irq
+    );
     // SAFETY: Reading and modifying PIC mask register.
     unsafe {
         let port = if irq < 8 { 0x21 } else { 0xA1 };
@@ -88,10 +111,19 @@ pub unsafe fn unmask(irq: u8) {
 
 /// Sends End of Interrupt (EOI) acknowledgment to the 8259 PIC.
 ///
+/// # Panics
+///
+/// Panics if `irq >= 16`.
+///
 /// # Safety
 ///
 /// Directly sends EOI command byte `0x20` to PIC command registers.
 pub unsafe fn send_eoi(irq: u8) {
+    assert!(
+        irq < 16,
+        "PIC IRQ line out of range (must be 0..15): {}",
+        irq
+    );
     // SAFETY: Sending EOI acknowledgment byte 0x20 to PIC command port.
     unsafe {
         if irq >= 8 {

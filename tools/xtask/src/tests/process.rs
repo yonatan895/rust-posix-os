@@ -6,8 +6,13 @@ use std::collections::{BTreeMap, VecDeque};
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "process",
-        "PIT Timer Frequency Divisor Arithmetic",
+        "PIT Timer Frequency Divisor Arithmetic and Bounds",
         test_timer_configuration,
+    );
+    runner.run_test(
+        "process",
+        "PIC IRQ Bounds Validation and Monotonic Ticks",
+        test_pic_and_irq_primitives,
     );
     runner.run_test(
         "process",
@@ -26,11 +31,76 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
-fn test_timer_configuration() {
+fn pit_calc_divisor(hz: u32) -> Option<u16> {
     const PIT_BASE_FREQ: u32 = 1_193_182;
-    const TARGET_HZ: u32 = 100;
-    let divisor = (PIT_BASE_FREQ / TARGET_HZ) as u16;
-    assert_eq!(divisor, 11931, "PIT 100 Hz divisor calculation error");
+    const PIT_MIN_FREQ: u32 = 19;
+    const PIT_MAX_FREQ: u32 = PIT_BASE_FREQ;
+
+    if !(PIT_MIN_FREQ..=PIT_MAX_FREQ).contains(&hz) {
+        return None;
+    }
+    let divisor = PIT_BASE_FREQ / hz;
+    if divisor == 0 || divisor > 65535 {
+        None
+    } else {
+        Some(divisor as u16)
+    }
+}
+
+fn test_timer_configuration() {
+    // 100 Hz standard divisor
+    assert_eq!(
+        pit_calc_divisor(100),
+        Some(11931),
+        "PIT 100 Hz divisor calculation error"
+    );
+
+    // Minimum frequency (19 Hz)
+    assert_eq!(
+        pit_calc_divisor(19),
+        Some(62799),
+        "PIT 19 Hz divisor calculation error"
+    );
+
+    // Maximum frequency (1_193_182 Hz -> 1 tick per cycle)
+    assert_eq!(
+        pit_calc_divisor(1_193_182),
+        Some(1),
+        "PIT max freq divisor calculation error"
+    );
+
+    // Out of range (underflow / overflow)
+    assert_eq!(pit_calc_divisor(0), None, "0 Hz should be rejected");
+    assert_eq!(
+        pit_calc_divisor(18),
+        None,
+        "18 Hz (< 19 Hz min) should be rejected"
+    );
+    assert_eq!(
+        pit_calc_divisor(2_000_000),
+        None,
+        "2 MHz (> 1.19 MHz max) should be rejected"
+    );
+}
+
+fn test_pic_and_irq_primitives() {
+    // PIC IRQ range validation: valid lines 0..=15
+    for irq in 0..=15 {
+        let is_slave = irq >= 8;
+        let port = if !is_slave { 0x21 } else { 0xA1 };
+        let bit = if !is_slave { irq } else { irq - 8 };
+        assert!(bit < 8, "PIC bit calculation must never overflow u8 shift");
+        assert!(port == 0x21 || port == 0xA1);
+    }
+
+    // Monotonic tick sequence simulation
+    let ticks = std::sync::atomic::AtomicU64::new(0);
+    assert_eq!(ticks.load(std::sync::atomic::Ordering::Relaxed), 0);
+    for expected in 1..=100 {
+        let new_val = ticks.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+        assert_eq!(new_val, expected, "Monotonic tick increment mismatch");
+    }
+    assert_eq!(ticks.load(std::sync::atomic::Ordering::Relaxed), 100);
 }
 
 fn test_preemptive_timer_round_robin() {

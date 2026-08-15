@@ -153,8 +153,6 @@ pub unsafe extern "C" fn rust_general_protection_fault(
     }
 }
 
-pub use crate::ostd::irq::TIMER_TICKS;
-
 /// Rust timer tick handler called by `timer_interrupt_stub`.
 ///
 /// Increments system ticks, acknowledges the interrupt controller (EOI),

@@ -18,7 +18,7 @@ unsafe impl<T: Send> Send for SpinLock<T> {}
 
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
-    flags: IrqFlags,
+    flags: Option<IrqFlags>,
 }
 
 impl<T> SpinLock<T> {
@@ -43,7 +43,10 @@ impl<T> SpinLock<T> {
                 core::hint::spin_loop();
             }
         }
-        SpinLockGuard { lock: self, flags }
+        SpinLockGuard {
+            lock: self,
+            flags: Some(flags),
+        }
     }
 
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
@@ -55,7 +58,10 @@ impl<T> SpinLock<T> {
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            Some(SpinLockGuard { lock: self, flags })
+            Some(SpinLockGuard {
+                lock: self,
+                flags: Some(flags),
+            })
         } else {
             // Restore previous interrupt state if lock acquisition failed.
             irq_restore(flags);
@@ -68,7 +74,7 @@ impl<T> SpinLockGuard<'_, T> {
     /// Unlocks the spinlock without restoring the CPU interrupt state (leaves interrupts masked).
     pub fn unlock_without_restoring_interrupts(mut self) {
         self.lock.lock.store(false, Ordering::Release);
-        self.flags = IrqFlags(0);
+        self.flags = None;
         core::mem::forget(self);
     }
 }
@@ -92,6 +98,8 @@ impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.lock.store(false, Ordering::Release);
         // Restore CPU interrupt enable state from when the lock was acquired.
-        irq_restore(self.flags);
+        if let Some(flags) = self.flags.take() {
+            irq_restore(flags);
+        }
     }
 }
