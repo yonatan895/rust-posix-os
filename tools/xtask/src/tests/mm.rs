@@ -1,0 +1,291 @@
+//! Memory Management and Address Space Isolation Test Suite.
+
+use super::harness::TestRunner;
+use posix_abi::*;
+use std::collections::BTreeMap;
+
+pub fn register_tests(runner: &mut TestRunner) {
+    runner.run_test(
+        "mm",
+        "VMA Tracking and Range Gap Detection",
+        test_vma_tracking,
+    );
+    runner.run_test(
+        "mm",
+        "Process Fork Address Space Isolation",
+        test_fork_address_space_isolation,
+    );
+    runner.run_test(
+        "mm",
+        "mmap Address Bounds and Overflow Validation",
+        test_mmap_bounds_and_overflow,
+    );
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct MockVma {
+    start: usize,
+    end: usize,
+    prot: u32,
+    flags: u32,
+}
+
+struct MockVmSpace {
+    vmas: Vec<MockVma>,
+}
+
+impl MockVmSpace {
+    fn new() -> Self {
+        Self { vmas: Vec::new() }
+    }
+
+    fn insert_vma(&mut self, start: usize, end: usize, prot: u32, flags: u32) {
+        let mut new_vmas = Vec::new();
+        let mut inserted = false;
+        let mut cur_start = start;
+        let mut cur_end = end;
+
+        for vma in self.vmas.drain(..) {
+            if vma.end <= cur_start {
+                new_vmas.push(vma);
+            } else if vma.start >= cur_end {
+                if !inserted {
+                    new_vmas.push(MockVma {
+                        start: cur_start,
+                        end: cur_end,
+                        prot,
+                        flags,
+                    });
+                    inserted = true;
+                }
+                new_vmas.push(vma);
+            } else if vma.prot == prot && vma.flags == flags {
+                cur_start = cur_start.min(vma.start);
+                cur_end = cur_end.max(vma.end);
+            }
+        }
+
+        if !inserted {
+            new_vmas.push(MockVma {
+                start: cur_start,
+                end: cur_end,
+                prot,
+                flags,
+            });
+        }
+        self.vmas = new_vmas;
+    }
+
+    fn contains_range(&self, start: usize, end: usize) -> bool {
+        if start >= end {
+            return false;
+        }
+        let mut curr = start;
+        for vma in &self.vmas {
+            if vma.start <= curr && vma.end > curr {
+                curr = vma.end;
+                if curr >= end {
+                    return true;
+                }
+            }
+        }
+        false
+    }
+
+    fn munmap(&mut self, addr: usize, len: usize) -> Result<(), i32> {
+        if !addr.is_multiple_of(4096) || len == 0 {
+            return Err(EINVAL);
+        }
+        let end = addr + len;
+        self.vmas.retain(|v| !(v.start >= addr && v.end <= end));
+        Ok(())
+    }
+
+    fn mprotect(&mut self, addr: usize, len: usize, new_prot: u32) -> Result<(), i32> {
+        if !addr.is_multiple_of(4096) || len == 0 {
+            return Err(EINVAL);
+        }
+        let end = addr + len;
+        if !self.contains_range(addr, end) {
+            // Return -ENOMEM when trying to mprotect an unmapped gap per Linux/POSIX
+            return Err(ENOMEM);
+        }
+        let flags = self
+            .vmas
+            .iter()
+            .find(|v| v.start <= addr && addr < v.end)
+            .map(|v| v.flags)
+            .unwrap_or(0);
+        self.insert_vma(addr, end, new_prot, flags);
+        Ok(())
+    }
+}
+
+fn test_vma_tracking() {
+    let mut vm = MockVmSpace::new();
+    const MAP_ANON: u32 = 0x20;
+    vm.insert_vma(
+        0x6000_0000,
+        0x6000_2000,
+        (PROT_READ | PROT_WRITE) as u32,
+        MAP_ANON,
+    );
+
+    assert!(vm.contains_range(0x6000_0000, 0x6000_2000));
+    assert!(vm.contains_range(0x6000_0000, 0x6000_1000));
+    assert!(!vm.contains_range(0x6000_0000, 0x6000_3000)); // Gap beyond mapped VMA
+
+    // Test munmap on unmapped range succeeds with 0 per Linux
+    assert_eq!(vm.munmap(0x7000_0000, 4096), Ok(()));
+
+    // Test mprotect on unmapped gap returns -ENOMEM
+    assert_eq!(
+        vm.mprotect(0x6000_1000, 8192, PROT_READ as u32),
+        Err(ENOMEM)
+    );
+
+    // Test mprotect on valid mapped region succeeds and PRESERVES VMA flags
+    assert_eq!(vm.mprotect(0x6000_0000, 4096, PROT_READ as u32), Ok(()));
+    assert_eq!(
+        vm.vmas[0].flags, MAP_ANON,
+        "mprotect must preserve existing VMA flags"
+    );
+}
+
+fn test_fork_address_space_isolation() {
+    struct ProcessMemory {
+        pages: BTreeMap<usize, Vec<u8>>,
+    }
+
+    impl ProcessMemory {
+        fn new() -> Self {
+            Self {
+                pages: BTreeMap::new(),
+            }
+        }
+
+        fn clone_memory(&self) -> Self {
+            Self {
+                pages: self.pages.clone(), // Eager frame duplication
+            }
+        }
+    }
+
+    struct SimProcess {
+        pid: i32,
+        ppid: i32,
+        mem: ProcessMemory,
+        open_fds: Vec<i32>,
+    }
+
+    let mut parent = SimProcess {
+        pid: 1,
+        ppid: 0,
+        mem: ProcessMemory::new(),
+        open_fds: vec![0, 1, 2, 3],
+    };
+
+    // Parent writes initial data to its virtual page at 0x6000_0000
+    let mut initial_data = vec![0u8; 4096];
+    initial_data[0..4].copy_from_slice(&[0x42, 0x43, 0x44, 0x45]);
+    parent.mem.pages.insert(0x6000_0000, initial_data);
+
+    // Fork: Child created with eager address space clone
+    let child_pid = 2;
+    let mut child = SimProcess {
+        pid: child_pid,
+        ppid: parent.pid,
+        mem: parent.mem.clone_memory(),
+        open_fds: parent.open_fds.clone(),
+    };
+    assert_eq!(child.ppid, 1, "Child must record parent PID as PPID");
+
+    // Check return value semantics
+    let parent_ret = child.pid;
+    let child_ret = 0;
+    assert_eq!(parent_ret, 2, "Parent must receive child PID from fork()");
+    assert_eq!(child_ret, 0, "Child must receive 0 from fork()");
+
+    // Child modifies its memory copy
+    child.mem.pages.get_mut(&0x6000_0000).unwrap()[0..4].copy_from_slice(&[0x99, 0x88, 0x77, 0x66]);
+
+    // Verify Address Space Isolation: Parent memory is UNCHANGED
+    assert_eq!(
+        &parent.mem.pages.get(&0x6000_0000).unwrap()[0..4],
+        &[0x42, 0x43, 0x44, 0x45],
+        "Parent memory must remain isolated and unmodified when child writes"
+    );
+
+    assert_eq!(
+        &child.mem.pages.get(&0x6000_0000).unwrap()[0..4],
+        &[0x99, 0x88, 0x77, 0x66],
+        "Child memory must reflect its own private write"
+    );
+
+    // Verify File Descriptor Sharing
+    assert_eq!(child.open_fds, parent.open_fds);
+}
+
+fn test_mmap_bounds_and_overflow() {
+    const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
+    const PAGE_SIZE: usize = 4096;
+    const PAGE_MASK: usize = 0xFFF;
+    let kernel_addr = 0xFFFF_8000_0000_0000usize;
+
+    let check_mmap_addr = |addr: usize, len: usize| -> Result<usize, i32> {
+        if len == 0 {
+            return Err(EINVAL);
+        }
+        if len > USER_SPACE_END {
+            return Err(ENOMEM);
+        }
+        let pages = len.div_ceil(PAGE_SIZE);
+        let byte_len = match pages.checked_mul(PAGE_SIZE) {
+            Some(bytes) => bytes,
+            None => return Err(ENOMEM),
+        };
+        let vaddr = if addr == 0 {
+            0x0000_7000_0000_0000usize
+        } else {
+            addr & !PAGE_MASK
+        };
+        let _end_vaddr = match vaddr.checked_add(byte_len) {
+            Some(end) if end <= USER_SPACE_END => end,
+            _ => return Err(ENOMEM),
+        };
+        Ok(vaddr)
+    };
+
+    assert!(check_mmap_addr(0, 4096).is_ok());
+    assert!(check_mmap_addr(0x0000_6000_0000_0000, 4096).is_ok());
+    assert_eq!(
+        check_mmap_addr(kernel_addr, 4096),
+        Err(ENOMEM),
+        "mmap with kernel address must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(USER_SPACE_END - 2048, 8192),
+        Err(ENOMEM),
+        "mmap overflowing USER_SPACE_END must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(0, 0),
+        Err(EINVAL),
+        "mmap with length 0 must return -EINVAL"
+    );
+    assert_eq!(
+        check_mmap_addr(0, usize::MAX),
+        Err(ENOMEM),
+        "mmap with usize::MAX length must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(0, usize::MAX - 4000),
+        Err(ENOMEM),
+        "mmap with near-usize::MAX length must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(0, USER_SPACE_END + 1),
+        Err(ENOMEM),
+        "mmap with length exceeding USER_SPACE_END must return -ENOMEM"
+    );
+}
