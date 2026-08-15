@@ -55,6 +55,8 @@ fn validate_user_page(vaddr: usize, need_write: bool) -> Result<(), UserAccessEr
     unsafe {
         crate::ostd::arch::x86_64::paging::validate_user_page(current_root, vaddr, need_write)
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("validate_user_page not implemented for this architecture")
 }
 
 /// Validate that `[addr, addr + len)` is fully mapped user memory.

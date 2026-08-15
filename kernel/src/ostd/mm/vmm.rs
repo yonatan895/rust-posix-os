@@ -75,6 +75,8 @@ impl VmSpace {
         unsafe {
             crate::ostd::arch::x86_64::paging::copy_kernel_mappings(root_phys, active_root);
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("VmSpace::new() kernel mapping copy not implemented for this architecture");
 
         Some(Self {
             address_space: AddressSpace(root_phys),
@@ -287,6 +289,8 @@ impl VmSpace {
                 flags,
             );
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("VmSpace::set_page_flags() not implemented for this architecture");
     }
 
     /// Maps a 4 KiB virtual page to a physical frame in this address space.
@@ -306,6 +310,8 @@ impl VmSpace {
                 flags,
             )
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("VmSpace::map_page() not implemented for this architecture")
     }
 
     /// Unmaps a 4 KiB virtual page from this address space and frees its physical frame.
@@ -315,6 +321,9 @@ impl VmSpace {
         let freed_frame = unsafe {
             crate::ostd::arch::x86_64::paging::unmap_page(self.address_space.as_phys(), virt_addr)
         };
+        #[cfg(not(target_arch = "x86_64"))]
+        let freed_frame: Option<usize> =
+            unimplemented!("VmSpace::unmap_page() not implemented for this architecture");
 
         if let Some(phys) = freed_frame {
             free_frame(phys);
@@ -328,6 +337,8 @@ impl VmSpace {
         unsafe {
             crate::ostd::arch::x86_64::paging::translate(self.address_space.as_phys(), virt_addr)
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("VmSpace::translate() not implemented for this architecture")
     }
 
     /// Allocates physical frames, maps them into `[start_virt, start_virt + size)`, and registers a VMA.
@@ -434,6 +445,8 @@ impl Drop for VmSpace {
                 self.address_space.as_phys(),
             );
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("VmSpace drop not implemented for this architecture");
 
         self.vmas.clear();
     }

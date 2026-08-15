@@ -19,6 +19,8 @@ impl AddressSpace {
         unsafe {
             crate::ostd::arch::x86_64::write_cr3(self.0 as u64);
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("AddressSpace::activate() not implemented for this architecture");
     }
 
     /// Reads the currently active address space root from the CPU registers.
@@ -29,5 +31,7 @@ impl AddressSpace {
             let cr3 = unsafe { crate::ostd::arch::x86_64::read_cr3() };
             Self((cr3 as usize) & !0xFFF)
         }
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("AddressSpace::current() not implemented for this architecture")
     }
 }
