@@ -40,6 +40,7 @@ pub unsafe fn history_add(cmd: &[u8], len: usize) {
     if len == 0 {
         return;
     }
+    // SAFETY: Caller guarantees single-threaded shell execution context. Accesses and updates global history static ring buffer.
     unsafe {
         let count = HISTORY_COUNT;
         if count > 0 {
@@ -63,6 +64,7 @@ pub unsafe fn history_add(cmd: &[u8], len: usize) {
 ///
 /// Must only be called from single-threaded shell execution context.
 pub unsafe fn history_prev(cursor: &mut usize, buf: &mut [u8], len: &mut usize) {
+    // SAFETY: Caller guarantees single-threaded shell execution context. Reads entry from global circular history static buffer.
     unsafe {
         let total = HISTORY_COUNT;
         if total == 0 {
@@ -97,6 +99,7 @@ pub unsafe fn history_next(
     draft: &[u8],
     draft_len: usize,
 ) {
+    // SAFETY: Caller guarantees single-threaded shell execution context. Reads entry from global circular history static buffer.
     unsafe {
         let total = HISTORY_COUNT;
         if *cursor > 1 {

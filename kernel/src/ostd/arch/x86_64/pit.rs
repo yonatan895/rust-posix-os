@@ -24,7 +24,7 @@ pub unsafe fn pit_init_hz(hz: u32) {
         ),
     };
 
-    // SAFETY: Programming PIT Channel 0 mode 3 square wave generator.
+    // SAFETY: Programming 8254 PIT Channel 0 mode register (0x43) to Mode 3 (Square Wave, low/high byte access) and writing 16-bit reload divisor to Channel 0 data port (0x40).
     unsafe {
         // Mode/Command register (0x43): Channel 0, Access lo/hi byte, Mode 3 (Square Wave), Binary 16-bit
         outb(0x43, 0x36);
@@ -44,7 +44,7 @@ pub unsafe fn pit_init_hz(hz: u32) {
 ///
 /// Directly writes configuration commands and reload counts to PIT I/O ports (`0x43`, `0x40`).
 pub unsafe fn pit_init() {
-    // SAFETY: Initializing PIT at default 100 Hz frequency.
+    // SAFETY: Delegating to pit_init_hz with the default POSIX frequency PIT_FREQUENCY_HZ (100 Hz).
     unsafe {
         pit_init_hz(PIT_FREQUENCY_HZ);
     }

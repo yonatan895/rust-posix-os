@@ -155,9 +155,9 @@ impl TrapFrame {
 /// `frame` must point to a valid hardware exception stack frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, error_code: u64) {
-    // SAFETY: Reading CR2 register to obtain the faulting virtual address.
+    // SAFETY: Reading architectural CR2 register to obtain the faulting linear virtual address.
     let fault_addr = unsafe { read_cr2() };
-    // SAFETY: Dereferencing valid hardware exception frame pointer passed by CPU.
+    // SAFETY: Dereferencing valid hardware exception stack frame pointer supplied by the CPU.
     let rip = unsafe { (*frame).rip };
     log::error!(
         "PAGE FAULT (#PF) at 0x{:016x}, Error Code: 0x{:x}, RIP: 0x{:016x}",
@@ -166,7 +166,7 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
         rip
     );
     loop {
-        // SAFETY: Halting CPU on unrecoverable page fault.
+        // SAFETY: Halting CPU indefinitely on unrecoverable kernel page fault.
         unsafe { asm!("hlt") };
     }
 }
@@ -181,7 +181,7 @@ pub unsafe extern "C" fn rust_general_protection_fault(
     frame: *const InterruptFrame,
     error_code: u64,
 ) {
-    // SAFETY: Dereferencing valid hardware exception frame pointer passed by CPU.
+    // SAFETY: Dereferencing valid hardware exception stack frame pointer supplied by the CPU.
     let rip = unsafe { (*frame).rip };
     log::error!(
         "GENERAL PROTECTION FAULT (#GP), Error Code: 0x{:x}, RIP: 0x{:016x}",
@@ -189,7 +189,7 @@ pub unsafe extern "C" fn rust_general_protection_fault(
         rip
     );
     loop {
-        // SAFETY: Halting CPU on unrecoverable general protection fault.
+        // SAFETY: Halting CPU indefinitely on unrecoverable general protection fault.
         unsafe { asm!("hlt") };
     }
 }
@@ -208,7 +208,7 @@ pub extern "C" fn rust_timer_tick_handler(current_rsp: usize) -> usize {
     let target_pid =
         crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::SeqCst);
     if target_pid > 0 && crate::services::ipc::SIGNALS.has_unblocked_signals(target_pid) {
-        // SAFETY: next_rsp points to a valid TrapFrame on the kernel stack.
+        // SAFETY: next_rsp points to a valid TrapFrame allocated and preserved on the task kernel stack during the interrupt transition.
         let frame = unsafe { &mut *(next_rsp as *mut TrapFrame) };
         let terminated = crate::services::posix::check_and_deliver_signals_irq(frame, target_pid);
         if terminated {
@@ -305,7 +305,7 @@ pub unsafe extern "C" fn page_fault_stub() {
 pub unsafe fn idt_init() {
     let idt_ptr = GLOBAL_IDT.get();
 
-    // SAFETY: Arming exception and timer interrupt handlers in IDT during single-threaded boot.
+    // SAFETY: Initializing IDT entries for #GP (0x0D), #PF (0x0E), and PIT timer (0x20) in statically allocated GLOBAL_IDT during single-threaded boot initialization.
     unsafe {
         (*idt_ptr).entries[0x0D].set_handler(gp_fault_stub as *const () as usize, 0, 0); // #GP
         (*idt_ptr).entries[0x0E].set_handler(page_fault_stub as *const () as usize, 0, 0); // #PF
@@ -317,7 +317,7 @@ pub unsafe fn idt_init() {
         base: idt_ptr as u64,
     };
 
-    // SAFETY: Loading IDT descriptor into CPU via lidt instruction.
+    // SAFETY: Loading IDT register with valid base and limit pointing to static GLOBAL_IDT via lidt instruction.
     unsafe {
         asm!("lidt [{}]", in(reg) &descriptor, options(nostack));
     }

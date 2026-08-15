@@ -19,6 +19,7 @@ pub unsafe extern "C" fn mmap(
     fd: i32,
     offset: i64,
 ) -> *mut u8 {
+    // SAFETY: Issues SYS_MMAP syscall with address, length, protections, flags, fd, and offset.
     let ret = unsafe {
         syscall6(
             SYS_MMAP,
@@ -42,6 +43,7 @@ pub unsafe extern "C" fn mmap(
 /// `addr` must be page-aligned and reference a valid memory mapping.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn munmap(addr: *mut u8, length: usize) -> i32 {
+    // SAFETY: Issues SYS_MUNMAP syscall with base address pointer and byte length.
     unsafe { syscall2(SYS_MUNMAP, addr as usize, length) as i32 }
 }
 
@@ -54,5 +56,6 @@ pub unsafe extern "C" fn munmap(addr: *mut u8, length: usize) -> i32 {
 /// `addr` must be page-aligned and point to allocated memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mprotect(addr: *mut u8, len: usize, prot: i32) -> i32 {
+    // SAFETY: Issues SYS_MPROTECT syscall with base address pointer, length, and protection flags.
     unsafe { syscall3(SYS_MPROTECT, addr as usize, len, prot as usize) as i32 }
 }

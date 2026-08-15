@@ -16,7 +16,10 @@ pub struct SpinLock<T> {
     data: UnsafeCell<T>,
 }
 
+// SAFETY: SpinLock provides mutual exclusion via atomic spinlock flag and masks CPU interrupts via IrqGuard, ensuring safe concurrent access across threads and interrupt handlers.
 unsafe impl<T: Send> Sync for SpinLock<T> {}
+
+// SAFETY: Transferring ownership of SpinLock<T> across thread boundaries is safe as long as the underlying T is Send.
 unsafe impl<T: Send> Send for SpinLock<T> {}
 
 /// RAII guard providing exclusive access to locked data and restoring CPU interrupt state on drop.
@@ -82,14 +85,14 @@ impl<T> SpinLockGuard<'_, T> {
 impl<T> Deref for SpinLockGuard<'_, T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
-        // SAFETY: SpinLockGuard guarantees exclusive access while held.
+        // SAFETY: SpinLockGuard existence proves the spinlock is acquired with Acquire ordering, and interrupts are masked, ensuring exclusive access to UnsafeCell inner data.
         unsafe { &*self.lock.data.get() }
     }
 }
 
 impl<T> DerefMut for SpinLockGuard<'_, T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
-        // SAFETY: SpinLockGuard guarantees exclusive access while held.
+        // SAFETY: SpinLockGuard existence proves the spinlock is acquired with Acquire ordering, and interrupts are masked, ensuring exclusive access to UnsafeCell inner data.
         unsafe { &mut *self.lock.data.get() }
     }
 }

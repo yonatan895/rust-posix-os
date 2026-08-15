@@ -12,6 +12,7 @@ use posix_abi::*;
 /// `buf` must point to a buffer of at least `count` writable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
+    // SAFETY: Issues SYS_READ syscall with specified file descriptor, buffer pointer, and byte count.
     unsafe { syscall3(SYS_READ, fd as usize, buf as usize, count) as isize }
 }
 
@@ -24,6 +25,7 @@ pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
 /// `buf` must point to a buffer of at least `count` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
+    // SAFETY: Issues SYS_WRITE syscall with specified file descriptor, buffer pointer, and byte count.
     unsafe { syscall3(SYS_WRITE, fd as usize, buf as usize, count) as isize }
 }
 
@@ -36,6 +38,7 @@ pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
 /// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const u8, flags: i32, mode: u32) -> i32 {
+    // SAFETY: Issues SYS_OPEN syscall with null-terminated pathname, open flags, and permission mode.
     unsafe { syscall3(SYS_OPEN, path as usize, flags as usize, mode as usize) as i32 }
 }
 
@@ -48,6 +51,7 @@ pub unsafe extern "C" fn open(path: *const u8, flags: i32, mode: u32) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: i32) -> i32 {
+    // SAFETY: Issues SYS_CLOSE syscall to close the open file descriptor.
     unsafe { syscall1(SYS_CLOSE, fd as usize) as i32 }
 }
 
@@ -60,6 +64,7 @@ pub unsafe extern "C" fn close(fd: i32) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
+    // SAFETY: Issues SYS_LSEEK syscall to reposition the file offset.
     unsafe { syscall3(SYS_LSEEK, fd as usize, offset as usize, whence as usize) as i64 }
 }
 
@@ -72,6 +77,7 @@ pub unsafe extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dup(oldfd: i32) -> i32 {
+    // SAFETY: Issues SYS_DUP syscall to duplicate oldfd.
     unsafe { syscall1(SYS_DUP, oldfd as usize) as i32 }
 }
 
@@ -84,6 +90,7 @@ pub unsafe extern "C" fn dup(oldfd: i32) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dup2(oldfd: i32, newfd: i32) -> i32 {
+    // SAFETY: Issues SYS_DUP2 syscall to duplicate oldfd into newfd.
     unsafe { syscall2(SYS_DUP2, oldfd as usize, newfd as usize) as i32 }
 }
 
@@ -97,6 +104,7 @@ pub unsafe extern "C" fn dup2(oldfd: i32, newfd: i32) -> i32 {
 /// `pipefd` must point to a writable array of two `i32` integers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pipe(pipefd: *mut [i32; 2]) -> i32 {
+    // SAFETY: Issues SYS_PIPE syscall with pointer to a 2-element i32 array.
     unsafe { syscall1(SYS_PIPE, pipefd as usize) as i32 }
 }
 
@@ -109,6 +117,7 @@ pub unsafe extern "C" fn pipe(pipefd: *mut [i32; 2]) -> i32 {
 /// Direct system call invocation duplicating execution context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fork() -> i32 {
+    // SAFETY: Issues SYS_FORK syscall to duplicate current process address space and execution context.
     unsafe { syscall0(SYS_FORK) as i32 }
 }
 
@@ -124,6 +133,7 @@ pub unsafe extern "C" fn execve(
     argv: *const *const u8,
     envp: *const *const u8,
 ) -> i32 {
+    // SAFETY: Issues SYS_EXECVE syscall with pointers to path, argv, and envp.
     unsafe { syscall3(SYS_EXECVE, path as usize, argv as usize, envp as usize) as i32 }
 }
 
@@ -134,6 +144,7 @@ pub unsafe extern "C" fn execve(
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getpid() -> i32 {
+    // SAFETY: Issues SYS_GETPID syscall.
     unsafe { syscall0(SYS_GETPID) as i32 }
 }
 
@@ -144,6 +155,7 @@ pub unsafe extern "C" fn getpid() -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getppid() -> i32 {
+    // SAFETY: Issues SYS_GETPPID syscall.
     unsafe { syscall0(SYS_GETPPID) as i32 }
 }
 
@@ -154,6 +166,7 @@ pub unsafe extern "C" fn getppid() -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getuid() -> u32 {
+    // SAFETY: Issues SYS_GETUID syscall.
     unsafe { syscall0(SYS_GETUID) as u32 }
 }
 
@@ -164,6 +177,7 @@ pub unsafe extern "C" fn getuid() -> u32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn geteuid() -> u32 {
+    // SAFETY: Issues SYS_GETEUID syscall.
     unsafe { syscall0(SYS_GETEUID) as u32 }
 }
 
@@ -174,6 +188,7 @@ pub unsafe extern "C" fn geteuid() -> u32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getgid() -> u32 {
+    // SAFETY: Issues SYS_GETGID syscall.
     unsafe { syscall0(SYS_GETGID) as u32 }
 }
 
@@ -184,6 +199,7 @@ pub unsafe extern "C" fn getgid() -> u32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getegid() -> u32 {
+    // SAFETY: Issues SYS_GETEGID syscall.
     unsafe { syscall0(SYS_GETEGID) as u32 }
 }
 
@@ -196,6 +212,7 @@ pub unsafe extern "C" fn getegid() -> u32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setuid(uid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETUID syscall.
     unsafe { syscall1(SYS_SETUID, uid as usize) as i32 }
 }
 
@@ -208,6 +225,7 @@ pub unsafe extern "C" fn setuid(uid: u32) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setgid(gid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETGID syscall.
     unsafe { syscall1(SYS_SETGID, gid as usize) as i32 }
 }
 
@@ -221,6 +239,7 @@ pub unsafe extern "C" fn setgid(gid: u32) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
     let mut term = Termios::default();
+    // SAFETY: Issues SYS_IOCTL syscall with TCGETS request and pointer to local Termios struct.
     let res = unsafe {
         syscall3(
             SYS_IOCTL,
@@ -241,6 +260,7 @@ pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
 /// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chdir(path: *const u8) -> i32 {
+    // SAFETY: Issues SYS_CHDIR syscall with null-terminated pathname pointer.
     unsafe { syscall1(SYS_CHDIR, path as usize) as i32 }
 }
 
@@ -253,6 +273,7 @@ pub unsafe extern "C" fn chdir(path: *const u8) -> i32 {
 /// `buf` must point to writable memory of at least `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getcwd(buf: *mut u8, size: usize) -> *mut u8 {
+    // SAFETY: Issues SYS_GETCWD syscall with destination buffer pointer and capacity.
     let res = unsafe { syscall2(SYS_GETCWD, buf as usize, size) as isize };
     if res >= 0 { buf } else { core::ptr::null_mut() }
 }
@@ -266,6 +287,7 @@ pub unsafe extern "C" fn getcwd(buf: *mut u8, size: usize) -> *mut u8 {
 /// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn unlink(path: *const u8) -> i32 {
+    // SAFETY: Issues SYS_UNLINK syscall with null-terminated pathname pointer.
     unsafe { syscall1(SYS_UNLINK, path as usize) as i32 }
 }
 
@@ -278,6 +300,7 @@ pub unsafe extern "C" fn unlink(path: *const u8) -> i32 {
 /// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mkdir(path: *const u8, mode: u32) -> i32 {
+    // SAFETY: Issues SYS_MKDIR syscall with null-terminated pathname pointer and mode permissions.
     unsafe { syscall2(SYS_MKDIR, path as usize, mode as usize) as i32 }
 }
 
@@ -290,6 +313,7 @@ pub unsafe extern "C" fn mkdir(path: *const u8, mode: u32) -> i32 {
 /// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rmdir(path: *const u8) -> i32 {
+    // SAFETY: Issues SYS_RMDIR syscall with null-terminated pathname pointer.
     unsafe { syscall1(SYS_RMDIR, path as usize) as i32 }
 }
 
@@ -307,6 +331,7 @@ pub unsafe extern "C" fn sleep(seconds: u32) -> u32 {
         tv_nsec: 0,
     };
     let mut rem = Timespec::default();
+    // SAFETY: Issues SYS_NANOSLEEP syscall with local Timespec request and remainder pointers.
     unsafe {
         syscall2(
             SYS_NANOSLEEP,
@@ -330,6 +355,7 @@ pub unsafe extern "C" fn usleep(usec: u64) -> i32 {
         tv_sec: (usec / 1_000_000) as i64,
         tv_nsec: ((usec % 1_000_000) * 1000) as i64,
     };
+    // SAFETY: Issues SYS_NANOSLEEP syscall with computed duration Timespec pointer.
     unsafe { syscall2(SYS_NANOSLEEP, &req as *const _ as usize, 0) as i32 }
 }
 
@@ -342,6 +368,7 @@ pub unsafe extern "C" fn usleep(usec: u64) -> i32 {
 /// `info` must point to a valid writable [`Sysinfo`] structure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sysinfo(info: *mut Sysinfo) -> i32 {
+    // SAFETY: Issues SYS_SYSINFO syscall with pointer to writable Sysinfo struct.
     unsafe { syscall1(SYS_SYSINFO, info as usize) as i32 }
 }
 
@@ -354,6 +381,7 @@ pub unsafe extern "C" fn sysinfo(info: *mut Sysinfo) -> i32 {
 /// `target` and `details` must point to valid null-terminated C strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn audit_log(event_type: u32, target: *const u8, details: *const u8) -> i32 {
+    // SAFETY: Issues SYS_AUDIT_LOG syscall with event type and null-terminated string pointers.
     unsafe {
         syscall3(
             SYS_AUDIT_LOG,
@@ -373,5 +401,6 @@ pub unsafe extern "C" fn audit_log(event_type: u32, target: *const u8, details: 
 /// `label` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn audit_snapshot(label: *const u8, flags: u32) -> i64 {
+    // SAFETY: Issues SYS_AUDIT_SNAPSHOT syscall with label string pointer and flags.
     unsafe { syscall2(SYS_AUDIT_SNAPSHOT, label as usize, flags as usize) as i64 }
 }

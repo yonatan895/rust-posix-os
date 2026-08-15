@@ -12,6 +12,7 @@ use posix_abi::*;
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 {
+    // SAFETY: Issues SYS_EPOLL_CREATE1 syscall with creation flags.
     unsafe { syscall1(SYS_EPOLL_CREATE1, flags as usize) as i32 }
 }
 
@@ -24,6 +25,7 @@ pub unsafe extern "C" fn epoll_create1(flags: i32) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn epoll_create(_size: i32) -> i32 {
+    // SAFETY: Delegates to epoll_create1 with default flags 0.
     unsafe { epoll_create1(0) }
 }
 
@@ -36,6 +38,7 @@ pub unsafe extern "C" fn epoll_create(_size: i32) -> i32 {
 /// `event` must point to a valid [`EpollEvent`] structure when `op` is `EPOLL_CTL_ADD` or `EPOLL_CTL_MOD`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn epoll_ctl(epfd: i32, op: i32, fd: i32, event: *mut EpollEvent) -> i32 {
+    // SAFETY: Issues SYS_EPOLL_CTL syscall with epoll fd, op, target fd, and EpollEvent pointer.
     unsafe {
         syscall4(
             SYS_EPOLL_CTL,
@@ -61,6 +64,7 @@ pub unsafe extern "C" fn epoll_wait(
     maxevents: i32,
     timeout: i32,
 ) -> i32 {
+    // SAFETY: Issues SYS_EPOLL_WAIT syscall with epoll fd, events buffer pointer, maxevents count, and timeout.
     unsafe {
         syscall4(
             SYS_EPOLL_WAIT,

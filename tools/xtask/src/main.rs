@@ -26,7 +26,8 @@ fn main() {
             qemu::setup_iso_root();
         }
         "doc" => {
-            doc::run_doc();
+            let open = args.iter().any(|arg| arg == "--open");
+            doc::run_doc(open);
         }
         "initramfs" => initramfs::create_initramfs(),
         "run" => {

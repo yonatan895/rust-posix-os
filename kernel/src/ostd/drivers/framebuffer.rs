@@ -21,7 +21,10 @@ pub struct FramebufferConsole {
     cursor_y: usize,
 }
 
+// SAFETY: FramebufferConsole owns a raw pointer to video framebuffer memory provided by the bootloader. Access across threads is synchronized via SpinLock.
 unsafe impl Send for FramebufferConsole {}
+
+// SAFETY: Synchronization across concurrent threads is safe because internal fields and raw memory access are guarded by SpinLock mutual exclusion.
 unsafe impl Sync for FramebufferConsole {}
 
 impl FramebufferConsole {
@@ -54,6 +57,7 @@ impl FramebufferConsole {
             let total_pixels = self.width * self.height;
             let ptr = self.address as *mut u32;
             for i in 0..total_pixels {
+                // SAFETY: self.address is non-null, aligned for 32-bit pixel writes, and offset i < total_pixels is within the valid framebuffer bounds.
                 unsafe {
                     *ptr.add(i) = color;
                 }

@@ -1,5 +1,6 @@
 #![no_std]
 #![warn(missing_docs)]
+#![deny(unsafe_op_in_unsafe_fn)]
 #![allow(invalid_runtime_symbol_definitions)]
 #![allow(suspicious_runtime_symbol_definitions)]
 #![allow(clippy::missing_safety_doc)]

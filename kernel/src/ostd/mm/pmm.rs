@@ -19,7 +19,10 @@ pub struct PhysicalMemoryManager {
     last_frame: usize,
 }
 
+// SAFETY: `bitmap` raw pointer references memory exclusively managed by `PhysicalMemoryManager`.
+// All mutations require `&mut self` and access to the global instance is synchronized via `SpinLock`.
 unsafe impl Send for PhysicalMemoryManager {}
+// SAFETY: Access to the `PhysicalMemoryManager` singleton is synchronized via `SpinLock`.
 unsafe impl Sync for PhysicalMemoryManager {}
 
 /// Global spinlock-protected physical memory manager instance.
@@ -37,6 +40,8 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
     if memmap_response.is_null() {
         return;
     }
+    // SAFETY: `memmap_response` is non-null and guaranteed by the caller / bootloader protocol to point
+    // to a valid `LimineMemmapResponse`.
     let (count, entries) = unsafe {
         (
             (*memmap_response).entry_count as usize,
@@ -48,6 +53,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
     let mut total_bytes: usize = 0;
 
     for i in 0..count {
+        // SAFETY: `entries` is a valid pointer array with `count` elements provided by the bootloader.
         let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE {
             total_bytes += entry.length as usize;
@@ -65,6 +71,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
     // Find a usable region large enough for the bitmap
     let mut bitmap_addr: u64 = 0;
     for i in 0..count {
+        // SAFETY: `entries` is a valid pointer array with `count` elements provided by the bootloader.
         let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE && (entry.length as usize) >= bitmap_size {
             bitmap_addr = entry.base;
@@ -74,6 +81,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
 
     let bitmap_ptr = (bitmap_addr as usize + hhdm_offset) as *mut u8;
     // Initially mark everything as allocated (1 = used)
+    // SAFETY: `bitmap_ptr` points to a usable physical RAM region mapped into HHDM with size >= `bitmap_size`.
     unsafe {
         core::ptr::write_bytes(bitmap_ptr, 0xFF, bitmap_size);
     }
@@ -87,6 +95,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
 
     // Mark usable areas as free (0 = free)
     for i in 0..count {
+        // SAFETY: `entries` is a valid pointer array with `count` elements provided by the bootloader.
         let entry = unsafe { **entries.add(i) };
         if entry.typ == LIMINE_MEMMAP_USABLE {
             let start_frame = (entry.base as usize) / PAGE_SIZE;
@@ -124,6 +133,7 @@ impl PhysicalMemoryManager {
         }
         let byte_idx = frame_idx / 8;
         let bit_idx = frame_idx % 8;
+        // SAFETY: `frame_idx < total_frames` guarantees `byte_idx` is within the allocated bitmap buffer bounds.
         unsafe {
             let ptr = self.bitmap.add(byte_idx);
             if used {
@@ -142,6 +152,7 @@ impl PhysicalMemoryManager {
         }
         let byte_idx = frame_idx / 8;
         let bit_idx = frame_idx % 8;
+        // SAFETY: `frame_idx < total_frames` guarantees `byte_idx` is within the allocated bitmap buffer bounds.
         unsafe { (*self.bitmap.add(byte_idx) & (1 << bit_idx)) != 0 }
     }
 

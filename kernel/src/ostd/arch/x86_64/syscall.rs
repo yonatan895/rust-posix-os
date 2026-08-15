@@ -38,7 +38,7 @@ static BSP_PER_CPU: SyncUnsafeCell<PerCpuData> = SyncUnsafeCell::new(PerCpuData 
 ///
 /// `stack_top` must be a valid, mapped kernel stack memory address.
 pub unsafe fn set_syscall_kernel_stack(stack_top: u64) {
-    // SAFETY: Updating per-CPU kernel stack pointer used on fast syscall entry.
+    // SAFETY: Accessing BSP_PER_CPU raw pointer to update the per-CPU kernel stack pointer loaded upon fast syscall entry.
     unsafe {
         (*BSP_PER_CPU.get()).kernel_rsp = stack_top;
     }
@@ -144,34 +144,34 @@ pub unsafe extern "C" fn syscall_entry() {
 pub unsafe fn syscall_init(kernel_stack_top: u64) {
     let per_cpu_ptr = BSP_PER_CPU.get();
 
-    // SAFETY: Initializing PerCpuData with kernel stack during single-threaded boot.
+    // SAFETY: Initializing BSP_PER_CPU with the initial bootstrap kernel stack pointer during single-threaded boot.
     unsafe {
         (*per_cpu_ptr).kernel_rsp = kernel_stack_top;
     }
 
-    // SAFETY: Programming IA32_KERNEL_GS_BASE with pointer to PerCpuData structure.
+    // SAFETY: Programming IA32_KERNEL_GS_BASE MSR with the linear address of BSP_PER_CPU structure for swapgs.
     unsafe {
         wrmsr(IA32_KERNEL_GS_BASE, per_cpu_ptr as u64);
     }
 
-    // SAFETY: Enabling System Call Extensions (SCE) in EFER MSR.
+    // SAFETY: Setting the System Call Extensions (SCE, bit 0) enable flag in IA32_EFER MSR.
     unsafe {
         let efer = rdmsr(IA32_EFER);
         wrmsr(IA32_EFER, efer | 1);
     }
 
-    // SAFETY: Configuring STAR MSR with kernel and user code/data segment selectors.
+    // SAFETY: Programming IA32_STAR MSR with Ring 0 KERNEL_CODE_SEL (0x08) and Ring 3 user segment base (0x10).
     unsafe {
         let star = ((KERNEL_CODE_SEL as u64) << 32) | (0x10u64 << 48);
         wrmsr(IA32_STAR, star);
     }
 
-    // SAFETY: Configuring LSTAR MSR with address of syscall_entry.
+    // SAFETY: Programming IA32_LSTAR MSR with the 64-bit linear entry address of the naked syscall_entry stub.
     unsafe {
         wrmsr(IA32_LSTAR, syscall_entry as *const () as usize as u64);
     }
 
-    // SAFETY: Configuring FMASK MSR to clear IF, TF, and DF upon syscall entry.
+    // SAFETY: Programming IA32_FMASK MSR to clear IF (bit 9), TF (bit 8), and DF (bit 10) flags upon syscall execution.
     unsafe {
         let fmask = 0x200 | 0x100 | 0x400; // IF | TF | DF
         wrmsr(IA32_FMASK, fmask);
@@ -185,6 +185,6 @@ pub unsafe fn syscall_init(kernel_stack_top: u64) {
 /// `regs` must either be null or point to a live `SyscallRegisters` frame on the current stack.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_syscall_dispatcher(regs: *mut SyscallRegisters) -> usize {
-    // SAFETY: Passing raw register pointer to safe dispatcher callback via with_syscall_regs.
+    // SAFETY: Forwarding regs to with_syscall_regs. Caller guarantees regs points to a valid SyscallRegisters struct constructed on the kernel stack during syscall dispatch.
     unsafe { crate::ostd::mm::with_syscall_regs(regs, crate::services::posix::dispatch_syscall) }
 }

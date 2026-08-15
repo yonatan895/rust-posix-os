@@ -5,7 +5,7 @@
 
 #![no_std]
 #![no_main]
-#![allow(unsafe_op_in_unsafe_fn)]
+#![deny(unsafe_op_in_unsafe_fn)]
 // Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
 // raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
 #![allow(clippy::all)]
@@ -130,6 +130,7 @@ unsafe fn run_efault_hammer_tests() {
             read(0, unmapped_ptr, 10),
         )
     };
+    // SAFETY: Validating read syscall return codes against expected EFAULT error.
     unsafe {
         assert_eq_errno(r1, -(EFAULT as isize), b"read(null)\0".as_ptr());
         assert_eq_errno(r2, -(EFAULT as isize), b"read(kernel_ptr)\0".as_ptr());
@@ -145,6 +146,7 @@ unsafe fn run_efault_hammer_tests() {
             write(1, unmapped_ptr, 10),
         )
     };
+    // SAFETY: Validating write syscall return codes against expected EFAULT error.
     unsafe {
         assert_eq_errno(w1, -(EFAULT as isize), b"write(null)\0".as_ptr());
         assert_eq_errno(w2, -(EFAULT as isize), b"write(kernel_ptr)\0".as_ptr());
@@ -160,6 +162,7 @@ unsafe fn run_efault_hammer_tests() {
             open(unmapped_ptr, O_RDONLY, 0),
         )
     };
+    // SAFETY: Validating open syscall return codes against expected EFAULT error.
     unsafe {
         assert_eq_errno(o1 as isize, -(EFAULT as isize), b"open(null)\0".as_ptr());
         assert_eq_errno(
@@ -175,6 +178,7 @@ unsafe fn run_efault_hammer_tests() {
     }
 
     // 4. stat tests (null, kernel, unmapped for both path and statbuf)
+    // SAFETY: Stat is a C-compatible POD struct whose zeroed bit pattern represents a valid initial unpopulated state.
     let mut st: Stat = unsafe { core::mem::zeroed() };
     // SAFETY: Calling stat with adversarial pathname and statbuf pointers.
     let (s1, s2, s3, s4, s5, s6) = unsafe {
@@ -187,6 +191,7 @@ unsafe fn run_efault_hammer_tests() {
             stat(b"/dev/null\0".as_ptr(), unmapped_ptr as *mut Stat),
         )
     };
+    // SAFETY: Validating stat syscall return codes against expected EFAULT error.
     unsafe {
         assert_eq_errno(
             s1 as isize,
@@ -242,6 +247,7 @@ unsafe fn run_efault_hammer_tests() {
             ),
         )
     };
+    // SAFETY: Validating mmap syscall return codes against expected ENOMEM error.
     unsafe {
         assert_eq_errno(
             m1 as isize,
@@ -273,6 +279,7 @@ unsafe fn run_efault_hammer_tests() {
         // SAFETY: Invoking read/write with a 16-byte slice starting at page+4090 (straddling into unmapped page).
         let (r_straddle, w_straddle) =
             unsafe { (read(0, straddle_buf, 16), write(1, straddle_buf, 16)) };
+        // SAFETY: Validating straddle read/write return codes against expected EFAULT error.
         unsafe {
             assert_eq_errno(r_straddle, -(EFAULT as isize), b"read(straddle)\0".as_ptr());
             assert_eq_errno(
@@ -297,6 +304,7 @@ unsafe fn run_efault_hammer_tests() {
                 stat(b"/dev/null\0".as_ptr(), straddle_buf as *mut Stat),
             )
         };
+        // SAFETY: Validating straddle open/stat return codes against expected EFAULT error.
         unsafe {
             assert_eq_errno(
                 o_straddle as isize,

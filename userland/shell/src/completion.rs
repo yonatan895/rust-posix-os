@@ -123,12 +123,14 @@ pub unsafe fn show_completion_menu(
     clear_menu_fn: impl Fn(*const u8, &[u8], usize),
 ) {
     let mut sel = 0;
+    // SAFETY: Renders the menu and repositions cursor up to prompt.
     unsafe {
         render_menu_row(matches, count, sel);
         out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
     }
 
     loop {
+        // SAFETY: Reads user interaction key from raw stdin.
         let b = unsafe { libc::getchar() };
         if b < 0 {
             continue;
@@ -136,17 +138,20 @@ pub unsafe fn show_completion_menu(
         let ch = b as u8;
         if ch == b'\t' || ch == 0x06 {
             sel = (sel + 1) % count;
+            // SAFETY: Redraws active completion menu selection.
             unsafe {
                 render_menu_row(matches, count, sel);
                 out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
             }
         } else if ch == 0x1b {
+            // SAFETY: Reads escape sequence arrow keys.
             let b2 = unsafe { libc::getchar() };
             let b3 = unsafe { libc::getchar() };
             if b2 == b'[' as i32 {
                 match b3 as u8 {
                     b'C' => {
                         sel = (sel + 1) % count;
+                        // SAFETY: Redraws completion menu row on right arrow.
                         unsafe {
                             render_menu_row(matches, count, sel);
                             out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
@@ -154,6 +159,7 @@ pub unsafe fn show_completion_menu(
                     }
                     b'D' => {
                         sel = if sel == 0 { count - 1 } else { sel - 1 };
+                        // SAFETY: Redraws completion menu row on left arrow.
                         unsafe {
                             render_menu_row(matches, count, sel);
                             out_cursor_up_to_prompt(cwd, buf, *len, repaint_fn);
@@ -260,9 +266,11 @@ pub unsafe fn handle_tab_completion(
             Ok(s) => s,
             Err(_) => return,
         };
+        // SAFETY: Opens current directory to read entry names.
         let fd = unsafe { open(b".\0".as_ptr(), O_RDONLY | O_DIRECTORY, 0) };
         if fd >= 0 {
             let mut dir_buf = [0u8; 4096];
+            // SAFETY: Reads directory entries via SYS_GETDENTS64.
             let n = unsafe {
                 syscall::syscall3(
                     SYS_GETDENTS64,
@@ -271,10 +279,12 @@ pub unsafe fn handle_tab_completion(
                     dir_buf.len(),
                 ) as isize
             };
+            // SAFETY: Closes directory file descriptor.
             unsafe { close(fd) };
             if n > 0 {
                 let mut offset = 0;
                 while offset < n as usize && match_count < 24 {
+                    // SAFETY: dir_buf contains valid Dirent64 structs up to offset < n.
                     let dirent = unsafe { &*(dir_buf.as_ptr().add(offset) as *const Dirent64) };
                     let mut name_len = 0;
                     while name_len < dirent.d_name.len() && dirent.d_name[name_len] != 0 {
@@ -332,6 +342,7 @@ pub unsafe fn handle_tab_completion(
         }
         repaint_fn(cwd, buf, *len);
     } else {
+        // SAFETY: Shows interactive tab completion menu on terminal.
         unsafe {
             show_completion_menu(
                 cwd,

@@ -60,6 +60,7 @@ impl<'a> LineBuffer<'a> {
             return;
         }
         let mut ptr = s;
+        // SAFETY: Caller guarantees `s` points to a valid null-terminated C string.
         unsafe {
             while *ptr != 0 {
                 self.push_byte(*ptr);
@@ -71,6 +72,7 @@ impl<'a> LineBuffer<'a> {
     /// Flushes the buffered bytes to standard output via a single `write` syscall.
     pub fn flush(&self) {
         if self.len > 0 {
+            // SAFETY: Flushes buffered data to standard output file descriptor.
             unsafe {
                 libc::write(STDOUT_FILENO, self.buf.as_ptr(), self.len);
             }
@@ -120,6 +122,7 @@ pub unsafe fn paint_prompt(
     out.push_cstr(cwd);
     out.push_str("# ");
 
+    // SAFETY: buf has at least len accessible bytes.
     let (start, cmd_end) = unsafe { cmd_span(buf, len) };
     for i in 0..start {
         out.push_byte(buf[i]);
