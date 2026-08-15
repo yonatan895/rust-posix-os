@@ -78,7 +78,7 @@ pub fn without_interrupts<R, F: FnOnce() -> R>(f: F) -> R {
 #[inline(always)]
 pub fn irq_save() -> IrqFlags {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Reading architectural RFLAGS and clearing IF flag.
+    // SAFETY: Reading architectural RFLAGS to capture the current IF bit and atomically disabling CPU interrupts via cli.
     unsafe {
         let flags = crate::ostd::arch::x86_64::read_rflags() as usize;
         crate::ostd::arch::x86_64::cli();
@@ -94,7 +94,7 @@ pub fn irq_save() -> IrqFlags {
 #[inline(always)]
 pub fn irq_restore(flags: IrqFlags) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Restoring architectural RFLAGS register from token.
+    // SAFETY: Restoring the exact architectural RFLAGS register previously captured by a paired irq_save call.
     unsafe {
         crate::ostd::arch::x86_64::restore_rflags(flags.0 as u64);
     }
@@ -109,7 +109,7 @@ pub fn irq_restore(flags: IrqFlags) {
 #[inline(always)]
 pub fn enable() {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Enabling interrupts via sti instruction.
+    // SAFETY: Executing sti to enable CPU maskable interrupts.
     unsafe {
         crate::ostd::arch::x86_64::sti();
     }
@@ -121,7 +121,7 @@ pub fn enable() {
 #[inline(always)]
 pub fn disable() {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Disabling interrupts via cli instruction.
+    // SAFETY: Executing cli to disable CPU maskable interrupts.
     unsafe {
         crate::ostd::arch::x86_64::cli();
     }
@@ -133,7 +133,7 @@ pub fn disable() {
 #[inline(always)]
 pub fn is_enabled() -> bool {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Checking IF flag in RFLAGS register.
+    // SAFETY: Reading RFLAGS to test bit 9 (IF - Interrupt Flag).
     unsafe {
         (crate::ostd::arch::x86_64::read_rflags() & 0x200) != 0
     }
@@ -145,7 +145,7 @@ pub fn is_enabled() -> bool {
 #[inline(always)]
 pub fn mask(irq: u8) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Delegating IRQ masking to PIC driver.
+    // SAFETY: Modifying the 8259 PIC interrupt mask register for the specified IRQ line.
     unsafe {
         pic::mask(irq);
     }
@@ -160,7 +160,7 @@ pub fn mask(irq: u8) {
 #[inline(always)]
 pub fn unmask(irq: u8) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Delegating IRQ unmasking to PIC driver.
+    // SAFETY: Modifying the 8259 PIC interrupt mask register to unmask the specified IRQ line.
     unsafe {
         pic::unmask(irq);
     }
@@ -179,7 +179,7 @@ pub fn unmask(irq: u8) {
 #[inline(always)]
 pub unsafe fn send_eoi(irq: u8) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Forwarding EOI to architecture-specific PIC handler.
+    // SAFETY: Forwarding EOI command to the architecture-specific PIC handler for the specified IRQ line (0..15).
     unsafe {
         pic::send_eoi(irq);
     }
@@ -193,7 +193,7 @@ pub unsafe fn send_eoi(irq: u8) {
 /// Configures and starts the hardware periodic timer at a specified frequency in Hz.
 pub fn init_timer(hz: u32) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Programming PIT timer at requested frequency.
+    // SAFETY: Programming 8254 PIT timer divisor and mode registers for the requested frequency.
     unsafe {
         pit::pit_init_hz(hz);
     }
@@ -211,7 +211,7 @@ pub fn init_timer(hz: u32) {
 #[inline(always)]
 pub fn ack_timer() {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Acknowledging timer IRQ0 on PIC.
+    // SAFETY: Acknowledging timer IRQ0 on the master 8259 PIC with an EOI byte.
     unsafe {
         send_eoi(0);
     }
@@ -241,7 +241,7 @@ pub fn tick() -> u64 {
 /// Must be called during single-threaded kernel boot before interrupts are enabled.
 pub unsafe fn irq_init() {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Remapping PIC, programming PIT timer, and unmasking timer IRQ0.
+    // SAFETY: Single-threaded boot execution remaps the 8259 PIC vectors to 0x20..0x2F (avoiding CPU exception conflicts), initializes PIT Channel 0 at 100 Hz, and unmasks IRQ0 on the Master PIC.
     unsafe {
         // Remap PIC: Master -> 0x20..0x27, Slave -> 0x28..0x2F
         pic::pic_remap(0x20, 0x28);

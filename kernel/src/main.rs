@@ -4,6 +4,7 @@
 #![no_main]
 #![feature(alloc_error_handler)]
 #![feature(sync_unsafe_cell)]
+#![deny(unsafe_op_in_unsafe_fn)]
 
 extern crate alloc;
 

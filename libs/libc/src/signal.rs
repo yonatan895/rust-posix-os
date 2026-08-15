@@ -18,6 +18,7 @@ pub unsafe extern "C" fn sigaction(
     act: *const SigAction,
     oldact: *mut SigAction,
 ) -> i32 {
+    // SAFETY: Issues SYS_RT_SIGACTION syscall with caller-provided SigAction pointers and sizeof(SigSet).
     unsafe {
         syscall4(
             SYS_RT_SIGACTION,
@@ -38,6 +39,7 @@ pub unsafe extern "C" fn sigaction(
 /// `set` and `oldset` must either be null or point to valid, aligned [`SigSet`] memory.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sigprocmask(how: i32, set: *const SigSet, oldset: *mut SigSet) -> i32 {
+    // SAFETY: Issues SYS_RT_SIGPROCMASK syscall with caller-provided SigSet pointers and sizeof(SigSet).
     unsafe {
         syscall4(
             SYS_RT_SIGPROCMASK,
@@ -57,6 +59,7 @@ pub unsafe extern "C" fn sigprocmask(how: i32, set: *const SigSet, oldset: *mut 
 /// and valid signal arguments.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn kill(pid: i32, sig: i32) -> i32 {
+    // SAFETY: Issues SYS_KILL syscall targeting pid with signal number sig.
     unsafe { syscall2(SYS_KILL, pid as usize, sig as usize) as i32 }
 }
 
@@ -69,6 +72,7 @@ pub unsafe extern "C" fn kill(pid: i32, sig: i32) -> i32 {
 /// Invokes kernel signal dispatch on the current process.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn raise(sig: i32) -> i32 {
+    // SAFETY: Retrieves the current PID and dispatches signal via kill syscall.
     unsafe { kill(getpid(), sig) }
 }
 
@@ -81,6 +85,7 @@ pub unsafe extern "C" fn raise(sig: i32) -> i32 {
 /// Must only be executed when the top of the user stack contains a valid [`SignalFrame`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __restore_rt() {
+    // SAFETY: Issues SYS_RT_SIGRETURN syscall to restore context from the user signal frame on stack.
     unsafe {
         syscall0(SYS_RT_SIGRETURN);
     }

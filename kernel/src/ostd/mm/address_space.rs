@@ -19,6 +19,8 @@ impl AddressSpace {
     /// Activates this address space in the CPU memory management unit.
     #[inline(always)]
     pub fn activate(&self) {
+        // SAFETY: Writing CR3 switches the active PML4 root table. `self.0` is a valid,
+        // page-aligned physical address of a root page table that mirrors kernel higher-half mappings.
         #[cfg(target_arch = "x86_64")]
         unsafe {
             crate::ostd::arch::x86_64::write_cr3(self.0 as u64);
@@ -32,6 +34,7 @@ impl AddressSpace {
     pub fn current() -> Self {
         #[cfg(target_arch = "x86_64")]
         {
+            // SAFETY: Reading CR3 to obtain the current active PML4 physical base address is a read-only privileged register query.
             let cr3 = unsafe { crate::ostd::arch::x86_64::read_cr3() };
             Self((cr3 as usize) & !0xFFF)
         }

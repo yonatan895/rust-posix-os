@@ -14,6 +14,7 @@ use posix_abi::*;
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn putchar(c: i32) -> i32 {
     let byte = c as u8;
+    // SAFETY: Invokes write syscall on standard output (STDOUT_FILENO) with a 1-byte local stack buffer.
     let ret = unsafe { write(STDOUT_FILENO, &byte as *const u8, 1) };
     if ret == 1 { c } else { -1 }
 }
@@ -27,7 +28,9 @@ pub unsafe extern "C" fn putchar(c: i32) -> i32 {
 /// `s` must be a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
+    // SAFETY: Caller guarantees `s` points to a valid null-terminated C string.
     let len = unsafe { strlen(s) };
+    // SAFETY: Writes the string bytes followed by a newline byte to standard output.
     unsafe {
         write(STDOUT_FILENO, s, len);
         let newline = b'\n';
@@ -46,6 +49,7 @@ pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getchar() -> i32 {
     let mut buf = 0u8;
+    // SAFETY: Invokes read syscall on standard input (STDIN_FILENO) to read a single byte into local stack variable.
     let n = unsafe { read(STDIN_FILENO, &mut buf as *mut u8, 1) };
     if n == 1 { buf as i32 } else { -1 }
 }
@@ -59,6 +63,7 @@ pub unsafe extern "C" fn getchar() -> i32 {
 /// `oldpath` and `newpath` must be valid pointers to null-terminated C strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rename(oldpath: *const u8, newpath: *const u8) -> i32 {
+    // SAFETY: Invokes SYS_RENAME syscall with pointers to null-terminated pathname strings.
     unsafe { crate::syscall::syscall2(SYS_RENAME, oldpath as usize, newpath as usize) as i32 }
 }
 
@@ -143,6 +148,7 @@ pub unsafe extern "C" fn snprintf(
     if size == 0 {
         return 0;
     }
+    // SAFETY: Caller guarantees `str_ptr` points to writable buffer of at least `size` bytes.
     let slice = unsafe { core::slice::from_raw_parts_mut(str_ptr, size) };
     let mut fmt_buf = FormatBuffer {
         buf: slice,
@@ -150,64 +156,68 @@ pub unsafe extern "C" fn snprintf(
     };
 
     let mut i = 0;
-    while unsafe { *format.add(i) } != 0 {
-        let b = unsafe { *format.add(i) };
-        if b == b'%' {
-            i += 1;
-            let mut width = 0;
-            while unsafe { *format.add(i) >= b'0' && *format.add(i) <= b'9' } {
-                width = width * 10 + unsafe { (*format.add(i) - b'0') as usize };
+    // SAFETY: Caller guarantees `format` points to a valid null-terminated format string matching variadic `args`.
+    unsafe {
+        while *format.add(i) != 0 {
+            let b = *format.add(i);
+            if b == b'%' {
                 i += 1;
-            }
-            let spec = unsafe { *format.add(i) };
-            match spec {
-                b'd' | b'i' => {
-                    let val: i32 = unsafe { args.next_arg::<i32>() };
-                    fmt_buf.write_num_padded(val as i64, 10, true, width);
+                let mut width = 0;
+                while *format.add(i) >= b'0' && *format.add(i) <= b'9' {
+                    width = width * 10 + (*format.add(i) - b'0') as usize;
+                    i += 1;
                 }
-                b'u' => {
-                    let val: u32 = unsafe { args.next_arg::<u32>() };
-                    fmt_buf.write_num_padded(val as i64, 10, false, width);
-                }
-                b'x' => {
-                    let val: u32 = unsafe { args.next_arg::<u32>() };
-                    fmt_buf.write_num_padded(val as i64, 16, false, width);
-                }
-                b'p' => {
-                    let val: usize = unsafe { args.next_arg::<usize>() };
-                    fmt_buf.write_str("0x");
-                    fmt_buf.write_num_padded(val as i64, 16, false, width);
-                }
-                b's' => {
-                    let val: *const u8 = unsafe { args.next_arg::<*const u8>() };
-                    if val.is_null() {
-                        fmt_buf.write_str("(null)");
-                    } else {
-                        let len = unsafe { strlen(val) };
-                        for j in 0..len {
-                            fmt_buf.push(unsafe { *val.add(j) });
+                let spec = *format.add(i);
+                match spec {
+                    b'd' | b'i' => {
+                        let val: i32 = args.next_arg::<i32>();
+                        fmt_buf.write_num_padded(val as i64, 10, true, width);
+                    }
+                    b'u' => {
+                        let val: u32 = args.next_arg::<u32>();
+                        fmt_buf.write_num_padded(val as i64, 10, false, width);
+                    }
+                    b'x' => {
+                        let val: u32 = args.next_arg::<u32>();
+                        fmt_buf.write_num_padded(val as i64, 16, false, width);
+                    }
+                    b'p' => {
+                        let val: usize = args.next_arg::<usize>();
+                        fmt_buf.write_str("0x");
+                        fmt_buf.write_num_padded(val as i64, 16, false, width);
+                    }
+                    b's' => {
+                        let val: *const u8 = args.next_arg::<*const u8>();
+                        if val.is_null() {
+                            fmt_buf.write_str("(null)");
+                        } else {
+                            let len = strlen(val);
+                            for j in 0..len {
+                                fmt_buf.push(*val.add(j));
+                            }
                         }
                     }
+                    b'c' => {
+                        let val: i32 = args.next_arg::<i32>();
+                        fmt_buf.push(val as u8);
+                    }
+                    b'%' => {
+                        fmt_buf.push(b'%');
+                    }
+                    _ => {
+                        fmt_buf.push(b'%');
+                        fmt_buf.push(spec);
+                    }
                 }
-                b'c' => {
-                    let val: i32 = unsafe { args.next_arg::<i32>() };
-                    fmt_buf.push(val as u8);
-                }
-                b'%' => {
-                    fmt_buf.push(b'%');
-                }
-                _ => {
-                    fmt_buf.push(b'%');
-                    fmt_buf.push(spec);
-                }
+            } else {
+                fmt_buf.push(b);
             }
-        } else {
-            fmt_buf.push(b);
+            i += 1;
         }
-        i += 1;
     }
 
     let written = fmt_buf.written;
+    // SAFETY: Writes null terminator within the bounded `size` buffer.
     unsafe {
         if written < size {
             *str_ptr.add(written) = 0;
@@ -234,61 +244,64 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
     };
 
     let mut i = 0;
-    while unsafe { *format.add(i) } != 0 {
-        let b = unsafe { *format.add(i) };
-        if b == b'%' {
-            i += 1;
-            let mut width = 0;
-            while unsafe { *format.add(i) >= b'0' && *format.add(i) <= b'9' } {
-                width = width * 10 + unsafe { (*format.add(i) - b'0') as usize };
+    // SAFETY: Caller guarantees `format` points to a valid null-terminated format string matching variadic `args`.
+    unsafe {
+        while *format.add(i) != 0 {
+            let b = *format.add(i);
+            if b == b'%' {
                 i += 1;
-            }
-            let spec = unsafe { *format.add(i) };
-            match spec {
-                b'd' | b'i' => {
-                    let val: i32 = unsafe { args.next_arg::<i32>() };
-                    fmt_buf.write_num_padded(val as i64, 10, true, width);
+                let mut width = 0;
+                while *format.add(i) >= b'0' && *format.add(i) <= b'9' {
+                    width = width * 10 + (*format.add(i) - b'0') as usize;
+                    i += 1;
                 }
-                b'u' => {
-                    let val: u32 = unsafe { args.next_arg::<u32>() };
-                    fmt_buf.write_num_padded(val as i64, 10, false, width);
-                }
-                b'x' => {
-                    let val: u32 = unsafe { args.next_arg::<u32>() };
-                    fmt_buf.write_num_padded(val as i64, 16, false, width);
-                }
-                b'p' => {
-                    let val: usize = unsafe { args.next_arg::<usize>() };
-                    fmt_buf.write_str("0x");
-                    fmt_buf.write_num_padded(val as i64, 16, false, width);
-                }
-                b's' => {
-                    let val: *const u8 = unsafe { args.next_arg::<*const u8>() };
-                    if val.is_null() {
-                        fmt_buf.write_str("(null)");
-                    } else {
-                        let len = unsafe { strlen(val) };
-                        for j in 0..len {
-                            fmt_buf.push(unsafe { *val.add(j) });
+                let spec = *format.add(i);
+                match spec {
+                    b'd' | b'i' => {
+                        let val: i32 = args.next_arg::<i32>();
+                        fmt_buf.write_num_padded(val as i64, 10, true, width);
+                    }
+                    b'u' => {
+                        let val: u32 = args.next_arg::<u32>();
+                        fmt_buf.write_num_padded(val as i64, 10, false, width);
+                    }
+                    b'x' => {
+                        let val: u32 = args.next_arg::<u32>();
+                        fmt_buf.write_num_padded(val as i64, 16, false, width);
+                    }
+                    b'p' => {
+                        let val: usize = args.next_arg::<usize>();
+                        fmt_buf.write_str("0x");
+                        fmt_buf.write_num_padded(val as i64, 16, false, width);
+                    }
+                    b's' => {
+                        let val: *const u8 = args.next_arg::<*const u8>();
+                        if val.is_null() {
+                            fmt_buf.write_str("(null)");
+                        } else {
+                            let len = strlen(val);
+                            for j in 0..len {
+                                fmt_buf.push(*val.add(j));
+                            }
                         }
                     }
+                    b'c' => {
+                        let val: i32 = args.next_arg::<i32>();
+                        fmt_buf.push(val as u8);
+                    }
+                    b'%' => {
+                        fmt_buf.push(b'%');
+                    }
+                    _ => {
+                        fmt_buf.push(b'%');
+                        fmt_buf.push(spec);
+                    }
                 }
-                b'c' => {
-                    let val: i32 = unsafe { args.next_arg::<i32>() };
-                    fmt_buf.push(val as u8);
-                }
-                b'%' => {
-                    fmt_buf.push(b'%');
-                }
-                _ => {
-                    fmt_buf.push(b'%');
-                    fmt_buf.push(spec);
-                }
+            } else {
+                fmt_buf.push(b);
             }
-        } else {
-            fmt_buf.push(b);
+            i += 1;
         }
-        i += 1;
     }
 
     let written = fmt_buf.written;
@@ -297,6 +310,7 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
     } else {
         buf.len() - 1
     };
+    // SAFETY: Writes formatted output bytes from stack buffer to stdout.
     unsafe {
         write(STDOUT_FILENO, buf.as_ptr(), actual_len);
     }

@@ -58,7 +58,8 @@ pub enum UserAccessError {
 fn validate_user_page(vaddr: usize, need_write: bool) -> Result<(), UserAccessError> {
     let current_root = AddressSpace::current().as_phys();
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Validating user memory against active address space root.
+    // SAFETY: `current_root` is the physical base of the active PML4 root table.
+    // `vaddr` is read-only validated against the MMU page table hierarchy without modifying memory or register state.
     unsafe {
         crate::ostd::arch::x86_64::paging::validate_user_page(current_root, vaddr, need_write)
     }
@@ -134,18 +135,18 @@ impl<T> UserPtr<T> {
     /// Reads a `T` value from user space after validating page mappings.
     pub fn read(&self) -> Result<T, UserAccessError> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), false)?;
-        // SAFETY: range just validated as in-user-range, present, and
-        // user-accessible in the current address space. Unaligned read
-        // because user pointers carry no alignment guarantee. Single-CPU:
-        // no concurrent unmap between validation and read (module docs).
+        // SAFETY: `self.addr` through `self.addr + size_of::<T>()` was validated to be within user space,
+        // present, and user-accessible in the current address space. `read_unaligned` is used because user
+        // pointers carry no alignment guarantee. Single-CPU execution ensures no concurrent unmap occurs.
         Ok(unsafe { (self.addr as *const T).read_unaligned() })
     }
 
     /// Writes a `T` value into user space after validating page mappings and write permissions.
     pub fn write(&self, value: T) -> Result<(), UserAccessError> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), true)?;
-        // SAFETY: as `read`, plus every page checked WRITABLE. Callers only
-        // use POD types, so writing bytes violates no user-side invariant.
+        // SAFETY: `self.addr` through `self.addr + size_of::<T>()` was validated to be within user space,
+        // present, user-accessible, and writable in the current address space. `write_unaligned` is used
+        // because user pointers carry no alignment guarantee. Single-CPU execution ensures no concurrent unmap occurs.
         unsafe { (self.addr as *mut T).write_unaligned(value) };
         Ok(())
     }
@@ -195,10 +196,9 @@ impl UserSlice {
             return Err(UserAccessError::Overflow);
         }
         validate_user_range(self.addr, self.len, false)?;
-        // SAFETY: user range validated (in-range, present, user-accessible);
-        // `dst` is a valid kernel buffer per its slice contract. The regions
-        // cannot alias: one side is below USER_SPACE_END, the other is a
-        // kernel address.
+        // SAFETY: User range `[self.addr, self.addr + self.len)` was validated as in-range, present, and
+        // user-accessible; `dst` is a valid kernel buffer per its slice contract. The source and destination
+        // regions cannot alias: user space is below USER_SPACE_END, whereas `dst` resides in kernel space.
         unsafe {
             core::ptr::copy_nonoverlapping(self.addr as *const u8, dst.as_mut_ptr(), self.len);
         }
@@ -211,7 +211,9 @@ impl UserSlice {
             return Err(UserAccessError::Overflow);
         }
         validate_user_range(self.addr, self.len, true)?;
-        // SAFETY: as `copy_from_user`, plus every page checked WRITABLE.
+        // SAFETY: User range `[self.addr, self.addr + self.len)` was validated as in-range, present,
+        // user-accessible, and writable. `src` is a valid kernel slice of at least `self.len` bytes.
+        // User and kernel memory ranges do not alias.
         unsafe {
             core::ptr::copy_nonoverlapping(src.as_ptr(), self.addr as *mut u8, self.len);
         }
@@ -242,8 +244,9 @@ pub fn copy_cstr_from_user(addr: usize, buf: &mut [u8]) -> Result<usize, UserAcc
         if i == 0 || cur & PAGE_MASK == 0 {
             validate_user_page(cur, false)?;
         }
-        // SAFETY: `cur` is in user range and its page was just validated as
-        // present + user-accessible in the current address space.
+        // SAFETY: `cur` is within canonical user range (< USER_SPACE_END) and its containing page was validated
+        // as present and user-accessible in the active address space. `read_volatile` prevents compiler reordering
+        // or elision across successive page-boundary validation checks.
         let byte = unsafe { (cur as *const u8).read_volatile() };
         buf[i] = byte;
         if byte == 0 {

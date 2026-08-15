@@ -23,7 +23,7 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn switch_tasks(prev_saved_rsp_ptr: *mut usize, next_saved_rsp: usize) {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Disabling interrupts around voluntary context switch.
+    // SAFETY: Disabling interrupts via cli prevents preemption during stack frame swap. prev_saved_rsp_ptr is an address within an active PCB and next_saved_rsp is a valid TrapFrame pointer. Interrupts are re-enabled with sti after voluntary_task_switch resumes.
     unsafe {
         crate::ostd::arch::cli();
         crate::ostd::arch::x86_64::task::voluntary_task_switch(prev_saved_rsp_ptr, next_saved_rsp);
@@ -97,7 +97,7 @@ pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
 /// and `root_table` must be a valid page table physical address.
 pub unsafe fn enter_user_mode(entry_point: usize, user_stack_top: usize, root_table: usize) -> ! {
     #[cfg(target_arch = "x86_64")]
-    // SAFETY: Transitioning CPU to Ring 3 user mode execution.
+    // SAFETY: Forwarding entry_point, user_stack_top, and root_table (PML4) to architecture ring-3 transition routine. Caller guarantees validity of addresses and page table invariants.
     unsafe {
         crate::ostd::arch::x86_64::task::enter_user_mode(entry_point, user_stack_top, root_table)
     }

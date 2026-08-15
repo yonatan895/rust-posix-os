@@ -39,7 +39,7 @@ impl SerialPort {
     ///
     /// Directly programs UART hardware registers over I/O ports.
     pub unsafe fn init(&mut self) {
-        // SAFETY: Programming UART 8250 registers to 38400 baud, 8N1, FIFO enabled.
+        // SAFETY: Programming 16550 UART registers on base port (COM1): disabling interrupts, configuring 38400 baud via DLAB divisor, 8N1 frame format, 14-byte FIFO threshold, and asserting DTR/RTS.
         unsafe {
             outb(self.port + 1, 0x00); // Disable interrupts
             outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
@@ -53,7 +53,7 @@ impl SerialPort {
 
     /// Checks if the UART transmitter holding register is empty and ready for the next byte.
     fn is_transmit_empty(&self) -> bool {
-        // SAFETY: Reading Line Status Register on COM port to check transmit empty bit.
+        // SAFETY: Reading the Line Status Register (LSR, port + 5) to test the Transmitter Holding Register Empty (THRE) bit 5.
         unsafe { (inb(self.port + 5) & 0x20) != 0 }
     }
 
@@ -62,7 +62,7 @@ impl SerialPort {
         while !self.is_transmit_empty() {
             core::hint::spin_loop();
         }
-        // SAFETY: Writing byte to UART data transmitter port.
+        // SAFETY: Writing data byte to the UART Transmitter Holding Register (base port) after confirming the transmitter is empty.
         unsafe {
             outb(self.port, byte);
         }
@@ -70,7 +70,7 @@ impl SerialPort {
 
     /// Drains all currently available bytes from the hardware FIFO into the internal ring buffer.
     pub fn drain_hardware_fifo(&mut self) {
-        // SAFETY: Reading Line Status Register and RX data port from COM port.
+        // SAFETY: Polling the Line Status Register (LSR, port + 5) Data Ready bit 0 and reading available bytes from the Receiver Buffer Register (base port).
         unsafe {
             while (inb(self.port + 5) & 1) != 0 {
                 let byte = inb(self.port);
@@ -165,7 +165,7 @@ impl log::Log for KernelLogger {
 ///
 /// Must be called during single-threaded boot initialization.
 pub unsafe fn serial_init() {
-    // SAFETY: Initializing COM1 UART hardware during boot.
+    // SAFETY: Initializing COM1 serial port hardware registers during single-threaded boot initialization before logger setup.
     unsafe {
         SERIAL1.lock().init();
     }

@@ -64,8 +64,9 @@ where
     if regs.is_null() {
         return usize::MAX;
     }
-    // SAFETY: see function docs. Single-CPU: the frame is not reused until
-    // this function returns to the trampoline.
+    // SAFETY: Caller guarantees `regs` points to a valid, properly aligned, live `SyscallRegisters`
+    // structure. In the single-CPU framekernel model, the register save area is uniquely borrowed for the duration
+    // of `f` and not concurrently accessed.
     let r = unsafe { &mut *regs };
     f(r)
 }

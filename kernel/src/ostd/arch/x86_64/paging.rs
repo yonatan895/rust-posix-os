@@ -92,7 +92,7 @@ pub fn page_flags_from_arch(bits: u64) -> PageFlags {
 /// Modifies CPU hardware TLB caching state.
 #[inline(always)]
 pub unsafe fn tlb_flush(virt_addr: usize) {
-    // SAFETY: Executing invlpg instruction to invalidate TLB translation cache for virtual address.
+    // SAFETY: Executing invlpg instruction to invalidate the TLB translation cache entry for the specified virtual address.
     unsafe {
         asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
     }
@@ -108,7 +108,7 @@ unsafe fn get_or_create_table(
     idx: usize,
     flags: u64,
 ) -> Result<*mut PageTable, &'static str> {
-    // SAFETY: Dereferencing page table pointer and mutating entry if unmapped.
+    // SAFETY: table is a valid aligned pointer to a PageTable within HHDM, and idx < 512 is bounded by PT_INDEX_MASK. If entry is absent, allocates a zeroed physical frame and inserts it with present/writable attributes.
     unsafe {
         if (*table).entries[idx] & PAGE_PRESENT == 0 {
             let frame = alloc_frame().ok_or("Out of physical frames for page table")?;
@@ -127,7 +127,7 @@ unsafe fn get_or_create_table(
 ///
 /// `table` must point to an initialized `PageTable` in valid HHDM virtual memory.
 unsafe fn get_table(table: *const PageTable, idx: usize) -> Option<*const PageTable> {
-    // SAFETY: Reading page table entry within bounds 0..512.
+    // SAFETY: table is a valid aligned pointer to a PageTable in HHDM, and idx < 512 is guaranteed by 9-bit index decomposition.
     unsafe {
         if (*table).entries[idx] & PAGE_PRESENT == 0 {
             None
@@ -152,7 +152,7 @@ pub unsafe fn map_page(
     let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
     let arch_flags = page_flags_to_arch(flags) | PAGE_PRESENT;
 
-    // SAFETY: Walking/allocating PML4 -> PDPT -> PD -> PT and populating leaf PTE.
+    // SAFETY: Walking/allocating PML4 -> PDPT -> PD -> PT hierarchy via HHDM and writing the mapped physical address and flags into the leaf PTE.
     unsafe {
         let pml4 = phys_to_virt(root_phys) as *mut PageTable;
         let pdpt = get_or_create_table(pml4, pml4_idx, arch_flags)?;
@@ -172,7 +172,7 @@ pub unsafe fn map_page(
 pub unsafe fn unmap_page(root_phys: usize, virt_addr: usize) -> Option<usize> {
     let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
 
-    // SAFETY: Walking page table hierarchy and clearing leaf PTE.
+    // SAFETY: Walking the 4-level page table hierarchy via HHDM, clearing the present bit on the leaf PTE, and flushing the TLB for virt_addr.
     unsafe {
         let pml4 = phys_to_virt(root_phys) as *const PageTable;
         let pdpt = get_table(pml4, pml4_idx)?;
@@ -201,7 +201,7 @@ pub unsafe fn set_page_flags(root_phys: usize, virt_addr: usize, flags: PageFlag
     let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
     let arch_flags = page_flags_to_arch(flags) | PAGE_PRESENT;
 
-    // SAFETY: Walking page table hierarchy and rewriting PTE attributes.
+    // SAFETY: Walking page table hierarchy via HHDM, rewriting the PTE protection attributes, and invalidating the TLB entry.
     unsafe {
         let pml4 = phys_to_virt(root_phys) as *const PageTable;
         let Some(pdpt) = get_table(pml4, pml4_idx) else {
@@ -233,7 +233,7 @@ pub unsafe fn translate(root_phys: usize, virt_addr: usize) -> Option<usize> {
     let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
     let offset = virt_addr & 0xFFF;
 
-    // SAFETY: Walking page table hierarchy through HHDM.
+    // SAFETY: Traversing PML4 -> PDPT -> PD -> PT page table hierarchy in HHDM to read mapped physical address.
     unsafe {
         let pml4 = phys_to_virt(root_phys) as *const PageTable;
         let pdpt = get_table(pml4, pml4_idx)?;
@@ -264,11 +264,9 @@ pub unsafe fn validate_user_page(
     for level in (1u32..=4).rev() {
         let shift = 12 + (level - 1) * 9;
         let index = (vaddr >> shift) & PT_INDEX_MASK;
-        let entry = {
-            // SAFETY: Reading live page-table page entry in HHDM.
-            let table = phys_to_virt(table_phys) as *const u64;
-            unsafe { table.add(index).read_volatile() }
-        };
+        let table = phys_to_virt(table_phys) as *const u64;
+        // SAFETY: table_phys is a valid 4 KiB-aligned page table frame physical address, mapped in the HHDM. index is in 0..512 (bounded by PT_INDEX_MASK = 0x1FF), so table.add(index) stays within the 4096-byte table allocation.
+        let entry = unsafe { table.add(index).read_volatile() };
         if entry & PAGE_PRESENT == 0 || entry & PAGE_USER == 0 {
             return Err(UserAccessError::NotMapped);
         }
@@ -293,7 +291,7 @@ pub unsafe fn copy_kernel_mappings(dest_root_phys: usize, src_root_phys: usize) 
     let dest_virt = phys_to_virt(dest_root_phys) as *mut PageTable;
     let src_virt = phys_to_virt(src_root_phys) as *const PageTable;
 
-    // SAFETY: Copying entries 256..512 for higher-half kernel space isolation.
+    // SAFETY: Copying top 256 PML4 entries (slots 256..512) to share kernel address space mappings across processes while isolating lower half userland.
     unsafe {
         for i in 256..512 {
             (*dest_virt).entries[i] = (*src_virt).entries[i];
@@ -309,7 +307,7 @@ pub unsafe fn copy_kernel_mappings(dest_root_phys: usize, src_root_phys: usize) 
 pub unsafe fn free_page_table_hierarchy(root_phys: usize) {
     let pml4 = phys_to_virt(root_phys) as *mut PageTable;
 
-    // SAFETY: Freeing lower-half page table frames (entries 0..256).
+    // SAFETY: Iterating through lower-half PML4 entries (0..256), traversing PDPT, PD, and PT tables to free all intermediate page table frames and mapped user data pages. Caller ensures root_phys is not active in CR3.
     unsafe {
         for i in 0..256 {
             if (*pml4).entries[i] & PAGE_PRESENT != 0 {

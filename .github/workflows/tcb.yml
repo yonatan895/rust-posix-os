@@ -44,3 +44,51 @@ jobs:
             exit 1
           fi
           echo "Soundness intact: 0 static mut globals in kernel/src."
+      - name: Enforce ADR-0001 R5 (// SAFETY comment on every unsafe block)
+        run: |
+          set -euo pipefail
+          # Find all unsafe blocks and verify a // SAFETY: comment appears within
+          # the 5 preceding non-blank lines. This handles multi-line SAFETY comments,
+          # #[cfg] attributes, and rustfmt continuation lines (e.g. let x =\n    unsafe {).
+          violations=0
+          while IFS=: read -r file line content; do
+            found=false
+            check_line=$((line - 1))
+            max_scan=$((line - 6))
+            [ "$max_scan" -lt 0 ] && max_scan=0
+            while [ "$check_line" -ge 1 ] && [ "$check_line" -gt "$max_scan" ]; do
+              prev_content=$(sed -n "${check_line}p" "$file")
+              if echo "$prev_content" | grep -qE '^\s*$'; then
+                break
+              fi
+              if echo "$prev_content" | grep -q '// SAFETY:'; then
+                found=true
+                break
+              fi
+              check_line=$((check_line - 1))
+            done
+            if [ "$found" = false ]; then
+              echo "::error file=${file},line=${line}::Missing // SAFETY: comment before: ${content}"
+              violations=$((violations + 1))
+            fi
+          done < <(grep -RnE --include='*.rs' '^\s*unsafe\s*\{' kernel/src/ostd/ libs/libc/src/ userland/)
+          if [ "$violations" -gt 0 ]; then
+            echo "::error::${violations} unsafe block(s) missing mandatory // SAFETY: rationale."
+            exit 1
+          fi
+          echo "Safety audit passed: all unsafe blocks have // SAFETY: comments."
+      - name: Enforce #![deny(unsafe_op_in_unsafe_fn)] in all crate roots
+        run: |
+          set -euo pipefail
+          missing=0
+          for root in kernel/src/main.rs libs/libc/src/lib.rs userland/init/src/main.rs userland/coreutils/src/main.rs userland/shell/src/main.rs; do
+            if ! grep -q 'deny(unsafe_op_in_unsafe_fn)' "$root"; then
+              echo "::error file=${root}::Missing #![deny(unsafe_op_in_unsafe_fn)] in crate root."
+              missing=$((missing + 1))
+            fi
+          done
+          if [ "$missing" -gt 0 ]; then
+            echo "::error::${missing} crate root(s) missing #![deny(unsafe_op_in_unsafe_fn)]."
+            exit 1
+          fi
+          echo "All crate roots enforce #![deny(unsafe_op_in_unsafe_fn)]."

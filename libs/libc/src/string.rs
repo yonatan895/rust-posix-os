@@ -8,8 +8,11 @@
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
     let mut len = 0;
-    while unsafe { *s.add(len) } != 0 {
-        len += 1;
+    // SAFETY: Caller guarantees `s` points to a valid null-terminated C string.
+    unsafe {
+        while *s.add(len) != 0 {
+            len += 1;
+        }
     }
     len
 }
@@ -24,15 +27,19 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strcmp(s1: *const u8, s2: *const u8) -> i32 {
     let mut i = 0;
-    loop {
-        let (c1, c2) = unsafe { (*s1.add(i), *s2.add(i)) };
-        if c1 != c2 {
-            return c1 as i32 - c2 as i32;
+    // SAFETY: Caller guarantees `s1` and `s2` point to valid null-terminated C strings.
+    unsafe {
+        loop {
+            let c1 = *s1.add(i);
+            let c2 = *s2.add(i);
+            if c1 != c2 {
+                return c1 as i32 - c2 as i32;
+            }
+            if c1 == 0 {
+                return 0;
+            }
+            i += 1;
         }
-        if c1 == 0 {
-            return 0;
-        }
-        i += 1;
     }
 }
 
@@ -43,13 +50,17 @@ pub unsafe extern "C" fn strcmp(s1: *const u8, s2: *const u8) -> i32 {
 /// `s1` and `s2` must point to readable memory buffers of at least `n` bytes or be null-terminated earlier.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strncmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
-    for i in 0..n {
-        let (c1, c2) = unsafe { (*s1.add(i), *s2.add(i)) };
-        if c1 != c2 {
-            return c1 as i32 - c2 as i32;
-        }
-        if c1 == 0 {
-            return 0;
+    // SAFETY: Caller guarantees `s1` and `s2` point to readable memory buffers of at least `n` bytes or are null-terminated before index `n`.
+    unsafe {
+        for i in 0..n {
+            let c1 = *s1.add(i);
+            let c2 = *s2.add(i);
+            if c1 != c2 {
+                return c1 as i32 - c2 as i32;
+            }
+            if c1 == 0 {
+                return 0;
+            }
         }
     }
     0
@@ -66,15 +77,16 @@ pub unsafe extern "C" fn strncmp(s1: *const u8, s2: *const u8, n: usize) -> i32 
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strcpy(dest: *mut u8, src: *const u8) -> *mut u8 {
     let mut i = 0;
-    loop {
-        let c = unsafe { *src.add(i) };
-        unsafe {
+    // SAFETY: Caller guarantees `dest` has sufficient capacity to hold `src` plus null terminator, and buffers do not overlap.
+    unsafe {
+        loop {
+            let c = *src.add(i);
             *dest.add(i) = c;
+            if c == 0 {
+                break;
+            }
+            i += 1;
         }
-        if c == 0 {
-            break;
-        }
-        i += 1;
     }
     dest
 }
@@ -89,17 +101,16 @@ pub unsafe extern "C" fn strcpy(dest: *mut u8, src: *const u8) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn strncpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
     let mut i = 0;
-    while i < n && unsafe { *src.add(i) } != 0 {
-        unsafe {
+    // SAFETY: Caller guarantees `dest` has capacity of at least `n` bytes and `src` is valid for reads up to null terminator or `n` bytes without overlap.
+    unsafe {
+        while i < n && *src.add(i) != 0 {
             *dest.add(i) = *src.add(i);
+            i += 1;
         }
-        i += 1;
-    }
-    while i < n {
-        unsafe {
+        while i < n {
             *dest.add(i) = 0;
+            i += 1;
         }
-        i += 1;
     }
     dest
 }
@@ -114,8 +125,9 @@ pub unsafe extern "C" fn strncpy(dest: *mut u8, src: *const u8, n: usize) -> *mu
 /// Memory areas must not overlap (use [`memmove`] if overlap is possible).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    for i in 0..n {
-        unsafe {
+    // SAFETY: Caller guarantees `dest` and `src` are valid for `n` bytes of write and read respectively, and do not overlap.
+    unsafe {
+        for i in 0..n {
             *dest.add(i) = *src.add(i);
         }
     }
@@ -131,8 +143,9 @@ pub unsafe extern "C" fn memcpy(dest: *mut u8, src: *const u8, n: usize) -> *mut
 /// `s` must be valid for writes of `n` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
-    for i in 0..n {
-        unsafe {
+    // SAFETY: Caller guarantees `s` is valid for writes of `n` bytes.
+    unsafe {
+        for i in 0..n {
             *s.add(i) = c as u8;
         }
     }
@@ -148,10 +161,14 @@ pub unsafe extern "C" fn memset(s: *mut u8, c: i32, n: usize) -> *mut u8 {
 /// `s1` and `s2` must be readable for at least `n` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
-    for i in 0..n {
-        let (c1, c2) = unsafe { (*s1.add(i), *s2.add(i)) };
-        if c1 != c2 {
-            return c1 as i32 - c2 as i32;
+    // SAFETY: Caller guarantees `s1` and `s2` are valid for reads of `n` bytes.
+    unsafe {
+        for i in 0..n {
+            let c1 = *s1.add(i);
+            let c2 = *s2.add(i);
+            if c1 != c2 {
+                return c1 as i32 - c2 as i32;
+            }
         }
     }
     0
@@ -166,15 +183,15 @@ pub unsafe extern "C" fn memcmp(s1: *const u8, s2: *const u8, n: usize) -> i32 {
 /// `dest` and `src` must be valid for `n` bytes. Correctly handles overlapping buffers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mut u8 {
-    if dest as usize <= src as usize {
-        for i in 0..n {
-            unsafe {
+    // SAFETY: Handles potentially overlapping memory regions by choosing forward or backward copying direction.
+    // Caller guarantees both `dest` and `src` have capacity for `n` bytes.
+    unsafe {
+        if dest as usize <= src as usize {
+            for i in 0..n {
                 *dest.add(i) = *src.add(i);
             }
-        }
-    } else {
-        for i in (0..n).rev() {
-            unsafe {
+        } else {
+            for i in (0..n).rev() {
                 *dest.add(i) = *src.add(i);
             }
         }
@@ -193,13 +210,16 @@ pub unsafe extern "C" fn memmove(dest: *mut u8, src: *const u8, n: usize) -> *mu
 pub unsafe extern "C" fn strchr(s: *const u8, c: i32) -> *const u8 {
     let target = c as u8;
     let mut ptr = s;
-    loop {
-        if unsafe { *ptr } == target {
-            return ptr;
+    // SAFETY: Caller guarantees `s` is a valid null-terminated C string.
+    unsafe {
+        loop {
+            if *ptr == target {
+                return ptr;
+            }
+            if *ptr == 0 {
+                return core::ptr::null();
+            }
+            ptr = ptr.add(1);
         }
-        if unsafe { *ptr } == 0 {
-            return core::ptr::null();
-        }
-        ptr = unsafe { ptr.add(1) };
     }
 }

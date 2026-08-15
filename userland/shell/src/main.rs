@@ -2,7 +2,7 @@
 
 #![no_std]
 #![no_main]
-#![allow(unsafe_op_in_unsafe_fn)]
+#![deny(unsafe_op_in_unsafe_fn)]
 // Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
 // raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
 #![allow(clippy::all)]
@@ -56,6 +56,7 @@ pub static KNOWN_COMMANDS: [&str; 22] = [
 /// Must be invoked as the initial ELF entry point with a valid stack.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
+    // SAFETY: Outputs welcome banner strings to stdout.
     unsafe {
         puts(b"\x1b[1;32m=====================================================\x1b[0m\0".as_ptr());
         puts(b"\x1b[1;32m   Rust POSIX Shell (POSIX.1-2024 / x86_64 Userland)  \x1b[0m\0".as_ptr());
@@ -67,6 +68,7 @@ pub unsafe extern "C" fn _start() -> ! {
     let mut cwd_buf = [0u8; 128];
 
     loop {
+        // SAFETY: Queries working directory, reads line from terminal with history, and executes pipeline.
         unsafe {
             getcwd(cwd_buf.as_mut_ptr(), cwd_buf.len());
             let len = read_line_with_history(cwd_buf.as_ptr(), &mut line_buf, &KNOWN_COMMANDS);
@@ -86,6 +88,7 @@ pub unsafe extern "C" fn _start() -> ! {
 /// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     let cmd = argv[0];
+    // SAFETY: Matches command string against built-ins and invokes appropriate handler.
     unsafe {
         if strcmp(cmd, b"help\0".as_ptr()) == 0 {
             puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, id, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, clip, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());

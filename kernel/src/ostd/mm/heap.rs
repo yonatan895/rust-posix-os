@@ -42,6 +42,8 @@ impl LinkedListAllocator {
     /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
     /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&mut self, heap_start: usize, heap_size: usize) {
+        // SAFETY: Caller guarantees that the memory region `[heap_start, heap_start + heap_size)` is valid,
+        // unused, and exclusively owned by the heap allocator.
         unsafe {
             self.add_free_region(heap_start, heap_size);
         }
@@ -58,6 +60,9 @@ impl LinkedListAllocator {
         let usable_size = size - padding;
 
         let node_ptr = aligned_addr as *mut ListNode;
+        // SAFETY: `aligned_addr` is properly aligned to `align_of::<ListNode>()` and `usable_size` is at least
+        // `size_of::<ListNode>()`. The memory range is within caller-provided valid heap memory. Writing to
+        // `node_ptr` and creating `&mut *node_ptr` is sound because no aliasing references exist.
         unsafe {
             core::ptr::write_unaligned(node_ptr, ListNode::new(usable_size));
             let node = &mut *node_ptr;
@@ -109,6 +114,8 @@ impl LockedHeap {
     /// The memory region `[heap_start, heap_start + heap_size)` must be valid, unused,
     /// and exclusively owned by the heap allocator.
     pub unsafe fn init(&self, heap_start: usize, heap_size: usize) {
+        // SAFETY: Caller guarantees that `[heap_start, heap_start + heap_size)` is a valid,
+        // unused memory region exclusively owned by the heap allocator.
         unsafe {
             self.0.lock().init(heap_start, heap_size);
         }
@@ -126,6 +133,8 @@ use core::sync::atomic::{AtomicUsize, Ordering};
 /// Total active allocated bytes in the kernel global heap.
 pub static HEAP_USED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
+// SAFETY: `LockedHeap` synchronizes all internal mutations with a `SpinLock`, ensuring thread-safe
+// and interrupt-safe allocation and deallocation across all CPU execution contexts.
 unsafe impl GlobalAlloc for LockedHeap {
     unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
         let mut allocator = self.0.lock();
@@ -140,6 +149,8 @@ unsafe impl GlobalAlloc for LockedHeap {
             let excess_size = region_end.saturating_sub(alloc_end);
 
             if excess_size >= core::mem::size_of::<ListNode>() {
+                // SAFETY: `[alloc_end, alloc_end + excess_size)` is within the valid memory block
+                // that was previously free and has now been split; it is not returned to the caller.
                 unsafe {
                     allocator.add_free_region(alloc_end, excess_size);
                 }
@@ -156,6 +167,8 @@ unsafe impl GlobalAlloc for LockedHeap {
         let align = layout.align().max(core::mem::align_of::<ListNode>());
         let size = (layout.size() + align - 1) & !(align - 1);
         let min_size = size.max(core::mem::size_of::<ListNode>());
+        // SAFETY: Caller guarantees `ptr` was previously allocated by `alloc` with `layout`,
+        // is non-null, and will not be accessed again after deallocation.
         unsafe {
             allocator.add_free_region(ptr as usize, min_size);
         }
@@ -177,6 +190,7 @@ pub static HEAP_ALLOCATOR: LockedHeap = LockedHeap::new();
 fn alloc_error_handler(layout: Layout) -> ! {
     log::error!("Kernel Heap Allocation Failure: {:?}", layout);
     loop {
+        // SAFETY: Halts CPU execution indefinitely upon unrecoverable kernel heap exhaustion.
         unsafe { core::arch::asm!("hlt") };
     }
 }

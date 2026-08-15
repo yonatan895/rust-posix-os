@@ -94,7 +94,7 @@ static mut STATE: AllocatorState = AllocatorState {
 
 /// Returns a raw mutable pointer to the process-local allocator state.
 #[inline(always)]
-unsafe fn get_state() -> *mut AllocatorState {
+fn get_state() -> *mut AllocatorState {
     core::ptr::addr_of_mut!(STATE)
 }
 
@@ -116,7 +116,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
         let total_size = size + core::mem::size_of::<BlockHeader>();
         let aligned_size = (total_size + 4095) & !4095;
 
-        // SAFETY: mmap is called with standard anonymous private mapping flags.
+        // SAFETY: Invokes SYS_MMAP syscall with PROT_READ | PROT_WRITE and anonymous private mapping flags.
         let ptr = unsafe {
             mmap(
                 core::ptr::null_mut(),
@@ -149,7 +149,7 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
         }
         let b_size = SIZE_CLASSES[class_idx];
 
-        // SAFETY: Operations on process-local allocator state and arena pointers.
+        // SAFETY: Accesses and mutates process-local allocator state, free lists, and slab arenas.
         unsafe {
             let state = get_state();
 
@@ -267,10 +267,10 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut u8 {
     let total = nmemb.saturating_mul(size);
-    // SAFETY: malloc and memset handle null check and allocation boundaries safely.
+    // SAFETY: malloc allocates a buffer of requested `total` bytes or returns null.
     let ptr = unsafe { malloc(total) };
     if !ptr.is_null() {
-        // SAFETY: ptr is valid for writes of total bytes.
+        // SAFETY: ptr is valid for writes of `total` bytes as freshly allocated by malloc.
         unsafe {
             crate::string::memset(ptr, 0, total);
         }
@@ -288,11 +288,11 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut u8 {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     if ptr.is_null() {
-        // SAFETY: Delegating to malloc with requested size.
+        // SAFETY: Reallocating null pointer is equivalent to malloc(size).
         return unsafe { malloc(size) };
     }
     if size == 0 {
-        // SAFETY: Freeing valid non-null pointer and returning null per POSIX.
+        // SAFETY: Reallocating with size 0 is equivalent to free(ptr) and returns null per POSIX.
         unsafe {
             free(ptr);
         }
@@ -346,7 +346,7 @@ pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
 /// Issues the `SYS_EXIT` syscall and never returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exit(status: i32) -> ! {
-    // SAFETY: Performing direct exit system call.
+    // SAFETY: Performing direct exit system call then halting the CPU indefinitely in ring 3.
     unsafe {
         syscall1(SYS_EXIT, status as usize);
         loop {

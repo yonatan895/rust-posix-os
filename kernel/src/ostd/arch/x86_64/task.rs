@@ -13,7 +13,7 @@ use core::arch::naked_asm;
 /// Safely updates the CPU's active kernel stack in the TSS and syscall MSR.
 #[inline(always)]
 pub fn switch_active_kernel_stack(stack_top: u64) {
-    // SAFETY: Delegating to architecture GDT/TSS and MSR update function.
+    // SAFETY: Forwarding to set_kernel_stack to update TSS.rsp0 and syscall kernel stack. stack_top is guaranteed valid by caller.
     unsafe {
         set_kernel_stack(stack_top);
     }
@@ -32,7 +32,7 @@ pub fn init_user_kernel_stack(
     assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
     let offset = stack.len() - core::mem::size_of::<TrapFrame>();
     let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    // SAFETY: `frame_ptr` points inside the allocated kernel stack slice.
+    // SAFETY: frame_ptr is derived from the exclusive &mut [u8] slice, with offset and length checked by assertion to fit within bounds. TrapFrame has repr(C) with 8-byte alignment, matching kernel stack slice alignment.
     unsafe {
         *frame_ptr = TrapFrame {
             r15: 0,
@@ -74,7 +74,7 @@ pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -
     assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
     let offset = stack.len() - core::mem::size_of::<TrapFrame>();
     let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    // SAFETY: `frame_ptr` points inside the valid `stack` slice.
+    // SAFETY: frame_ptr is derived from the exclusive &mut [u8] slice, with offset and length checked by assertion to fit within bounds. TrapFrame has repr(C) with 8-byte alignment, matching kernel stack slice alignment.
     unsafe {
         *frame_ptr = TrapFrame {
             r15: parent_regs.r15 as u64,
@@ -112,7 +112,7 @@ pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
     assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
     let offset = stack.len() - core::mem::size_of::<TrapFrame>();
     let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    // SAFETY: `frame_ptr` points inside the allocated kernel stack slice.
+    // SAFETY: frame_ptr is derived from the exclusive &mut [u8] slice, with offset and length checked by assertion to fit within bounds. TrapFrame has repr(C) with 8-byte alignment, matching kernel stack slice alignment.
     unsafe {
         *frame_ptr = TrapFrame {
             r15: 0,
@@ -252,7 +252,7 @@ pub unsafe extern "C" fn enter_user_mode(
 /// Halts the CPU waiting for the next hardware interrupt.
 #[inline(always)]
 pub fn idle() {
-    // SAFETY: Enabling interrupts and halting CPU in Ring 0.
+    // SAFETY: Enabling interrupts with sti and halting the CPU with hlt to wait for the next timer or device interrupt in Ring 0.
     unsafe {
         super::sti();
         super::hlt();

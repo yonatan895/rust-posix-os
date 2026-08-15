@@ -16,7 +16,7 @@ use super::{inb, io_wait, outb};
 ///
 /// Directly programs legacy 8259 PIC hardware ports (`0x20`, `0x21`, `0xA0`, `0xA1`).
 pub unsafe fn pic_remap(offset1: u8, offset2: u8) {
-    // SAFETY: Programming 8259 PIC initialization command words (ICW1..ICW4).
+    // SAFETY: Programming dual 8259 PIC initialization sequence (ICW1..ICW4) to remap master IRQs to offset1 (0x20) and slave IRQs to offset2 (0x28).
     unsafe {
         // ICW1: Start initialization sequence in cascade mode
         outb(0x20, 0x11);
@@ -50,7 +50,7 @@ pub unsafe fn pic_remap(offset1: u8, offset2: u8) {
 ///
 /// Directly manipulates legacy 8259 PIC hardware registers.
 pub unsafe fn pic_disable() {
-    // SAFETY: Masking all IRQ lines on Master and Slave PICs via I/O ports.
+    // SAFETY: Writing 0xFF to Master (0x21) and Slave (0xA1) PIC data ports to mask all 16 IRQ lines.
     unsafe {
         outb(0x21, 0xFF);
         io_wait();
@@ -74,7 +74,7 @@ pub unsafe fn mask(irq: u8) {
         "PIC IRQ line out of range (must be 0..15): {}",
         irq
     );
-    // SAFETY: Reading and modifying PIC mask register.
+    // SAFETY: Reading the Interrupt Mask Register (IMR) from the appropriate PIC port, setting the target IRQ bit to 1 (masked), and writing it back.
     unsafe {
         let port = if irq < 8 { 0x21 } else { 0xA1 };
         let bit = if irq < 8 { irq } else { irq - 8 };
@@ -99,7 +99,7 @@ pub unsafe fn unmask(irq: u8) {
         "PIC IRQ line out of range (must be 0..15): {}",
         irq
     );
-    // SAFETY: Reading and modifying PIC mask register.
+    // SAFETY: Reading the Interrupt Mask Register (IMR) from the appropriate PIC port, clearing the target IRQ bit to 0 (unmasked), and writing it back.
     unsafe {
         let port = if irq < 8 { 0x21 } else { 0xA1 };
         let bit = if irq < 8 { irq } else { irq - 8 };
@@ -124,7 +124,7 @@ pub unsafe fn send_eoi(irq: u8) {
         "PIC IRQ line out of range (must be 0..15): {}",
         irq
     );
-    // SAFETY: Sending EOI acknowledgment byte 0x20 to PIC command port.
+    // SAFETY: Writing Non-Specific EOI command byte (0x20) to Master PIC command port (0x20), and if irq >= 8 also to Slave PIC command port (0xA0).
     unsafe {
         if irq >= 8 {
             outb(0xA0, 0x20);

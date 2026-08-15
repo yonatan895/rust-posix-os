@@ -27,7 +27,7 @@ pub fn virt_to_phys(virt: usize) -> usize {
 /// Zeroes one 4 KiB physical frame via the HHDM.
 pub fn zero_phys_frame(phys: usize) {
     let virt = phys_to_virt(phys) as *mut u8;
-    // SAFETY: HHDM covers all physical RAM. Frame base is 4 KiB page-aligned.
+    // SAFETY: `virt` is a valid HHDM virtual address pointing to an allocated 4 KiB physical page frame of size `PAGE_SIZE`.
     unsafe { core::ptr::write_bytes(virt, 0, PAGE_SIZE) };
 }
 
@@ -78,7 +78,9 @@ impl VmSpace {
 
         let active_root = AddressSpace::current().as_phys();
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Copying kernel mappings into newly allocated page table root frame.
+        // SAFETY: `root_phys` is a valid, freshly allocated 4 KiB root table physical frame. `active_root` is
+        // the valid active PML4 root table. `copy_kernel_mappings` clones higher-half kernel entries
+        // into the new root table without exposing or modifying lower-half user entries.
         unsafe {
             crate::ostd::arch::x86_64::paging::copy_kernel_mappings(root_phys, active_root);
         }
@@ -288,7 +290,8 @@ impl VmSpace {
     /// Updates page table flags for a mapped virtual page.
     pub fn set_page_flags(&mut self, virt_addr: usize, flags: PageFlags) {
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Delegating PTE attribute update to architecture backend.
+        // SAFETY: `self.address_space.as_phys()` is a valid root table. `virt_addr` is a canonical
+        // virtual address whose page table entries are updated with architecture-appropriate attributes.
         unsafe {
             crate::ostd::arch::x86_64::paging::set_page_flags(
                 self.address_space.as_phys(),
@@ -308,7 +311,8 @@ impl VmSpace {
         flags: PageFlags,
     ) -> Result<(), &'static str> {
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Delegating page mapping to architecture backend.
+        // SAFETY: `self.address_space.as_phys()` is a valid root table. `virt_addr` and `phys_addr`
+        // are 4 KiB aligned addresses. Intermediate page tables are safely allocated from PMM as required.
         unsafe {
             crate::ostd::arch::x86_64::paging::map_page(
                 self.address_space.as_phys(),
@@ -324,7 +328,8 @@ impl VmSpace {
     /// Unmaps a 4 KiB virtual page from this address space and frees its physical frame.
     pub fn unmap_page(&mut self, virt_addr: usize) {
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Delegating unmapping to architecture backend.
+        // SAFETY: `self.address_space.as_phys()` is a valid root table. `virt_addr` is page-aligned
+        // and cleared from the page tables. Any unmapped physical frame is returned to be freed.
         let freed_frame = unsafe {
             crate::ostd::arch::x86_64::paging::unmap_page(self.address_space.as_phys(), virt_addr)
         };
@@ -340,7 +345,8 @@ impl VmSpace {
     /// Translates a virtual address to its mapped physical address.
     pub fn translate(&self, virt_addr: usize) -> Option<usize> {
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Delegating translation to architecture backend.
+        // SAFETY: `self.address_space.as_phys()` is a valid root table. Page table traversal performs
+        // read-only lookups via HHDM virtual addresses.
         unsafe {
             crate::ostd::arch::x86_64::paging::translate(self.address_space.as_phys(), virt_addr)
         }
@@ -396,7 +402,9 @@ impl VmSpace {
                 .ok_or("Unmapped virtual address during write")?;
             let virt = phys_to_virt(phys) as *mut u8;
 
-            // SAFETY: `virt` is a valid HHDM pointer to the mapped page frame.
+            // SAFETY: `virt` is a valid HHDM virtual address pointing to the mapped physical frame.
+            // `to_write` is bounded by `PAGE_SIZE - offset_in_page`, preventing buffer overflow past the frame boundary.
+            // Kernel source data and destination physical page do not overlap.
             unsafe {
                 core::ptr::copy_nonoverlapping(data[written..].as_ptr(), virt, to_write);
             }
@@ -419,7 +427,8 @@ impl VmSpace {
                     let child_phys = alloc_frame()?;
                     let parent_src = phys_to_virt(parent_phys & !0xFFF) as *const u8;
                     let child_dst = phys_to_virt(child_phys) as *mut u8;
-                    // SAFETY: Both frames are valid, non-overlapping allocated physical pages.
+                    // SAFETY: `parent_src` and `child_dst` are valid HHDM pointers to distinct, non-overlapping
+                    // 4 KiB physical frames. Copying `PAGE_SIZE` bytes duplicates the memory frame content.
                     unsafe {
                         core::ptr::copy_nonoverlapping(parent_src, child_dst, PAGE_SIZE);
                     }
@@ -446,7 +455,9 @@ impl Drop for VmSpace {
         );
 
         #[cfg(target_arch = "x86_64")]
-        // SAFETY: Freeing lower-half page table hierarchy of inactive address space.
+        // SAFETY: `self.address_space.as_phys()` is a valid root table and the debug assertion verifies
+        // it is not active on the CPU. `free_page_table_hierarchy` recursively unmaps and frees all lower-half
+        // user page tables and user physical frames.
         unsafe {
             crate::ostd::arch::x86_64::paging::free_page_table_hierarchy(
                 self.address_space.as_phys(),

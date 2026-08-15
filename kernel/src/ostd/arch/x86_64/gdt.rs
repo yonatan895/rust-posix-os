@@ -110,7 +110,7 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
     let tss_ptr = GLOBAL_TSS.get();
     let gdt_ptr = GLOBAL_GDT.get();
 
-    // SAFETY: Writing kernel_stack_top to TSS during single-threaded boot.
+    // SAFETY: Writing kernel_stack_top to TSS during single-threaded boot. GLOBAL_TSS is statically allocated, aligned, and valid.
     unsafe {
         (*tss_ptr).rsp0 = kernel_stack_top;
     }
@@ -118,7 +118,7 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
     let tss_base = tss_ptr as u64;
     let tss_limit = (size_of::<TSS>() - 1) as u64;
 
-    // SAFETY: Populating 64-bit GDT entries into static memory during single-threaded boot.
+    // SAFETY: Populating 64-bit GDT entries into statically allocated GLOBAL_GDT during single-threaded boot before segment registers are reloaded.
     unsafe {
         // Entry 0: Null Descriptor
         (*gdt_ptr).entries[0] = 0;
@@ -149,7 +149,7 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
         base: gdt_ptr as u64,
     };
 
-    // SAFETY: Loading GDT descriptor and reloading CS/DS/SS segment registers via asm.
+    // SAFETY: Loading GDT descriptor with lgdt, reloading CS via far return to KERNEL_CODE_SEL (0x08), loading data segments with KERNEL_DATA_SEL (0x10), and loading Task Register with TSS_SEL (0x28).
     unsafe {
         asm!("lgdt [{}]", in(reg) &descriptor, options(nostack));
 
@@ -183,11 +183,11 @@ pub unsafe fn gdt_init(kernel_stack_top: u64) {
 ///
 /// `stack_top` must be a valid, mapped kernel stack memory address.
 pub unsafe fn set_kernel_stack(stack_top: u64) {
-    // SAFETY: Updating TSS.rsp0 for user-to-kernel interrupt/syscall stack switching.
+    // SAFETY: Updating TSS.rsp0 via GLOBAL_TSS raw pointer for user-to-kernel interrupt and privilege level switches. Caller guarantees stack_top is a valid mapped kernel stack.
     unsafe {
         (*GLOBAL_TSS.get()).rsp0 = stack_top;
     }
-    // SAFETY: Updating per-CPU kernel stack for fast syscall entry.
+    // SAFETY: Updating per-CPU kernel stack pointer used on fast syscall entry. Caller guarantees stack_top is a valid mapped kernel stack.
     unsafe {
         super::syscall::set_syscall_kernel_stack(stack_top);
     }

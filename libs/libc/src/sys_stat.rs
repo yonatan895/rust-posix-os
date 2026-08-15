@@ -13,6 +13,7 @@ use posix_abi::*;
 /// `statbuf` must point to a valid writable [`Stat`] structure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn stat(pathname: *const u8, statbuf: *mut Stat) -> i32 {
+    // SAFETY: Issues SYS_STAT syscall with null-terminated pathname pointer and writable Stat buffer pointer.
     unsafe { syscall2(SYS_STAT, pathname as usize, statbuf as usize) as i32 }
 }
 
@@ -25,7 +26,7 @@ pub unsafe extern "C" fn stat(pathname: *const u8, statbuf: *mut Stat) -> i32 {
 /// `statbuf` must point to a valid writable [`Stat`] structure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut Stat) -> i32 {
-    // SAFETY: Performing direct fstat syscall.
+    // SAFETY: Issues SYS_FSTAT syscall with open file descriptor and writable Stat buffer pointer.
     unsafe { syscall2(SYS_FSTAT, fd as usize, statbuf as usize) as i32 }
 }
 
@@ -38,6 +39,6 @@ pub unsafe extern "C" fn fstat(fd: i32, statbuf: *mut Stat) -> i32 {
 /// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn umask(mask: u32) -> u32 {
-    // SAFETY: Performing direct umask syscall.
+    // SAFETY: Issues SYS_UMASK syscall with file mode creation mask.
     unsafe { syscall1(SYS_UMASK, mask as usize) as u32 }
 }

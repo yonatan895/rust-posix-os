@@ -44,7 +44,9 @@ pub struct LimineRequestsStartMarker {
     /// 4-element magic ID array identifying the start of Limine requests.
     pub id: [u64; 4],
 }
+// SAFETY: LimineRequestsStartMarker contains only immutable magic numbers and is safe to share across threads.
 unsafe impl Sync for LimineRequestsStartMarker {}
+// SAFETY: LimineRequestsStartMarker is a Plain Old Data marker struct safe to transfer across threads.
 unsafe impl Send for LimineRequestsStartMarker {}
 
 /// Marker struct placed at the end of the `.requests_end` linker section.
@@ -54,7 +56,9 @@ pub struct LimineRequestsEndMarker {
     /// 2-element magic ID array identifying the end of Limine requests.
     pub id: [u64; 2],
 }
+// SAFETY: LimineRequestsEndMarker contains only immutable magic numbers and is safe to share across threads.
 unsafe impl Sync for LimineRequestsEndMarker {}
+// SAFETY: LimineRequestsEndMarker is a Plain Old Data marker struct safe to transfer across threads.
 unsafe impl Send for LimineRequestsEndMarker {}
 
 /// Base protocol revision declaration for the Limine bootloader.
@@ -66,7 +70,9 @@ pub struct LimineBaseRevision {
     /// Target protocol revision version.
     pub revision: u64,
 }
+// SAFETY: LimineBaseRevision contains only immutable numeric fields and is safe to share across threads.
 unsafe impl Sync for LimineBaseRevision {}
+// SAFETY: LimineBaseRevision is a Plain Old Data struct safe to transfer across threads.
 unsafe impl Send for LimineBaseRevision {}
 
 /// Response structure returned by Limine for the HHDM request.
@@ -89,7 +95,9 @@ pub struct LimineHhdmRequest {
     /// Pointer filled by Limine with the response structure.
     pub response: UnsafeCell<*mut LimineHhdmResponse>,
 }
+// SAFETY: LimineHhdmRequest response pointer is initialized by the bootloader during early boot and read-only afterwards; UnsafeCell synchronization is managed internally.
 unsafe impl Sync for LimineHhdmRequest {}
+// SAFETY: LimineHhdmRequest contains Plain Old Data and raw pointer fields safe to transfer across threads.
 unsafe impl Send for LimineHhdmRequest {}
 
 /// Memory map entry type: Usable conventional RAM.
@@ -143,7 +151,9 @@ pub struct LimineMemmapRequest {
     /// Pointer filled by Limine with the response.
     pub response: UnsafeCell<*mut LimineMemmapResponse>,
 }
+// SAFETY: LimineMemmapRequest response pointer is initialized by the bootloader during early boot and read-only afterwards; UnsafeCell synchronization is managed internally.
 unsafe impl Sync for LimineMemmapRequest {}
+// SAFETY: LimineMemmapRequest contains Plain Old Data and raw pointer fields safe to transfer across threads.
 unsafe impl Send for LimineMemmapRequest {}
 
 /// Linear graphical framebuffer descriptor.
@@ -198,7 +208,9 @@ pub struct LimineFramebufferRequest {
     /// Pointer filled by Limine with response.
     pub response: UnsafeCell<*mut LimineFramebufferResponse>,
 }
+// SAFETY: LimineFramebufferRequest response pointer is initialized by the bootloader during early boot and read-only afterwards; UnsafeCell synchronization is managed internally.
 unsafe impl Sync for LimineFramebufferRequest {}
+// SAFETY: LimineFramebufferRequest contains Plain Old Data and raw pointer fields safe to transfer across threads.
 unsafe impl Send for LimineFramebufferRequest {}
 
 /// Bootloader-loaded file or module descriptor.
@@ -257,7 +269,9 @@ pub struct LimineModuleRequest {
     /// Pointer filled by Limine with response.
     pub response: UnsafeCell<*mut LimineModuleResponse>,
 }
+// SAFETY: LimineModuleRequest response pointer is initialized by the bootloader during early boot and read-only afterwards; UnsafeCell synchronization is managed internally.
 unsafe impl Sync for LimineModuleRequest {}
+// SAFETY: LimineModuleRequest contains Plain Old Data and raw pointer fields safe to transfer across threads.
 unsafe impl Send for LimineModuleRequest {}
 
 /// Static marker for start of Limine requests section.
@@ -329,10 +343,12 @@ static REQ_END: LimineRequestsEndMarker = LimineRequestsEndMarker {
 ///
 /// Panics if the Limine bootloader did not supply an HHDM response.
 pub fn hhdm_offset() -> usize {
+    // SAFETY: Reading UnsafeCell response pointer written by Limine bootloader before kernel execution.
     let resp = unsafe { *HHDM_REQUEST.response.get() };
     if resp.is_null() {
         panic!("Limine HHDM response missing");
     }
+    // SAFETY: resp is verified non-null and points to a valid LimineHhdmResponse initialized by Limine.
     unsafe { (*resp).offset as usize }
 }
 
@@ -342,6 +358,7 @@ pub fn hhdm_offset() -> usize {
 ///
 /// Panics if the Limine bootloader did not supply a memory map response.
 pub(crate) fn memmap_response() -> *mut LimineMemmapResponse {
+    // SAFETY: Reading UnsafeCell response pointer written by Limine bootloader before kernel execution.
     let resp = unsafe { *MEMMAP_REQUEST.response.get() };
     if resp.is_null() {
         panic!("Limine memory map response missing");
@@ -351,15 +368,23 @@ pub(crate) fn memmap_response() -> *mut LimineMemmapResponse {
 
 /// Get the bootloader module response pointer.
 pub(crate) fn module_response() -> *mut LimineModuleResponse {
+    // SAFETY: Reading UnsafeCell response pointer written by Limine bootloader before kernel execution.
     unsafe { *MODULE_REQUEST.response.get() }
 }
 
 /// Initialize the framebuffer driver if a display device is reported by Limine.
 pub fn init_framebuffer() {
+    // SAFETY: Reading UnsafeCell response pointer written by Limine bootloader before kernel execution.
     let resp = unsafe { *FRAMEBUFFER_REQUEST.response.get() };
-    if !resp.is_null() && unsafe { (*resp).framebuffer_count } > 0 {
+    if resp.is_null() {
+        return;
+    }
+    // SAFETY: resp is verified non-null and points to a valid LimineFramebufferResponse initialized by Limine.
+    let count = unsafe { (*resp).framebuffer_count };
+    if count > 0 {
+        // SAFETY: (*resp).framebuffers points to an array containing at least count valid LimineFramebuffer pointers.
         let fb = unsafe { **(*resp).framebuffers };
-        // SAFETY: `fb` is provided and validated by the Limine bootloader payload.
+        // SAFETY: fb describes a valid physical/virtual framebuffer buffer initialized by the bootloader.
         unsafe { crate::ostd::drivers::framebuffer::fb_init(fb) };
         log::info!(
             "[OSTD] Framebuffer initialized ({}x{} @ {}bpp).",
