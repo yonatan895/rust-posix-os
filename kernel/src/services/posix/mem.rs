@@ -43,13 +43,7 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
         for i in 0..pages {
             let page_vaddr = vaddr + i * PAGE_SIZE;
             if let Some(frame) = alloc_frame() {
-                let mut pte_flags = crate::ostd::mm::PAGE_PRESENT | crate::ostd::mm::PAGE_USER;
-                if prot & PROT_WRITE != 0 {
-                    pte_flags |= crate::ostd::mm::PAGE_WRITABLE;
-                }
-                if prot & PROT_EXEC == 0 {
-                    pte_flags |= crate::ostd::mm::PAGE_NX;
-                }
+                let pte_flags = crate::ostd::mm::PageFlags::from_prot(prot as u32);
                 let _ = vm.map_page(page_vaddr, frame, pte_flags);
                 zero_phys_frame(frame);
             } else {

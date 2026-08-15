@@ -2,9 +2,12 @@
 
 pub mod gdt;
 pub mod idt;
+pub mod paging;
 pub mod pic;
 pub mod pit;
 pub mod syscall;
+
+pub use paging::tlb_flush;
 
 use core::arch::asm;
 

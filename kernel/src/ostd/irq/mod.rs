@@ -21,6 +21,8 @@ pub unsafe fn send_eoi(irq: u8) {
     unsafe {
         pic::send_eoi(irq);
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("send_eoi not implemented for this architecture");
 }
 
 /// Initializes hardware interrupt controllers and starts the periodic timer.
@@ -48,4 +50,6 @@ pub unsafe fn irq_init() {
         outb(0xA1, 0xFF);
         io_wait();
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("irq_init not implemented for this architecture");
 }

@@ -20,9 +20,8 @@
 //!     another thread of the same process. The kernel is single-CPU with no
 //!     threads today; when threading lands, hold the address-space lock here.
 
+use super::AddressSpace;
 use core::marker::PhantomData;
-
-use super::{PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, phys_to_virt};
 
 /// Exclusive upper bound of the user address space (lower canonical half).
 pub const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
@@ -32,10 +31,6 @@ pub const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
 pub const USER_STR_MAX: usize = 4096;
 
 const PAGE_MASK: usize = 0xFFF;
-const PT_INDEX_MASK: usize = 0x1FF;
-const PT_ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
-/// PS bit: leaf entry for a 1 GiB (PDPT) or 2 MiB (PD) huge page.
-const PAGE_PS: u64 = 1 << 7;
 
 /// Why a user-memory access was rejected.
 ///
@@ -51,46 +46,17 @@ pub enum UserAccessError {
     TooLong,
 }
 
-/// Physical base of the current PML4.
-fn current_root_table() -> usize {
-    let cr3: usize;
-    // SAFETY: reading CR3 is always valid in ring 0 and has no side effects.
-    unsafe {
-        core::arch::asm!("mov {}, cr3", out(reg) cr3, options(nomem, nostack, preserves_flags))
-    };
-    cr3 & (PT_ADDR_MASK as usize)
-}
-
-/// Walk the current 4-level page tables for `vaddr`. Succeeds only if every
+/// Walk the current page tables for `vaddr`. Succeeds only if every
 /// level is PRESENT and USER-accessible (and WRITABLE when `need_write`).
 fn validate_user_page(vaddr: usize, need_write: bool) -> Result<(), UserAccessError> {
-    let mut table_phys = current_root_table();
-    for level in (1u32..=4).rev() {
-        let shift = 12 + (level - 1) * 9;
-        let index = (vaddr >> shift) & PT_INDEX_MASK;
-        let entry = {
-            // SAFETY: `table_phys` is the physical address of a live
-            // page-table page reachable from CR3; `phys_to_virt` maps it
-            // through the HHDM, which covers all physical RAM. `index` is
-            // masked to 0..512, so the read stays inside the 4 KiB table.
-            // Volatile so entries are not cached across context switches.
-            let table = phys_to_virt(table_phys) as *const u64;
-            unsafe { table.add(index).read_volatile() }
-        };
-        if entry & PAGE_PRESENT == 0 || entry & PAGE_USER == 0 {
-            return Err(UserAccessError::NotMapped);
-        }
-        if need_write && entry & PAGE_WRITABLE == 0 {
-            return Err(UserAccessError::NotWritable);
-        }
-        // Leaf: 4 KiB PTE, or a huge-page entry (PS is only meaningful at
-        // PDPT/PD level; PML4 has no PS bit).
-        if level == 1 || (level <= 3 && entry & PAGE_PS != 0) {
-            return Ok(());
-        }
-        table_phys = (entry & PT_ADDR_MASK) as usize;
+    let current_root = AddressSpace::current().as_phys();
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: Validating user memory against active address space root.
+    unsafe {
+        crate::ostd::arch::x86_64::paging::validate_user_page(current_root, vaddr, need_write)
     }
-    unreachable!("the walk always returns at level 1")
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("validate_user_page not implemented for this architecture")
 }
 
 /// Validate that `[addr, addr + len)` is fully mapped user memory.
