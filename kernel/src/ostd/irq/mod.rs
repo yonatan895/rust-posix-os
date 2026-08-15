@@ -19,6 +19,7 @@ pub use crate::ostd::arch::x86_64::pit::{
     PIT_MIN_FREQUENCY_HZ, pit_calc_divisor, pit_effective_freq,
 };
 
+/// Total system timer ticks elapsed since kernel boot.
 pub(crate) static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Opaque, one-shot CPU interrupt state token used for safe, portable `irq_save` and `irq_restore`.
@@ -30,6 +31,7 @@ pub struct IrqFlags(usize);
 
 /// RAII guard that disables CPU interrupts upon creation and restores previous interrupt state on drop.
 pub struct IrqGuard {
+    /// Saved CPU interrupt state token, or `None` if disarmed.
     flags: Option<IrqFlags>,
 }
 

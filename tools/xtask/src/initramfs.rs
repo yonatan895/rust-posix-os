@@ -1,10 +1,11 @@
-//! POSIX Tarball Packaging for Userland Initramfs.
+//! POSIX tarball packaging for userland initramfs images.
 
 use crate::build::strip_binary;
 use std::fs::{self, File};
 use std::io::Write;
 use std::path::Path;
 
+/// Assembles stripped userland binaries into an `initramfs.tar` archive for the kernel.
 pub fn create_initramfs() {
     println!("[xtask] Packaging initramfs.tar archive...");
     let target_dir = Path::new("target/x86_64-unknown-none/debug");
@@ -25,6 +26,7 @@ pub fn create_initramfs() {
     println!("[xtask] Successfully created {}", initramfs_path.display());
 }
 
+/// Strips an executable binary and records it as an entry in the tar archive.
 pub fn pack_bin(tar: &mut File, src: &Path, dest: &str) {
     strip_binary(src);
     match fs::read(src) {
@@ -43,6 +45,7 @@ pub fn pack_bin(tar: &mut File, src: &Path, dest: &str) {
     }
 }
 
+/// Writes a standard POSIX ustar tar header and aligned data blocks to the output stream.
 pub fn write_tar_entry<W: Write>(writer: &mut W, name: &str, data: &[u8], is_dir: bool) {
     let mut header = [0u8; 512];
     let name_bytes = name.as_bytes();

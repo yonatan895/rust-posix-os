@@ -8,20 +8,27 @@ use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
 
+/// Mutual exclusion primitive that masks CPU interrupts while held to avoid ISR deadlocks.
 pub struct SpinLock<T> {
+    /// Atomic lock flag (true = locked, false = unlocked).
     lock: AtomicBool,
+    /// Underlying data protected by the spinlock.
     data: UnsafeCell<T>,
 }
 
 unsafe impl<T: Send> Sync for SpinLock<T> {}
 unsafe impl<T: Send> Send for SpinLock<T> {}
 
+/// RAII guard providing exclusive access to locked data and restoring CPU interrupt state on drop.
 pub struct SpinLockGuard<'a, T> {
+    /// Reference to the parent spinlock.
     lock: &'a SpinLock<T>,
+    /// RAII interrupt guard managing CPU interrupt state.
     guard: IrqGuard,
 }
 
 impl<T> SpinLock<T> {
+    /// Creates a new spinlock protecting the provided `data`.
     pub const fn new(data: T) -> Self {
         Self {
             lock: AtomicBool::new(false),
@@ -29,6 +36,7 @@ impl<T> SpinLock<T> {
         }
     }
 
+    /// Disables CPU interrupts and acquires the spinlock, spinning until available.
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
         // Disables interrupts and stores previous state token inside IrqGuard.
         let guard = IrqGuard::new();
@@ -45,6 +53,7 @@ impl<T> SpinLock<T> {
         SpinLockGuard { lock: self, guard }
     }
 
+    /// Attempts to acquire the lock without blocking, returning `None` if currently locked.
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
         // Disables interrupts and stores previous state token inside IrqGuard.
         let guard = IrqGuard::new();

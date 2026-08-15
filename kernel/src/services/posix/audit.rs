@@ -5,6 +5,7 @@ use crate::ostd::mm::USER_STR_MAX;
 use crate::services::audit::{create_audit_snapshot, log_audit_event};
 use crate::services::process::get_current_process;
 
+/// Appends a security audit event to the kernel audit journal.
 pub fn sys_audit_log(event_type: u32, target_ptr: *const u8, details_ptr: *const u8) -> isize {
     let (pid, uid) = match get_current_process() {
         Some(p) => {
@@ -27,6 +28,7 @@ pub fn sys_audit_log(event_type: u32, target_ptr: *const u8, details_ptr: *const
     seq as isize
 }
 
+/// Takes a snapshot of current system memory and process metrics.
 pub fn sys_audit_snapshot(label_ptr: *const u8, _flags: u32) -> isize {
     let mut lbuf = [0u8; USER_STR_MAX];
     let label = if label_ptr.is_null() {

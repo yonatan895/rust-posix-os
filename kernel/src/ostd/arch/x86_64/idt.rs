@@ -5,19 +5,28 @@ use super::read_cr2;
 use core::arch::{asm, naked_asm};
 use core::mem::size_of;
 
+/// x86_64 16-byte Interrupt Descriptor Table (IDT) gate entry.
 #[repr(C, packed)]
 #[derive(Debug, Clone, Copy)]
 pub struct IdtEntry {
+    /// Lower 16 bits of the target ISR address (bits 0..15).
     pub offset_low: u16,
+    /// Code segment selector in the GDT.
     pub selector: u16,
+    /// Interrupt Stack Table (IST) offset (bits 0..2); remaining bits reserved.
     pub ist: u8,
+    /// Type and attribute flags (Present bit, DPL, Gate Type).
     pub type_attr: u8,
+    /// Middle 16 bits of the target ISR address (bits 16..31).
     pub offset_mid: u16,
+    /// Upper 32 bits of the target ISR address (bits 32..63).
     pub offset_high: u32,
+    /// Reserved; must be zero.
     pub zero: u32,
 }
 
 impl IdtEntry {
+    /// Creates an empty, absent IDT gate entry.
     pub const fn missing() -> Self {
         Self {
             offset_low: 0,
@@ -30,6 +39,7 @@ impl IdtEntry {
         }
     }
 
+    /// Sets the gate handler virtual address, IST stack index, and Descriptor Privilege Level (DPL).
     pub fn set_handler(&mut self, handler: usize, ist: u8, dpl: u8) {
         self.offset_low = handler as u16;
         self.selector = KERNEL_CODE_SEL;
@@ -41,57 +51,88 @@ impl IdtEntry {
     }
 }
 
+/// x86_64 Interrupt Descriptor Table Register (IDTR) descriptor format.
 #[repr(C, packed)]
 pub struct IdtDescriptor {
+    /// Limit of the IDT in bytes minus 1.
     pub limit: u16,
+    /// Linear base address of the IDT.
     pub base: u64,
 }
 
+/// 256-entry x86_64 Interrupt Descriptor Table.
 #[repr(C, align(16))]
 pub struct Idt {
+    /// Vector entries 0..255 for CPU exceptions and external IRQs.
     pub entries: [IdtEntry; 256],
 }
 
 use core::cell::SyncUnsafeCell;
 
+/// Global static Interrupt Descriptor Table for the BSP.
 static GLOBAL_IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt {
     entries: [IdtEntry::missing(); 256],
 });
 
+/// Hardware exception stack frame pushed by the x86_64 CPU on interrupt/exception entry.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct InterruptFrame {
+    /// Saved instruction pointer (RIP) pointing to resume location.
     pub rip: u64,
+    /// Saved code segment selector (CS).
     pub cs: u64,
+    /// Saved CPU condition flags register (RFLAGS).
     pub rflags: u64,
+    /// Saved stack pointer (RSP).
     pub rsp: u64,
+    /// Saved stack segment selector (SS).
     pub ss: u64,
 }
 
+/// Complete architectural register context frame saved across interrupts and task switches.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct TrapFrame {
-    // General Purpose Registers pushed by ISR stub
+    /// General-purpose register R15.
     pub r15: u64,
+    /// General-purpose register R14.
     pub r14: u64,
+    /// General-purpose register R13.
     pub r13: u64,
+    /// General-purpose register R12.
     pub r12: u64,
+    /// General-purpose register R11.
     pub r11: u64,
+    /// General-purpose register R10.
     pub r10: u64,
+    /// General-purpose register R9.
     pub r9: u64,
+    /// General-purpose register R8.
     pub r8: u64,
+    /// Base pointer register RBP.
     pub rbp: u64,
+    /// Destination index register RDI (System V ABI arg 1).
     pub rdi: u64,
+    /// Source index register RSI (System V ABI arg 2).
     pub rsi: u64,
+    /// Data register RDX (System V ABI arg 3).
     pub rdx: u64,
+    /// Count register RCX (System V ABI arg 4).
     pub rcx: u64,
+    /// Base register RBX.
     pub rbx: u64,
+    /// Accumulator register RAX (return value register).
     pub rax: u64,
-    // Hardware InterruptFrame pushed by CPU
+    /// Saved instruction pointer (RIP) from CPU hardware frame.
     pub rip: u64,
+    /// Saved code segment selector (CS) from CPU hardware frame.
     pub cs: u64,
+    /// Saved RFLAGS register from CPU hardware frame.
     pub rflags: u64,
+    /// Saved stack pointer (RSP) from CPU hardware frame.
     pub rsp: u64,
+    /// Saved stack segment selector (SS) from CPU hardware frame.
     pub ss: u64,
 }
 

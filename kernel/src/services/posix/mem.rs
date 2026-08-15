@@ -4,6 +4,7 @@ use crate::ostd::mm::{PAGE_SIZE, alloc_frame, zero_phys_frame};
 use crate::services::process::get_current_process;
 use posix_abi::*;
 
+/// Maps pages of anonymous virtual memory into the calling process address space.
 pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
     if length == 0 {
         return -(EINVAL as isize);
@@ -56,6 +57,7 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
     vaddr as isize
 }
 
+/// Unmaps a range of virtual memory pages from the calling process address space.
 pub fn sys_munmap(addr: usize, length: usize) -> isize {
     if !addr.is_multiple_of(PAGE_SIZE) || length == 0 {
         return -(EINVAL as isize);
@@ -86,6 +88,7 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     0
 }
 
+/// Modifies access protections on a range of mapped virtual memory pages.
 pub fn sys_mprotect(addr: usize, length: usize, prot: i32) -> isize {
     if !addr.is_multiple_of(PAGE_SIZE) || length == 0 {
         return -(EINVAL as isize);

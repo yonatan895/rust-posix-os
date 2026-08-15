@@ -1,9 +1,10 @@
-//! Memory Management and Address Space Isolation Test Suite.
+//! Memory management and address space isolation test suite.
 
 use super::harness::TestRunner;
 use posix_abi::*;
 use std::collections::BTreeMap;
 
+/// Registers all memory management test cases with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "mm",
@@ -22,23 +23,32 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Representation of a Virtual Memory Area (VMA) range with protections and flags.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct MockVma {
+    /// Start virtual address (inclusive).
     start: usize,
+    /// End virtual address (exclusive).
     end: usize,
+    /// Page protection flags (PROT_READ, PROT_WRITE, PROT_EXEC).
     prot: u32,
+    /// Mapping flags (MAP_PRIVATE, MAP_ANONYMOUS, etc.).
     flags: u32,
 }
 
+/// Simulated process virtual address space tracking active VMAs.
 struct MockVmSpace {
+    /// Ordered collection of VMAs in the address space.
     vmas: Vec<MockVma>,
 }
 
 impl MockVmSpace {
+    /// Creates an empty virtual address space.
     fn new() -> Self {
         Self { vmas: Vec::new() }
     }
 
+    /// Inserts or merges a VMA range into the address space.
     fn insert_vma(&mut self, start: usize, end: usize, prot: u32, flags: u32) {
         let mut new_vmas = Vec::new();
         let mut inserted = false;
@@ -76,6 +86,7 @@ impl MockVmSpace {
         self.vmas = new_vmas;
     }
 
+    /// Returns whether the range `[start..end)` is completely covered by mapped VMAs without gaps.
     fn contains_range(&self, start: usize, end: usize) -> bool {
         if start >= end {
             return false;
@@ -92,6 +103,7 @@ impl MockVmSpace {
         false
     }
 
+    /// Unmaps VMAs overlapping with the given address range.
     fn munmap(&mut self, addr: usize, len: usize) -> Result<(), i32> {
         if !addr.is_multiple_of(4096) || len == 0 {
             return Err(EINVAL);
@@ -101,6 +113,7 @@ impl MockVmSpace {
         Ok(())
     }
 
+    /// Changes memory protection flags on an existing continuous VMA range.
     fn mprotect(&mut self, addr: usize, len: usize, new_prot: u32) -> Result<(), i32> {
         if !addr.is_multiple_of(4096) || len == 0 {
             return Err(EINVAL);
@@ -121,6 +134,7 @@ impl MockVmSpace {
     }
 }
 
+/// Tests VMA range gap detection and mprotect/munmap semantics.
 fn test_vma_tracking() {
     let mut vm = MockVmSpace::new();
     const MAP_ANON: u32 = 0x20;
@@ -152,6 +166,7 @@ fn test_vma_tracking() {
     );
 }
 
+/// Tests address space cloning on fork and memory isolation between parent and child.
 fn test_fork_address_space_isolation() {
     struct ProcessMemory {
         pages: BTreeMap<usize, Vec<u8>>,
@@ -226,6 +241,7 @@ fn test_fork_address_space_isolation() {
     assert_eq!(child.open_fds, parent.open_fds);
 }
 
+/// Tests mmap user space boundary enforcement, overflow handling, and kernel address rejection.
 fn test_mmap_bounds_and_overflow() {
     const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
     const PAGE_SIZE: usize = 4096;

@@ -1,8 +1,9 @@
-//! POSIX Signals, Stack Frame Layout, Red Zone, and Sigreturn Test Suite.
+//! POSIX signals, stack frame layout, red zone, and sigreturn test suite.
 
 use super::harness::TestRunner;
 use posix_abi::*;
 
+/// Registers POSIX signal semantics and stack frame layout tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "signals",
@@ -16,6 +17,7 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Tests signal numeric range validation, uncatchable signal rules (SIGKILL/SIGSTOP), and default dispositions.
 fn test_signal_ranges_and_masks() {
     // 1. Range consistency tests: SIG_MIN..=SIG_MAX (1..=31) and pid > 0 requirement
     let is_valid_signal = |sig: i32| (SIG_MIN..=SIG_MAX).contains(&sig);
@@ -76,6 +78,7 @@ fn test_signal_ranges_and_masks() {
     assert!(!is_default_ignore(SIGTERM));
 }
 
+/// Tests user signal frame construction, SysV 128-byte red zone avoidance, and rt_sigreturn restoration.
 fn test_signal_frame_layout_and_sigreturn() {
     #[derive(Default, Debug, Clone, Copy, PartialEq, Eq)]
     struct MockSyscallRegisters {

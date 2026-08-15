@@ -1,10 +1,11 @@
-//! UEFI Image Staging and Cross-Platform QEMU Boot Launcher.
+//! UEFI image staging and cross-platform QEMU boot launcher.
 
 use std::env;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+/// Stages the UEFI boot directory tree containing kernel, initramfs, Limine bootloader, and configuration.
 pub fn setup_iso_root() {
     println!("[xtask] Setting up UEFI boot drive in target/iso_root...");
     let iso_root = Path::new("target/iso_root");
@@ -45,6 +46,7 @@ pub fn setup_iso_root() {
     println!("[xtask] UEFI boot drive staging complete.");
 }
 
+/// Discovers the path or binary name for `qemu-system-x86_64`.
 pub fn find_qemu() -> String {
     if let Ok(q) = env::var("QEMU") {
         return q;
@@ -69,6 +71,7 @@ pub fn find_qemu() -> String {
     std::process::exit(1);
 }
 
+/// Locates the OVMF UEFI firmware image on the host system.
 pub fn find_ovmf() -> PathBuf {
     let mut candidates: Vec<PathBuf> = Vec::new();
     for key in ["OVMF_PATH", "OVMF_CODE"] {
@@ -108,6 +111,7 @@ pub fn find_ovmf() -> PathBuf {
     std::process::exit(1);
 }
 
+/// Spawns QEMU configured with UEFI firmware, SMP, FAT boot drive, and stdio serial console.
 pub fn run_qemu() {
     println!("[xtask] Launching QEMU (x86_64 UEFI, guest serial on this terminal)...");
     let qemu_exec = find_qemu();

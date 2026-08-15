@@ -1,10 +1,11 @@
-//! Binary Integrity and ELF Header Format Test Suite.
+//! Binary integrity and ELF header format test suite.
 
 use super::harness::TestRunner;
 use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
+/// Registers all binary integrity test cases with the test runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "binary",
@@ -13,6 +14,7 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Verifies that generated userland binaries exist and start with valid ELF magic bytes (`\x7fELF`).
 fn test_binary_integrity() {
     let bins = ["init", "shell", "coreutils"];
     for b in bins {

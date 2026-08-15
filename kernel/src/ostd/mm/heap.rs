@@ -3,24 +3,32 @@
 use crate::ostd::sync::SpinLock;
 use core::alloc::{GlobalAlloc, Layout};
 
+/// Fixed total size of the kernel global heap (16 MiB).
 pub const HEAP_SIZE: usize = 16 * 1024 * 1024; // 16 MiB
 
+/// Free-list intrusive header node embedded at the start of unallocated heap blocks.
 struct ListNode {
+    /// Total usable byte size of this free memory block.
     size: usize,
+    /// Reference to the next free memory block in the intrusive linked list.
     next: Option<&'static mut ListNode>,
 }
 
 impl ListNode {
+    /// Creates a new intrusive list node header for a block of `size` bytes.
     const fn new(size: usize) -> Self {
         Self { size, next: None }
     }
 }
 
+/// Intrusive first-fit linked-list allocator for the kernel global heap.
 pub struct LinkedListAllocator {
+    /// Sentinel head node of the free block list.
     head: ListNode,
 }
 
 impl LinkedListAllocator {
+    /// Creates an empty, uninitialized [`LinkedListAllocator`].
     pub const fn new() -> Self {
         Self {
             head: ListNode::new(0),
@@ -39,6 +47,7 @@ impl LinkedListAllocator {
         }
     }
 
+    /// Inserts a raw memory region into the intrusive free list after aligning.
     unsafe fn add_free_region(&mut self, addr: usize, size: usize) {
         let align = core::mem::align_of::<ListNode>();
         let aligned_addr = (addr + align - 1) & !(align - 1);
@@ -57,6 +66,7 @@ impl LinkedListAllocator {
         }
     }
 
+    /// Searches the free list for a block satisfying `size` and `align` constraints.
     fn find_region(&mut self, size: usize, align: usize) -> Option<(&'static mut ListNode, usize)> {
         let mut current = &mut self.head;
         while let Some(ref mut region) = current.next {
@@ -83,9 +93,11 @@ impl Default for LinkedListAllocator {
     }
 }
 
+/// Spinlock-synchronized wrapper around [`LinkedListAllocator`] implementing [`GlobalAlloc`].
 pub struct LockedHeap(SpinLock<LinkedListAllocator>);
 
 impl LockedHeap {
+    /// Creates a new uninitialized [`LockedHeap`].
     pub const fn new() -> Self {
         Self(SpinLock::new(LinkedListAllocator::new()))
     }
@@ -111,6 +123,7 @@ impl Default for LockedHeap {
 
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+/// Total active allocated bytes in the kernel global heap.
 pub static HEAP_USED_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 unsafe impl GlobalAlloc for LockedHeap {
@@ -150,13 +163,16 @@ unsafe impl GlobalAlloc for LockedHeap {
     }
 }
 
+/// Returns a snapshot `(total_capacity_bytes, used_bytes)` of kernel heap usage.
 pub fn get_heap_stats() -> (usize, usize) {
     (HEAP_SIZE, HEAP_USED_BYTES.load(Ordering::Relaxed))
 }
 
+/// Static kernel global allocator instance.
 #[global_allocator]
 pub static HEAP_ALLOCATOR: LockedHeap = LockedHeap::new();
 
+/// Out-of-memory handler invoked when global heap allocation fails.
 #[alloc_error_handler]
 fn alloc_error_handler(layout: Layout) -> ! {
     log::error!("Kernel Heap Allocation Failure: {:?}", layout);

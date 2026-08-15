@@ -3,11 +3,26 @@
 use crate::syscall::*;
 use posix_abi::*;
 
+/// Waits for any child process to change state.
+///
+/// Equivalent to `waitpid(-1, wstatus, 0)`.
+///
+/// # Safety
+///
+/// `wstatus` must either be null or point to a valid writable `i32` location.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn wait(wstatus: *mut i32) -> i32 {
     unsafe { waitpid(-1, wstatus, 0) }
 }
 
+/// Waits for state changes in a specific child process.
+///
+/// Returns the process ID of the child whose state changed, 0 if `WNOHANG` was specified
+/// and no child was ready, or `-1` on error.
+///
+/// # Safety
+///
+/// `wstatus` must either be null or point to a valid writable `i32` location.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn waitpid(pid: i32, wstatus: *mut i32, options: i32) -> i32 {
     unsafe {

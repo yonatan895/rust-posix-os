@@ -1,20 +1,24 @@
-//! Zero-Flicker Line Editor with History Traversal, Autocompletion,
-//! Command-Line Navigation (Home/End/Word/Arrows), Clipboard Kill-Ring, and Paste Support.
+//! Zero-flicker line editor with history traversal, autocompletion,
+//! command navigation (Home/End/Word/Arrows), clipboard kill-ring, and bracketed paste.
 
 use crate::completion::handle_tab_completion;
 use crate::history::*;
 use crate::line_draw::LineBuffer;
 
+/// Capacity in bytes of the shell kill-ring buffer.
 pub const KILL_RING_SIZE: usize = 1024;
 
-/// In-memory terminal clipboard / kill-ring buffer.
+/// In-memory terminal clipboard and kill-ring buffer.
 #[derive(Clone)]
 pub struct KillRing {
+    /// Raw byte buffer containing killed or copied text.
     pub buf: [u8; KILL_RING_SIZE],
+    /// Number of valid bytes in `buf`.
     pub len: usize,
 }
 
 impl KillRing {
+    /// Creates an empty kill-ring instance.
     pub const fn new() -> Self {
         Self {
             buf: [0; KILL_RING_SIZE],
@@ -22,18 +26,21 @@ impl KillRing {
         }
     }
 
+    /// Saves a slice of bytes into the kill-ring buffer.
     pub fn save(&mut self, src: &[u8]) {
         let count = src.len().min(KILL_RING_SIZE);
         self.buf[..count].copy_from_slice(&src[..count]);
         self.len = count;
     }
 
+    /// Returns a slice over the current kill-ring buffer contents.
     pub fn as_bytes(&self) -> &[u8] {
         &self.buf[..self.len]
     }
 }
 
 // SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
+/// Global shell kill-ring clipboard instance.
 pub static mut KILL_RING: KillRing = KillRing::new();
 
 /// Moves cursor backward by one word.
@@ -92,6 +99,7 @@ pub fn splice_insert(
     insert_count
 }
 
+/// RFC 4648 standard Base64 encoding table.
 pub const B64_CHARS: &[u8; 64] =
     b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
@@ -255,6 +263,7 @@ pub fn delete_char(buf: &mut [u8], len: &mut usize, cursor_pos: usize) -> bool {
     }
 }
 
+/// Checks whether a command string matches any element in the `known_commands` list.
 pub fn is_known_command(cmd: &str, known_commands: &[&str]) -> bool {
     for &k in known_commands {
         if cmd == k {
@@ -264,6 +273,11 @@ pub fn is_known_command(cmd: &str, known_commands: &[&str]) -> bool {
     false
 }
 
+/// Repaints the entire prompt and editable command line with syntax highlighting.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string.
 pub unsafe fn repaint_prompt_line(
     cwd: *const u8,
     buf: &[u8],
@@ -279,6 +293,11 @@ pub unsafe fn repaint_prompt_line(
     }
 }
 
+/// Clears any completion menu line below the prompt and refreshes prompt rendering.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string.
 pub unsafe fn clear_menu_line(
     cwd: *const u8,
     buf: &[u8],
@@ -296,20 +315,37 @@ pub unsafe fn clear_menu_line(
     }
 }
 
+/// Parsed ANSI escape sequence action.
 enum EscSeq {
+    /// Up arrow key.
     Up,
+    /// Down arrow key.
     Down,
+    /// Right arrow key.
     Right,
+    /// Left arrow key.
     Left,
+    /// Home key.
     Home,
+    /// End key.
     End,
+    /// Delete key.
     Delete,
+    /// Jump one word left (Ctrl+Left / Alt+b).
     WordLeft,
+    /// Jump one word right (Ctrl+Right / Alt+f).
     WordRight,
+    /// Start of bracketed paste sequence (`\x1b[200~`).
     BracketedPasteStart,
+    /// Unrecognized or incomplete escape sequence.
     None,
 }
 
+/// Reads and parses an ANSI escape sequence from terminal standard input.
+///
+/// # Safety
+///
+/// Standard input must be open and readable in raw mode.
 unsafe fn parse_escape_sequence() -> EscSeq {
     // SAFETY: Reading subsequent bytes of ANSI escape sequence from stdin.
     let b2 = unsafe { libc::getchar() };
@@ -428,6 +464,10 @@ unsafe fn parse_escape_sequence() -> EscSeq {
 
 /// Reads pasted characters from bracketed paste mode (`\x1b[200~` ... `\x1b[201~`).
 /// Grammar: reads stream until trailer `ESC [ 2 0 1 ~`, with partial-match byte replay.
+///
+/// # Safety
+///
+/// Terminal stdin must be readable in raw mode.
 unsafe fn read_bracketed_paste(buf: &mut [u8], len: &mut usize, cursor_pos: &mut usize) {
     let mut paste_buf = [0u8; 1024];
     let mut paste_len = 0;
@@ -529,6 +569,13 @@ unsafe fn read_bracketed_paste(buf: &mut [u8], len: &mut usize, cursor_pos: &mut
     }
 }
 
+/// Reads an interactive input line with full history navigation, editing shortcuts, and tab completion.
+///
+/// Returns the length of the command line entered in bytes.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string. Standard I/O must be configured for raw mode.
 pub unsafe fn read_line_with_history(
     cwd: *const u8,
     buf: &mut [u8],

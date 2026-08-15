@@ -2,12 +2,14 @@
 
 mod bench;
 mod build;
+mod doc;
 mod initramfs;
 mod qemu;
 mod tests;
 
 use std::env;
 
+/// CLI entry point for cargo xtask task runner.
 fn main() {
     let args: Vec<String> = env::args().skip(1).collect();
     let command = args.first().map(|s| s.as_str()).unwrap_or("run");
@@ -22,6 +24,9 @@ fn main() {
             build::build_all();
             initramfs::create_initramfs();
             qemu::setup_iso_root();
+        }
+        "doc" => {
+            doc::run_doc();
         }
         "initramfs" => initramfs::create_initramfs(),
         "run" => {
@@ -38,7 +43,9 @@ fn main() {
         }
         _ => {
             eprintln!("Unknown command: {}", command);
-            eprintln!("Usage: cargo xtask [bench|build|initramfs|run|test] [--filter <pattern>]");
+            eprintln!(
+                "Usage: cargo xtask [bench|build|doc|initramfs|run|test] [--filter <pattern>]"
+            );
             std::process::exit(1);
         }
     }

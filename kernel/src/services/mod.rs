@@ -24,6 +24,11 @@ use alloc::string::ToString;
 use alloc::sync::Arc;
 use posix_abi::O_RDWR;
 
+/// Initializes all safe kernel services.
+///
+/// Sets up the initial VFS directory hierarchy (`/dev`, `/proc`, `/tmp`, `/bin`, `/etc`),
+/// unpacks boot modules (initramfs tarballs), registers standard pseudo-devices and
+/// procfs nodes, creates PID 1 (`/bin/init`) and PID 0 (idle task), and starts the audit subsystem.
 pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
     log::info!("[SERVICES] Starting de-privileged OS services initialization...");
 

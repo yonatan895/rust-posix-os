@@ -30,6 +30,7 @@ pub const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
 /// Matches the PATH_MAX convention used by the rest of the kernel.
 pub const USER_STR_MAX: usize = 4096;
 
+/// Bitmask extracting the 12-bit intra-page offset.
 const PAGE_MASK: usize = 0xFFF;
 
 /// Why a user-memory access was rejected.
@@ -38,11 +39,17 @@ const PAGE_MASK: usize = 0xFFF;
 /// [`UserAccessError::TooLong`], which is `ENAMETOOLONG`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserAccessError {
+    /// User pointer address was zero (NULL).
     NullPointer,
+    /// User memory range crosses into higher-half kernel address space.
     OutOfUserRange,
+    /// Arithmetic integer overflow when calculating buffer bounds.
     Overflow,
+    /// Target user memory page is not mapped or present in the page table.
     NotMapped,
+    /// Target user memory page is marked read-only when write access was requested.
     NotWritable,
+    /// NUL-terminated user string exceeded the maximum buffer capacity.
     TooLong,
 }
 
@@ -88,11 +95,14 @@ fn validate_user_range(addr: usize, len: usize, need_write: bool) -> Result<(), 
 /// Construction checks range only; mapping is (re-)validated on every
 /// `read`/`write`, mirroring Linux's EFAULT-at-access semantics.
 pub struct UserPtr<T> {
+    /// Linear virtual address in the current user address space.
     addr: usize,
+    /// Type marker for the pointee.
     _marker: PhantomData<T>,
 }
 
 impl<T> UserPtr<T> {
+    /// Constructs a [`UserPtr`] after checking that `addr` is non-null and within user range.
     pub fn from_raw(addr: usize) -> Result<Self, UserAccessError> {
         if addr == 0 {
             return Err(UserAccessError::NullPointer);
@@ -109,6 +119,7 @@ impl<T> UserPtr<T> {
         })
     }
 
+    /// Returns the raw user virtual address.
     pub fn addr(&self) -> usize {
         self.addr
     }
@@ -120,6 +131,7 @@ impl<T> UserPtr<T> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), need_write)
     }
 
+    /// Reads a `T` value from user space after validating page mappings.
     pub fn read(&self) -> Result<T, UserAccessError> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), false)?;
         // SAFETY: range just validated as in-user-range, present, and
@@ -129,6 +141,7 @@ impl<T> UserPtr<T> {
         Ok(unsafe { (self.addr as *const T).read_unaligned() })
     }
 
+    /// Writes a `T` value into user space after validating page mappings and write permissions.
     pub fn write(&self, value: T) -> Result<(), UserAccessError> {
         validate_user_range(self.addr, core::mem::size_of::<T>(), true)?;
         // SAFETY: as `read`, plus every page checked WRITABLE. Callers only
@@ -140,11 +153,14 @@ impl<T> UserPtr<T> {
 
 /// A validated byte buffer in the current process's address space.
 pub struct UserSlice {
+    /// Base linear virtual address in user space.
     addr: usize,
+    /// Length of the buffer in bytes.
     len: usize,
 }
 
 impl UserSlice {
+    /// Constructs a [`UserSlice`] after checking that the range is within user memory.
     pub fn from_raw(addr: usize, len: usize) -> Result<Self, UserAccessError> {
         if len > 0 && addr == 0 {
             return Err(UserAccessError::NullPointer);
@@ -158,10 +174,12 @@ impl UserSlice {
         Ok(Self { addr, len })
     }
 
+    /// Returns the length of the user buffer in bytes.
     pub fn len(&self) -> usize {
         self.len
     }
 
+    /// Returns true if the buffer length is 0.
     pub fn is_empty(&self) -> bool {
         self.len == 0
     }

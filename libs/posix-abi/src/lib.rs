@@ -1,4 +1,5 @@
 #![no_std]
+#![warn(missing_docs)]
 
 //! POSIX.1-2024 ABI Definitions for x86_64 Rust OS.
 //!

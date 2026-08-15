@@ -1,11 +1,18 @@
-//! Built-in Commands for POSIX Interactive Shell.
+//! Built-in commands and utility routines for the interactive POSIX shell.
 
 use libc::*;
 use posix_abi::*;
 
+/// Buffer holding the previous working directory for `cd -`.
 pub static mut OLDPWD_BUF: [u8; 128] = [0u8; 128];
+/// Indicates whether `OLDPWD_BUF` contains a valid previous working directory.
 pub static mut HAS_OLDPWD: bool = false;
 
+/// Formats and outputs an errno error message to standard output.
+///
+/// # Safety
+///
+/// `action` and `target` must point to valid null-terminated C-strings.
 pub unsafe fn print_error(action: *const u8, target: *const u8, err: i32) {
     let err_code = if err < 0 { -err } else { err };
     let msg = match err_code {
@@ -29,6 +36,11 @@ pub unsafe fn print_error(action: *const u8, target: *const u8, err: i32) {
     );
 }
 
+/// Changes the current working directory, supporting `~`, `-`, and relative/absolute paths.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated strings or null. Mutates `OLDPWD_BUF`.
 pub unsafe fn handle_cd(argc: usize, argv: &[*const u8; 16]) {
     let mut current_cwd = [0u8; 128];
     getcwd(current_cwd.as_mut_ptr(), current_cwd.len());
@@ -64,6 +76,11 @@ pub unsafe fn handle_cd(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Lists files and directories with optional `-a`, `-l`, and `-h` flags.
+///
+/// # Safety
+///
+/// `argv` elements up to `argc` must point to valid null-terminated C-strings or be null.
 pub unsafe fn handle_ls(argc: usize, argv: &[*const u8; 16]) {
     let mut show_all = false;
     let mut long_format = false;
@@ -108,6 +125,11 @@ pub unsafe fn handle_ls(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Reads and displays directory entries with formatting and metadata inspection.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string.
 pub unsafe fn list_directory_advanced(
     path: *const u8,
     show_all: bool,
@@ -222,6 +244,11 @@ pub unsafe fn list_directory_advanced(
     close(fd);
 }
 
+/// Creates files or updates access timestamps with support for `-c` (`--no-create`).
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
     let mut no_create = false;
     let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
@@ -256,6 +283,11 @@ pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Creates directories with support for `-p` (`--parents`) recursive path creation.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_mkdir(argc: usize, argv: &[*const u8; 16]) {
     let mut create_parents = false;
     let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
@@ -289,6 +321,11 @@ pub unsafe fn handle_mkdir(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Recursively creates parent directories along a path.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string.
 pub unsafe fn mkdir_p(path: *const u8) {
     let len = strlen(path);
     let mut subpath = [0u8; 256];
@@ -312,6 +349,11 @@ pub unsafe fn mkdir_p(path: *const u8) {
     }
 }
 
+/// Removes files or directory trees with support for `-r`/`-R` and `-f`.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_rm(argc: usize, argv: &[*const u8; 16]) {
     let mut recursive = false;
     let mut force = false;
@@ -348,6 +390,11 @@ pub unsafe fn handle_rm(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Unlinks a file or recursively removes directory trees.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string.
 pub unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
     if recursive {
         let fd = open(path, O_RDONLY | O_DIRECTORY, 0);
@@ -404,6 +451,11 @@ pub unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
     }
 }
 
+/// Returns a pointer to the final filename component of a path.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string or null.
 pub unsafe fn get_basename(path: *const u8) -> *const u8 {
     if path.is_null() {
         return b"\0".as_ptr();
@@ -420,6 +472,11 @@ pub unsafe fn get_basename(path: *const u8) -> *const u8 {
     last_slash
 }
 
+/// Copies a single file from source to destination path.
+///
+/// # Safety
+///
+/// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
     let in_fd = open(src, O_RDONLY, 0);
     if in_fd < 0 {
@@ -449,6 +506,11 @@ pub unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
     0
 }
 
+/// Copies a file or recursively copies a directory tree from source to destination.
+///
+/// # Safety
+///
+/// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn copy_path(src: *const u8, dest: *const u8, recursive: bool, force: bool) -> i32 {
     let mut st = Stat::default();
     let res = stat(src, &mut st);
@@ -542,6 +604,11 @@ pub unsafe fn copy_path(src: *const u8, dest: *const u8, recursive: bool, force:
     }
 }
 
+/// Copies files and directories with support for `-r`/`-R` and `-f`.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
     let mut recursive = false;
     let mut force = false;
@@ -622,6 +689,11 @@ pub unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Moves or renames a path, falling back to copy and delete if `rename` fails.
+///
+/// # Safety
+///
+/// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn move_path(src: *const u8, dest: *const u8, force: bool) -> i32 {
     let res = rename(src, dest);
     if res == 0 {
@@ -639,6 +711,11 @@ pub unsafe fn move_path(src: *const u8, dest: *const u8, force: bool) -> i32 {
     }
 }
 
+/// Moves or renames files and directories with support for `-f`.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_mv(argc: usize, argv: &[*const u8; 16]) {
     let mut force = false;
     let mut operands: [*const u8; 16] = [core::ptr::null(); 16];
@@ -717,6 +794,11 @@ pub unsafe fn handle_mv(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Concatenates and prints file contents or stdin with support for line numbering (`-n`).
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_cat(argc: usize, argv: &[*const u8; 16]) {
     let mut number_lines = false;
     let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
@@ -742,6 +824,11 @@ pub unsafe fn handle_cat(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Streams content from a file descriptor to stdout with optional line numbering.
+///
+/// # Safety
+///
+/// `fd` must be a valid, readable file descriptor.
 pub unsafe fn display_stream(fd: i32, number_lines: bool) {
     let mut buf = [0u8; 512];
     let mut line_num = 1;
@@ -769,6 +856,11 @@ pub unsafe fn display_stream(fd: i32, number_lines: bool) {
     }
 }
 
+/// Opens and streams a file's content to stdout with optional line numbering.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string.
 pub unsafe fn display_file(path: *const u8, number_lines: bool) {
     let fd = open(path, O_RDONLY, 0);
     if fd < 0 {
@@ -779,6 +871,11 @@ pub unsafe fn display_file(path: *const u8, number_lines: bool) {
     close(fd);
 }
 
+/// Prints command arguments separated by spaces, with support for `-n` to omit trailing newline.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_echo(argc: usize, argv: &[*const u8; 16]) {
     let mut no_newline = false;
     let mut start_idx = 1;
@@ -801,6 +898,11 @@ pub unsafe fn handle_echo(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Fetches kernel telemetry via `SYS_SYSINFO` and prints uptime, process count, and memory usage.
+///
+/// # Safety
+///
+/// Standard output file descriptor must be open and writable.
 pub unsafe fn display_system_monitor() {
     let mut info = Sysinfo::default();
     if syscall::syscall1(SYS_SYSINFO, &mut info as *mut _ as usize) == 0 {
@@ -834,6 +936,11 @@ pub unsafe fn display_system_monitor() {
     }
 }
 
+/// Simulates kernel async I/O and event loop handling using `epoll` and anonymous pipes.
+///
+/// # Safety
+///
+/// Requires kernel support for epoll and pipe syscalls. Standard output must be writable.
 pub unsafe fn run_async_demo() {
     puts(b"Running Kernel Async/Epoll Event-Loop Simulation...\0".as_ptr());
     let epfd = epoll_create1(0);
@@ -875,6 +982,11 @@ pub unsafe fn run_async_demo() {
     puts(b"Async demo completed successfully.\0".as_ptr());
 }
 
+/// Triggers a system state audit snapshot via `SYS_AUDIT_SNAPSHOT`.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_snapshot_command(argc: usize, argv: &[*const u8; 16]) {
     let label = if argc > 1 && !argv[1].is_null() {
         argv[1]
@@ -896,6 +1008,11 @@ pub unsafe fn handle_snapshot_command(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Prints current real and effective user and group IDs (`uid`, `gid`, `euid`, `egid`).
+///
+/// # Safety
+///
+/// Standard output file descriptor must be open and writable.
 pub unsafe fn handle_id() {
     let uid = getuid();
     let gid = getgid();
@@ -912,6 +1029,11 @@ pub unsafe fn handle_id() {
     puts(b"\0".as_ptr());
 }
 
+/// Manages the shell clipboard and kill-ring, synchronizing with host clipboard via OSC 52.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null. Mutates kill-ring global state.
 pub unsafe fn handle_clip(argc: usize, argv: &[*const u8; 16]) {
     if argc > 1 && !argv[1].is_null() {
         // SAFETY: Checking for -h / --help or -p / --paste flags.

@@ -18,6 +18,7 @@ use posix_abi::*;
 /// kernel allocation.
 const MAX_RW_COUNT: usize = 1 << 20;
 
+/// Reads up to `count` bytes from open file descriptor `fd` into user buffer `buf`.
 pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -56,6 +57,7 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
     }
 }
 
+/// Writes up to `count` bytes from user buffer `buf` to open file descriptor `fd`.
 pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -88,6 +90,7 @@ pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
     }
 }
 
+/// Opens or creates a file specified by user path `path_ptr` with flags and creation mode.
 pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -177,6 +180,7 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
     }
 }
 
+/// Closes open file descriptor `fd`.
 pub fn sys_close(fd: i32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -189,6 +193,7 @@ pub fn sys_close(fd: i32) -> isize {
     }
 }
 
+/// Retrieves file status metadata for the file at `path_ptr` into user buffer `statbuf`.
 pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -216,6 +221,7 @@ pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
     }
 }
 
+/// Retrieves file status metadata for open file descriptor `fd` into user buffer `statbuf`.
 pub fn sys_fstat(fd: i32, statbuf: *mut Stat) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -244,6 +250,7 @@ pub fn sys_fstat(fd: i32, statbuf: *mut Stat) -> isize {
     }
 }
 
+/// Repositions the read/write offset of open file descriptor `fd`.
 pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -263,6 +270,7 @@ pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> isize {
     }
 }
 
+/// Creates a unidirectional anonymous data channel (pipe) and returns two new file descriptors.
 pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
     // Validate BEFORE allocating fds: a bad user pointer must not leak them.
     let out = match UserPtr::<[i32; 2]>::from_raw(pipefd_ptr as usize) {
@@ -305,6 +313,7 @@ pub fn sys_pipe(pipefd_ptr: *mut [i32; 2]) -> isize {
     0
 }
 
+/// Duplicates an existing open file descriptor to the lowest-numbered available descriptor.
 pub fn sys_dup(oldfd: i32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -322,6 +331,7 @@ pub fn sys_dup(oldfd: i32) -> isize {
     }
 }
 
+/// Duplicates an open file descriptor `oldfd` onto a specific target descriptor number `newfd`.
 pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
     if !(0..256).contains(&newfd) {
         return -(EBADF as isize);
@@ -348,6 +358,7 @@ pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
     newfd as isize
 }
 
+/// Creates a new directory at user path `path_ptr` with permissions `mode`.
 pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
     let (pid, uid, euid, egid, umask) = match get_current_process() {
         Some(p) => {
@@ -404,6 +415,7 @@ pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
     }
 }
 
+/// Removes a file or empty directory at user path `path_ptr`.
 pub fn sys_unlink(path_ptr: *const u8) -> isize {
     let (pid, uid) = match get_current_process() {
         Some(p) => {
@@ -459,6 +471,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
     }
 }
 
+/// Renames or moves a filesystem object from `oldpath_ptr` to `newpath_ptr`.
 pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
     let (pid, uid) = match get_current_process() {
         Some(p) => {
@@ -523,6 +536,7 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
     0
 }
 
+/// Reads directory entries from open directory descriptor `fd` into user buffer `dirp`.
 pub fn sys_getdents64(fd: i32, dirp: *mut u8, count: usize) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,

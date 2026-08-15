@@ -2,8 +2,12 @@
 //!
 //! Encapsulates the hardware root page table (CR3 on x86_64, TTBR0_EL1 on aarch64, satp on riscv64).
 
+/// Architecture-neutral handle representing a hardware address space / root page table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct AddressSpace(pub usize);
+pub struct AddressSpace(
+    /// Physical base address of the architectural root page table (e.g. PML4 frame base).
+    pub usize,
+);
 
 impl AddressSpace {
     /// Returns the raw physical base address of the root page table.

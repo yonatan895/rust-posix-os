@@ -6,6 +6,7 @@
 pub use crate::ostd::arch::SyscallRegisters;
 pub use crate::ostd::arch::TrapFrame;
 
+/// Default kernel stack size allocated per task (16 KiB).
 pub const KERNEL_STACK_SIZE: usize = 16 * 1024; // 16 KiB
 
 /// Safely updates the CPU's active kernel stack in the architectural TSS/per-CPU control.
@@ -43,6 +44,10 @@ pub extern "C" fn kernel_idle_loop() -> ! {
 }
 
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 3 userland entry.
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_user_kernel_stack(
     stack: &mut [u8],
     entry_point: usize,
@@ -61,6 +66,10 @@ pub fn init_user_kernel_stack(
 /// Initializes a child process kernel stack with a synthetic `TrapFrame` cloned from the parent `SyscallRegisters`.
 ///
 /// Returns the initial `saved_kernel_rsp` pointing to the TrapFrame with return value 0.
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -> usize {
     #[cfg(target_arch = "x86_64")]
     return crate::ostd::arch::x86_64::task::init_fork_child_stack(stack, parent_regs);
@@ -69,6 +78,10 @@ pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -
 }
 
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 0 kernel task entry.
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
     #[cfg(target_arch = "x86_64")]
     return crate::ostd::arch::x86_64::task::init_kernel_task_stack(stack, entry_point);

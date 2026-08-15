@@ -4,19 +4,27 @@ use crate::ostd::limine::{LIMINE_MEMMAP_USABLE, LimineMemmapResponse};
 use crate::ostd::sync::SpinLock;
 use core::sync::atomic::{AtomicUsize, Ordering};
 
+/// Architectural page size in bytes (4 KiB).
 pub const PAGE_SIZE: usize = 4096;
 
+/// Bitmap-based physical memory frame allocator tracking 4 KiB RAM pages.
 pub struct PhysicalMemoryManager {
+    /// Pointer to the allocation bitmap buffer (1 bit per 4 KiB frame; 1 = used, 0 = free).
     bitmap: *mut u8,
+    /// Total number of physical frames managed by this allocator.
     total_frames: usize,
+    /// Total count of currently available/unallocated frames.
     free_frames: usize,
+    /// Search cursor hint for next-fit frame allocation.
     last_frame: usize,
 }
 
 unsafe impl Send for PhysicalMemoryManager {}
 unsafe impl Sync for PhysicalMemoryManager {}
 
+/// Global spinlock-protected physical memory manager instance.
 static PMM: SpinLock<Option<PhysicalMemoryManager>> = SpinLock::new(None);
+/// Total usable physical memory capacity in bytes reported by the bootloader.
 static TOTAL_MEMORY_BYTES: AtomicUsize = AtomicUsize::new(0);
 
 /// Initializes the physical memory manager bitmap allocator from the bootloader memory map.
@@ -108,6 +116,7 @@ pub unsafe fn pmm_init(memmap_response: *mut LimineMemmapResponse, hhdm_offset: 
 }
 
 impl PhysicalMemoryManager {
+    /// Sets or clears the allocation state bit for the given frame index.
     #[inline(always)]
     fn set_bit(&mut self, frame_idx: usize, used: bool) {
         if frame_idx >= self.total_frames {
@@ -125,6 +134,7 @@ impl PhysicalMemoryManager {
         }
     }
 
+    /// Tests if a frame is marked as allocated (returns true if used or out of bounds).
     #[inline(always)]
     fn test_bit(&self, frame_idx: usize) -> bool {
         if frame_idx >= self.total_frames {
@@ -135,6 +145,7 @@ impl PhysicalMemoryManager {
         unsafe { (*self.bitmap.add(byte_idx) & (1 << bit_idx)) != 0 }
     }
 
+    /// Allocates a single 4 KiB physical frame, returning its physical base address.
     pub fn alloc_frame(&mut self) -> Option<usize> {
         let start = self.last_frame;
         for f in start..self.total_frames {
@@ -156,6 +167,7 @@ impl PhysicalMemoryManager {
         None
     }
 
+    /// Allocates `count` contiguous 4 KiB physical frames, returning the base physical address.
     pub fn alloc_contiguous_frames(&mut self, count: usize) -> Option<usize> {
         if count == 0 {
             return None;
@@ -185,6 +197,7 @@ impl PhysicalMemoryManager {
         None
     }
 
+    /// Frees an allocated physical frame at `phys_addr` back to the pool.
     pub fn free_frame(&mut self, phys_addr: usize) {
         let frame_idx = phys_addr / PAGE_SIZE;
         if frame_idx < self.total_frames && self.test_bit(frame_idx) {
@@ -197,22 +210,26 @@ impl PhysicalMemoryManager {
     }
 }
 
+/// Allocates a single 4 KiB physical frame from the global PMM.
 pub fn alloc_frame() -> Option<usize> {
     PMM.lock().as_mut().and_then(|pmm| pmm.alloc_frame())
 }
 
+/// Allocates `count` contiguous 4 KiB physical frames from the global PMM.
 pub fn alloc_contiguous_frames(count: usize) -> Option<usize> {
     PMM.lock()
         .as_mut()
         .and_then(|pmm| pmm.alloc_contiguous_frames(count))
 }
 
+/// Frees a previously allocated 4 KiB physical frame back to the global PMM.
 pub fn free_frame(phys_addr: usize) {
     if let Some(pmm) = PMM.lock().as_mut() {
         pmm.free_frame(phys_addr);
     }
 }
 
+/// Returns a snapshot `(total_frames, free_frames)` of physical frame allocator stats.
 pub fn get_pmm_stats() -> (usize, usize) {
     if let Some(ref pmm) = *PMM.lock() {
         (pmm.total_frames, pmm.free_frames)

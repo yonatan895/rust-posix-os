@@ -5,28 +5,47 @@ use crate::services::vfs::ramfs::{RamFsDir, RamFsFile};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
 
+/// POSIX ustar / tar archive 512-byte header record.
 #[repr(C, packed)]
 #[derive(Clone, Copy)]
 struct TarHeader {
+    /// File path name.
     name: [u8; 100],
+    /// File permission mode in octal ASCII.
     mode: [u8; 8],
+    /// Owner user ID in octal ASCII.
     uid: [u8; 8],
+    /// Owner group ID in octal ASCII.
     gid: [u8; 8],
+    /// File size in octal ASCII.
     size: [u8; 12],
+    /// Modification time in octal ASCII.
     mtime: [u8; 12],
+    /// Header checksum in octal ASCII.
     chksum: [u8; 8],
+    /// Type flag character ('0' regular, '5' directory).
     typeflag: u8,
+    /// Target name for symbolic links.
     linkname: [u8; 100],
+    /// UStar indicator magic string.
     magic: [u8; 6],
+    /// UStar version string.
     version: [u8; 2],
+    /// Owner user name.
     uname: [u8; 32],
+    /// Owner group name.
     gname: [u8; 32],
+    /// Major device number.
     devmajor: [u8; 8],
+    /// Minor device number.
     devminor: [u8; 8],
+    /// Pathname prefix.
     prefix: [u8; 155],
+    /// Header alignment padding.
     padding: [u8; 12],
 }
 
+/// Parses an ASCII octal number string from a tar header field.
 fn parse_octal(bytes: &[u8]) -> usize {
     let mut val = 0;
     for &b in bytes {
@@ -39,6 +58,7 @@ fn parse_octal(bytes: &[u8]) -> usize {
     val
 }
 
+/// Unpacks a ustar formatted initramfs byte buffer into `root_dir`.
 pub fn unpack_tar_archive(
     tar_data: &[u8],
     root_dir: &Arc<RamFsDir>,

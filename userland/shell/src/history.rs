@@ -1,11 +1,16 @@
-//! In-Memory Shell Command History Ring Buffer (1000 Commands).
+//! In-memory shell command history ring buffer supporting up to 1000 commands.
 
+/// Maximum number of command entries retained in the history ring buffer.
 pub const MAX_HISTORY: usize = 1000;
+/// Maximum length in bytes stored for an individual command entry.
 pub const MAX_CMD_LEN: usize = 128;
 
+/// Fixed-size storage entry for a recorded shell history command line.
 #[derive(Clone, Copy)]
 pub struct HistoryEntry {
+    /// Byte buffer containing the command string.
     pub buf: [u8; MAX_CMD_LEN],
+    /// Length of the command string in bytes.
     pub len: usize,
 }
 
@@ -18,12 +23,19 @@ impl Default for HistoryEntry {
     }
 }
 
+/// Global circular history buffer storage.
 pub static mut HISTORY: [HistoryEntry; MAX_HISTORY] = [HistoryEntry {
     buf: [0; MAX_CMD_LEN],
     len: 0,
 }; MAX_HISTORY];
+/// Total count of command entries added to history over time.
 pub static mut HISTORY_COUNT: usize = 0;
 
+/// Appends a new command to the circular history buffer, skipping consecutive duplicates.
+///
+/// # Safety
+///
+/// Must only be called from single-threaded shell execution context.
 pub unsafe fn history_add(cmd: &[u8], len: usize) {
     if len == 0 {
         return;
@@ -45,6 +57,11 @@ pub unsafe fn history_add(cmd: &[u8], len: usize) {
     }
 }
 
+/// Retrieves the previous (older) history entry, copying it into `buf`.
+///
+/// # Safety
+///
+/// Must only be called from single-threaded shell execution context.
 pub unsafe fn history_prev(cursor: &mut usize, buf: &mut [u8], len: &mut usize) {
     unsafe {
         let total = HISTORY_COUNT;
@@ -68,6 +85,11 @@ pub unsafe fn history_prev(cursor: &mut usize, buf: &mut [u8], len: &mut usize) 
     }
 }
 
+/// Retrieves the next (newer) history entry or restores the active `draft` buffer if at index 0.
+///
+/// # Safety
+///
+/// Must only be called from single-threaded shell execution context.
 pub unsafe fn history_next(
     cursor: &mut usize,
     buf: &mut [u8],

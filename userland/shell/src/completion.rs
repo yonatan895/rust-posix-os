@@ -1,9 +1,13 @@
-//! Fuzzy Command & Path Autocompletion with Interactive Arrow-Key Menu.
+//! Fuzzy command and path autocompletion engine with interactive arrow-key menus.
 
 use crate::line_draw::LineBuffer;
 use libc::*;
 use posix_abi::*;
 
+/// Computes a fuzzy match score for `target` against `pattern`.
+///
+/// Returns `Some(score)` if all characters in `pattern` appear sequentially in `target`,
+/// rewarding boundary prefixes and consecutive matches, or `None` if unmatched.
 pub fn fuzzy_score(pattern: &str, target: &str) -> Option<i32> {
     let p_bytes = pattern.as_bytes();
     let t_bytes = target.as_bytes();
@@ -46,11 +50,16 @@ pub fn fuzzy_score(pattern: &str, target: &str) -> Option<i32> {
     }
 }
 
+/// Represents an autocompletion match candidate for command or path expansion.
 #[derive(Clone, Copy)]
 pub struct MatchCandidate {
+    /// Byte buffer storing the candidate name.
     pub name: [u8; 64],
+    /// Number of valid bytes in `name`.
     pub len: usize,
+    /// Fuzzy relevance ranking score.
     pub score: i32,
+    /// Indicates whether the candidate is a directory.
     pub is_dir: bool,
 }
 
@@ -65,6 +74,11 @@ impl Default for MatchCandidate {
     }
 }
 
+/// Renders a horizontal completion menu row to the terminal, highlighting the active selection.
+///
+/// # Safety
+///
+/// Standard output must be writable and configured for terminal escape sequences.
 pub unsafe fn render_menu_row(matches: &[MatchCandidate], count: usize, selected: usize) {
     let mut scratch = [0u8; 1024];
     let mut out = LineBuffer::new(&mut scratch);
@@ -93,6 +107,11 @@ pub unsafe fn render_menu_row(matches: &[MatchCandidate], count: usize, selected
     out.flush();
 }
 
+/// Displays an interactive completion menu permitting arrow-key or Tab selection of matches.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string. Standard I/O must be configured for raw mode.
 pub unsafe fn show_completion_menu(
     cwd: *const u8,
     buf: &mut [u8],
@@ -168,6 +187,11 @@ pub unsafe fn show_completion_menu(
     }
 }
 
+/// Moves the cursor up one line and triggers a redraw of the prompt and line buffer.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string.
 unsafe fn out_cursor_up_to_prompt(
     cwd: *const u8,
     buf: &[u8],
@@ -181,6 +205,11 @@ unsafe fn out_cursor_up_to_prompt(
     repaint_fn(cwd, buf, len);
 }
 
+/// Handles Tab key presses by resolving matching commands or filesystem paths and autocompleting.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string. Terminal must be in raw mode.
 pub unsafe fn handle_tab_completion(
     cwd: *const u8,
     buf: &mut [u8],

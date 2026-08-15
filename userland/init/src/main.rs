@@ -1,3 +1,8 @@
+//! Process 1 (init daemon) for the Rust POSIX OS userland.
+//!
+//! Handles userspace initialization, heap and EFAULT validation tests,
+//! syscall microbenchmarking, spawning the interactive shell, and reaping orphaned children.
+
 #![no_std]
 #![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
@@ -9,6 +14,14 @@ use core::panic::PanicInfo;
 use libc::*;
 use posix_abi::*;
 
+/// Entry point for the init daemon (PID 1).
+///
+/// Sets up initial execution, performs memory allocation tests, runs EFAULT hammer tests,
+/// runs syscall microbenchmarks, executes `/bin/sh`, and enters an infinite child reaping loop.
+///
+/// # Safety
+///
+/// This function must be invoked as the raw ELF entry point with a valid stack.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     // SAFETY: Outputting static null-terminated banner strings to standard output.
@@ -71,8 +84,14 @@ pub unsafe extern "C" fn _start() -> ! {
     }
 }
 
+/// Counter for failed assertions in the EFAULT hammer test suite.
 static FAILED_TESTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
+/// Asserts that a syscall return value matches the expected errno, printing an error and incrementing `FAILED_TESTS` on mismatch.
+///
+/// # Safety
+///
+/// `test_name` must point to a valid null-terminated C-string.
 unsafe fn assert_eq_errno(actual: isize, expected: isize, test_name: *const u8) {
     if actual != expected {
         // SAFETY: Writing failure diagnostics to standard output.
@@ -88,6 +107,11 @@ unsafe fn assert_eq_errno(actual: isize, expected: isize, test_name: *const u8) 
     }
 }
 
+/// Executes adversarial pointer validation tests across read, write, open, stat, and mmap syscalls.
+///
+/// # Safety
+///
+/// Must be executed in userspace context with functional standard I/O and syscall dispatch.
 unsafe fn run_efault_hammer_tests() {
     // SAFETY: Outputting start of EFAULT tests to stdout.
     unsafe {
@@ -314,12 +338,18 @@ unsafe fn run_efault_hammer_tests() {
     }
 }
 
+/// Reads the current CPU timestamp counter (TSC).
 #[inline(always)]
 fn read_tsc() -> u64 {
     // SAFETY: RDTSC is an unprivileged user-mode instruction on x86_64.
     unsafe { core::arch::x86_64::_rdtsc() }
 }
 
+/// Runs a microbenchmark measuring hardware CPU cycle latency for 100,000 `getpid` syscalls.
+///
+/// # Safety
+///
+/// Must be called with functional standard output for printing benchmark statistics.
 unsafe fn run_syscall_microbench() {
     // SAFETY: Outputting benchmark start message to stdout.
     unsafe {
@@ -354,6 +384,7 @@ unsafe fn run_syscall_microbench() {
     }
 }
 
+/// Userland panic handler for the init daemon.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     write_panic_info(STDERR_FILENO, "init panic", info);

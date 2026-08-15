@@ -1,3 +1,5 @@
+//! System security audit trail and periodic/on-demand system state snapshots.
+
 use crate::ostd::sync::SpinLock;
 use crate::services::monitor::SYSTEM_MONITOR;
 use crate::services::process::PROCESS_TABLE;
@@ -6,27 +8,42 @@ use alloc::vec::Vec;
 use core::sync::atomic::{AtomicU64, Ordering};
 use posix_abi::*;
 
+/// Maximum number of audit events retained in the circular ring journal.
 pub const MAX_JOURNAL_ENTRIES: usize = 512;
+/// Maximum number of system snapshots retained in memory.
 pub const MAX_SNAPSHOTS: usize = 64;
 
+/// Structured record representing an audited kernel or security event.
 #[derive(Debug, Clone)]
 pub struct AuditEvent {
+    /// Monotonically increasing event sequence number.
     pub seq: u64,
+    /// System tick counter when the event was logged.
     pub timestamp_ticks: u64,
+    /// Process ID that triggered the event.
     pub pid: i32,
+    /// Effective user ID of the calling process.
     pub uid: u32,
+    /// Categorical audit event type identifier.
     pub event_type: u32,
+    /// Outcome status code (0 for success or negative POSIX errno).
     pub status: i32,
+    /// Object or target path of the operation.
     pub target: String,
+    /// Detailed diagnostic message or argument description.
     pub details: String,
 }
 
+/// Circular in-memory audit log buffer.
 pub struct AuditJournal {
+    /// Ordered collection of recent audit events.
     pub entries: Vec<AuditEvent>,
+    /// Cumulative count of all events appended since boot.
     pub total_logged: u64,
 }
 
 impl AuditJournal {
+    /// Creates a new empty audit journal.
     pub const fn new() -> Self {
         Self {
             entries: Vec::new(),
@@ -34,6 +51,7 @@ impl AuditJournal {
         }
     }
 
+    /// Appends an event to the journal, evicting the oldest event if capacity is exceeded.
     pub fn append(&mut self, event: AuditEvent) {
         if self.entries.len() >= MAX_JOURNAL_ENTRIES {
             self.entries.remove(0);
@@ -49,39 +67,63 @@ impl Default for AuditJournal {
     }
 }
 
+/// Global spinlock-guarded audit event journal.
 pub static AUDIT_JOURNAL: SpinLock<AuditJournal> = SpinLock::new(AuditJournal::new());
+/// Sequence counter generator for audit events.
 static NEXT_EVENT_SEQ: AtomicU64 = AtomicU64::new(1);
+/// Unique ID generator for system snapshots.
 static NEXT_SNAPSHOT_ID: AtomicU64 = AtomicU64::new(1);
 
+/// Point-in-time process state captured within an audit snapshot.
 #[derive(Debug, Clone)]
 pub struct ProcessSnapshotInfo {
+    /// Process identifier.
     pub pid: i32,
+    /// Parent process identifier.
     pub ppid: i32,
+    /// User identifier.
     pub uid: u32,
+    /// Group identifier.
     pub gid: u32,
+    /// Execution state string.
     pub state: String,
+    /// Count of open file descriptors.
     pub open_fds: usize,
+    /// Current working directory.
     pub cwd: String,
 }
 
+/// Complete system state snapshot capturing resource usage and process metadata.
 #[derive(Debug, Clone)]
 pub struct AuditSnapshot {
+    /// Unique identifier for this snapshot.
     pub id: u64,
+    /// Descriptive label or tag.
     pub label: String,
+    /// System tick timestamp when created.
     pub timestamp_ticks: u64,
+    /// Highest audit journal sequence number at creation time.
     pub journal_seq: u64,
+    /// Total system RAM in KiB.
     pub total_memory_kb: u64,
+    /// Used system RAM in KiB.
     pub used_memory_kb: u64,
+    /// Kernel heap memory used in KiB.
     pub heap_used_kb: u64,
+    /// Number of active processes at snapshot time.
     pub process_count: u32,
+    /// Metadata for all active processes.
     pub processes: Vec<ProcessSnapshotInfo>,
 }
 
+/// Storage manager for system snapshots.
 pub struct SnapshotManager {
+    /// Collection of retained audit snapshots.
     pub snapshots: Vec<AuditSnapshot>,
 }
 
 impl SnapshotManager {
+    /// Creates a new empty snapshot manager.
     pub const fn new() -> Self {
         Self {
             snapshots: Vec::new(),
@@ -95,8 +137,10 @@ impl Default for SnapshotManager {
     }
 }
 
+/// Global spinlock-guarded snapshot manager.
 pub static SNAPSHOT_MANAGER: SpinLock<SnapshotManager> = SpinLock::new(SnapshotManager::new());
 
+/// Logs a new audit event to the global journal and returns its sequence number.
 pub fn log_audit_event(
     pid: i32,
     uid: u32,
@@ -127,11 +171,13 @@ pub fn log_audit_event(
     seq
 }
 
+/// Retrieves a clone of all current audit events in the journal.
 pub fn get_audit_events() -> Vec<AuditEvent> {
     let journal = AUDIT_JOURNAL.lock();
     journal.entries.clone()
 }
 
+/// Creates a new system state snapshot attributed to the current calling process.
 pub fn create_audit_snapshot(label: &str) -> u64 {
     let (caller_pid, caller_uid) = match crate::services::process::get_current_process() {
         Some(p) => {
@@ -143,6 +189,7 @@ pub fn create_audit_snapshot(label: &str) -> u64 {
     create_audit_snapshot_with_creds(caller_pid, caller_uid, label)
 }
 
+/// Creates a new system state snapshot attributed to the specified PID and UID.
 pub fn create_audit_snapshot_with_creds(pid: i32, uid: u32, label: &str) -> u64 {
     let id = NEXT_SNAPSHOT_ID.fetch_add(1, Ordering::Relaxed);
     let current_seq = NEXT_EVENT_SEQ.load(Ordering::Relaxed).saturating_sub(1);
@@ -217,16 +264,19 @@ pub fn create_audit_snapshot_with_creds(pid: i32, uid: u32, label: &str) -> u64 
     id
 }
 
+/// Returns a copy of all stored system state snapshots.
 pub fn get_snapshots() -> Vec<AuditSnapshot> {
     let mgr = SNAPSHOT_MANAGER.lock();
     mgr.snapshots.clone()
 }
 
+/// Finds a snapshot by its unique ID.
 pub fn get_snapshot_by_id(id: u64) -> Option<AuditSnapshot> {
     let mgr = SNAPSHOT_MANAGER.lock();
     mgr.snapshots.iter().find(|s| s.id == id).cloned()
 }
 
+/// Initializes the audit subsystem and records the initial boot baseline snapshot.
 pub fn audit_init() {
     log_audit_event(
         0,

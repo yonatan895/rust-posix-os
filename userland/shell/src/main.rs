@@ -1,11 +1,11 @@
+//! Rust POSIX Shell - Interactive Ring 3 Terminal & Command Interpreter.
+
 #![no_std]
 #![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
 // Userland crate uses C-style FFI patterns (nul-terminated byte-string literals,
 // raw pointer arithmetic) that conflict with clippy's Rust-idiomatic expectations.
 #![allow(clippy::all)]
-
-//! Rust POSIX Shell - Interactive Ring 3 Terminal & Command Interpreter.
 
 mod builtins;
 mod completion;
@@ -21,6 +21,7 @@ use libc::*;
 use pipeline::execute_pipeline_line;
 use posix_abi::*;
 
+/// List of built-in shell commands recognized for syntax highlighting and tab completion.
 pub static KNOWN_COMMANDS: [&str; 22] = [
     "help",
     "uname",
@@ -46,6 +47,13 @@ pub static KNOWN_COMMANDS: [&str; 22] = [
     "exit",
 ];
 
+/// Entry point for the interactive shell process.
+///
+/// Prints greeting banner and executes the interactive read-eval-print loop (REPL).
+///
+/// # Safety
+///
+/// Must be invoked as the initial ELF entry point with a valid stack.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     unsafe {
@@ -71,6 +79,11 @@ pub unsafe extern "C" fn _start() -> ! {
     }
 }
 
+/// Dispatches an individual command to its built-in handler or reports an unknown command error.
+///
+/// # Safety
+///
+/// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     let cmd = argv[0];
     unsafe {
@@ -133,6 +146,7 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     }
 }
 
+/// Shell panic handler.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     write_panic_info(STDERR_FILENO, "shell panic", info);

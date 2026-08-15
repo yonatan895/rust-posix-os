@@ -9,6 +9,7 @@ use posix_abi::SYS_GETPID;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
+/// Simulated process ID for host-side syscall routing benchmarks.
 static SIMULATED_PID: AtomicI32 = AtomicI32::new(1);
 
 /// Simulates host-side dispatcher routing logic for `SYS_GETPID`.

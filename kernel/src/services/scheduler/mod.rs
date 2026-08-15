@@ -13,36 +13,46 @@ use alloc::collections::VecDeque;
 use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 
+/// Reason code returned when a blocked task resumes execution.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WakeReason {
+    /// Woken normally by condition fulfillment or wait queue event.
     Woken,
     // TODO(signals): WakeReason::Interrupted for EINTR signal delivery
+    /// Interrupted by an unblocked signal.
     Interrupted,
 }
 
+/// FIFO ready queue manager for round-robin CPU scheduling.
 pub struct Scheduler {
+    /// Queue of ready processes waiting for CPU time slices.
     pub ready_queue: VecDeque<Arc<SpinLock<Process>>>,
 }
 
 impl Scheduler {
+    /// Creates a new empty round-robin scheduler.
     pub const fn new() -> Self {
         Self {
             ready_queue: VecDeque::new(),
         }
     }
 
+    /// Enqueues a process to the back of the ready queue.
     pub fn add_task(&mut self, proc: Arc<SpinLock<Process>>) {
         self.ready_queue.push_back(proc);
     }
 
+    /// Dequeues the next runnable process from the front of the ready queue.
     pub fn pick_next(&mut self) -> Option<Arc<SpinLock<Process>>> {
         self.ready_queue.pop_front()
     }
 
+    /// Returns `true` if the ready queue contains no runnable tasks.
     pub fn is_empty(&self) -> bool {
         self.ready_queue.is_empty()
     }
 
+    /// Returns the number of tasks currently waiting in the ready queue.
     pub fn len(&self) -> usize {
         self.ready_queue.len()
     }

@@ -1,3 +1,7 @@
+//! Multicall binary providing standard POSIX core utilities.
+//!
+//! Supports applets: `ls`, `cat`, `echo`, `uname`, `pwd`, `touch`, `mkdir`, `rm`, `cp`, `mv`, and `help`.
+
 #![no_std]
 #![no_main]
 #![allow(unsafe_op_in_unsafe_fn)]
@@ -9,6 +13,13 @@ use core::panic::PanicInfo;
 use libc::*;
 use posix_abi::*;
 
+/// Raw entry point for the multicall coreutils executable.
+///
+/// Parses `argc` and `argv` from the user stack and delegates to [`coreutils_main`].
+///
+/// # Safety
+///
+/// Must be invoked as the initial ELF entry point with a valid stack containing `argc` and `argv`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
     let sp: *const usize;
@@ -23,6 +34,11 @@ pub unsafe extern "C" fn _start() -> ! {
     }
 }
 
+/// Extracts the basename component from a null-terminated POSIX file path.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated byte string or null.
 pub unsafe fn get_basename(path: *const u8) -> *const u8 {
     if path.is_null() {
         return b"\0".as_ptr();
@@ -40,12 +56,25 @@ pub unsafe fn get_basename(path: *const u8) -> *const u8 {
     last
 }
 
+/// Prints usage instructions and the list of available coreutils applets to standard output.
+///
+/// # Safety
+///
+/// Requires standard output file descriptor (stdout) to be valid and writable.
 pub unsafe fn print_usage() {
     unsafe {
         puts(b"POSIX Coreutils v1.0.0 (x86_64 Rust)\nUsage: coreutils <applet> [arguments...]\n\nAvailable Applets:\n  ls, cat, echo, uname, pwd, touch, mkdir, rm, cp, mv, help\0".as_ptr());
     }
 }
 
+/// Main dispatcher for the multicall coreutils binary.
+///
+/// Determines whether the program was invoked as `coreutils <applet>` or via an applet symlink/alias,
+/// and delegates execution to the corresponding command handler.
+///
+/// # Safety
+///
+/// `argv` must be an array of at least `argc` valid null-terminated C-string pointers, or null if `argc == 0`.
 pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
     if argc == 0 || argv.is_null() || unsafe { (*argv).is_null() } {
         unsafe { print_usage() };
@@ -96,6 +125,11 @@ pub unsafe fn coreutils_main(argc: usize, argv: *const *const u8) -> i32 {
     }
 }
 
+/// Executes the `ls` applet to list directory contents or file status.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_ls(argc: usize, argv: *const *const u8) -> i32 {
     let path = if argc > 1 && !unsafe { (*argv.add(1)).is_null() } {
         unsafe { *argv.add(1) }
@@ -142,6 +176,11 @@ pub unsafe fn cmd_ls(argc: usize, argv: *const *const u8) -> i32 {
     0
 }
 
+/// Executes the `cat` applet to concatenate and display file contents or standard input.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_cat(argc: usize, argv: *const *const u8) -> i32 {
     if argc <= 1 {
         let mut buf = [0u8; 512];
@@ -180,6 +219,11 @@ pub unsafe fn cmd_cat(argc: usize, argv: *const *const u8) -> i32 {
     ret
 }
 
+/// Executes the `echo` applet to print arguments separated by spaces followed by a newline.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_echo(argc: usize, argv: *const *const u8) -> i32 {
     for i in 1..argc {
         if i > 1 {
@@ -195,6 +239,11 @@ pub unsafe fn cmd_echo(argc: usize, argv: *const *const u8) -> i32 {
     0
 }
 
+/// Executes the `uname` applet to print system and kernel identification information.
+///
+/// # Safety
+///
+/// Standard output file descriptor must be open and writable.
 pub unsafe fn cmd_uname() -> i32 {
     let mut uts = Utsname::default();
     unsafe {
@@ -210,6 +259,11 @@ pub unsafe fn cmd_uname() -> i32 {
     0
 }
 
+/// Executes the `pwd` applet to print the current working directory.
+///
+/// # Safety
+///
+/// Standard output file descriptor must be open and writable.
 pub unsafe fn cmd_pwd() -> i32 {
     let mut buf = [0u8; 256];
     unsafe {
@@ -219,6 +273,11 @@ pub unsafe fn cmd_pwd() -> i32 {
     0
 }
 
+/// Executes the `touch` applet to create empty files or update file timestamps.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_touch(argc: usize, argv: *const *const u8) -> i32 {
     if argc <= 1 {
         unsafe { puts(b"touch: missing file operand\0".as_ptr()) };
@@ -241,6 +300,11 @@ pub unsafe fn cmd_touch(argc: usize, argv: *const *const u8) -> i32 {
     ret
 }
 
+/// Executes the `mkdir` applet to create directories with default permissions (0755).
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_mkdir(argc: usize, argv: *const *const u8) -> i32 {
     if argc <= 1 {
         unsafe { puts(b"mkdir: missing operand\0".as_ptr()) };
@@ -261,6 +325,11 @@ pub unsafe fn cmd_mkdir(argc: usize, argv: *const *const u8) -> i32 {
     ret
 }
 
+/// Executes the `rm` applet to remove filesystem entries via `unlink`.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_rm(argc: usize, argv: *const *const u8) -> i32 {
     if argc <= 1 {
         unsafe { puts(b"rm: missing operand\0".as_ptr()) };
@@ -281,6 +350,11 @@ pub unsafe fn cmd_rm(argc: usize, argv: *const *const u8) -> i32 {
     ret
 }
 
+/// Executes the `cp` applet to copy the contents of a source file to a destination file.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_cp(argc: usize, argv: *const *const u8) -> i32 {
     if argc < 3 {
         unsafe { puts(b"cp: missing destination file operand\0".as_ptr()) };
@@ -316,6 +390,11 @@ pub unsafe fn cmd_cp(argc: usize, argv: *const *const u8) -> i32 {
     0
 }
 
+/// Executes the `mv` applet to rename or move a file to a new destination.
+///
+/// # Safety
+///
+/// `argv` must point to an array of valid null-terminated C-string pointers with length at least `argc`.
 pub unsafe fn cmd_mv(argc: usize, argv: *const *const u8) -> i32 {
     if argc < 3 {
         unsafe { puts(b"mv: missing destination file operand\0".as_ptr()) };
@@ -338,6 +417,7 @@ pub unsafe fn cmd_mv(argc: usize, argv: *const *const u8) -> i32 {
     }
 }
 
+/// Panic handler for the coreutils binary.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     write_panic_info(STDERR_FILENO, "coreutils panic", info);

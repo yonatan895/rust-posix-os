@@ -1,3 +1,5 @@
+//! POSIX Process Lifecycle, Signals, and Credentials System Calls.
+
 use super::{copy_user_path, map_user_error};
 use crate::ostd::mm::{USER_STR_MAX, UserPtr};
 use crate::ostd::task::{SyscallRegisters, TrapFrame};
@@ -6,8 +8,11 @@ use crate::services::process::*;
 use core::sync::atomic::Ordering;
 use posix_abi::*;
 
+/// Size in bytes of the AMD64 ABI user stack red zone (128 bytes).
 const RED_ZONE_SIZE: usize = 128;
+/// Mask of user-settable arithmetic and direction flags in RFLAGS.
 const USER_RFLAGS_MASK: usize = 0xCD5; // User arithmetic/status flags + direction
+/// Fixed architectural RFLAGS bitmask (bit 1 always 1, bit 9 IF interrupt enable).
 const USER_RFLAGS_RESERVED: usize = 0x202; // Bit 1 is fixed 1, Bit 9 is IF (interrupt enable)
 
 /// POSIX fork system call.
@@ -107,6 +112,7 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
     child_pid as isize
 }
 
+/// Replaces the calling process image with a new executable ELF specified by `path_ptr`.
 pub fn sys_execve(
     path_ptr: *const u8,
     argv_ptr: *const *const u8,
@@ -142,6 +148,7 @@ pub fn sys_execve(
     }
 }
 
+/// Encodes an exit status integer conforming to POSIX waitpid macros (WIFEXITED / WIFSIGNALED).
 #[inline(always)]
 fn encode_wait_status(exit_code: i32, killed_by_sig: Option<i32>) -> i32 {
     if let Some(sig) = killed_by_sig {
@@ -151,6 +158,7 @@ fn encode_wait_status(exit_code: i32, killed_by_sig: Option<i32>) -> i32 {
     }
 }
 
+/// Waits for child process state changes (termination or stop).
 pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
     let calling_pid = CURRENT_PID.load(Ordering::SeqCst);
 
@@ -254,10 +262,12 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
     }
 }
 
+/// Returns the process ID of the calling process.
 pub fn sys_getpid() -> isize {
     CURRENT_PID.load(Ordering::SeqCst) as isize
 }
 
+/// Returns the parent process ID of the calling process.
 pub fn sys_getppid() -> isize {
     if let Some(proc) = get_current_process() {
         proc.lock().ppid as isize
@@ -266,6 +276,7 @@ pub fn sys_getppid() -> isize {
     }
 }
 
+/// Terminates the calling process with exit status `code`.
 pub fn sys_exit(code: i32) -> isize {
     let ppid = if let Some(proc_lock) = get_current_process() {
         let mut proc = proc_lock.lock();
@@ -287,6 +298,7 @@ pub fn sys_exit(code: i32) -> isize {
     }
 }
 
+/// Terminates the calling process due to fatal reception of signal `sig`.
 pub fn sys_exit_signal(sig: i32) -> ! {
     let ppid = if let Some(proc_lock) = get_current_process() {
         let mut proc = proc_lock.lock();
@@ -307,6 +319,7 @@ pub fn sys_exit_signal(sig: i32) -> ! {
     }
 }
 
+/// Sends signal `sig` to process with PID `pid`.
 pub fn sys_kill(pid: i32, sig: i32) -> isize {
     if pid <= 0 || !(SIG_MIN..=SIG_MAX).contains(&sig) {
         return -(EINVAL as isize);
@@ -317,6 +330,7 @@ pub fn sys_kill(pid: i32, sig: i32) -> isize {
     }
 }
 
+/// Examines and changes a signal disposition action for signal `sig`.
 pub fn sys_rt_sigaction(
     sig: i32,
     act_ptr: *const SigAction,
@@ -363,6 +377,7 @@ pub fn sys_rt_sigaction(
     0
 }
 
+/// Examines and changes the calling process's blocked signal mask.
 pub fn sys_rt_sigprocmask(
     how: i32,
     set_ptr: *const SigSet,
@@ -403,6 +418,7 @@ pub fn sys_rt_sigprocmask(
     0
 }
 
+/// Restores user registers and signal mask upon return from a signal handler.
 pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
     // When the user signal handler finishes with `ret`, it pops the 8-byte restorer address
     // from [new_rsp], jumping into `__restore_rt` with `rsp = new_rsp + 8`.
@@ -488,14 +504,17 @@ pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
     }
 }
 
+/// Returns `true` if signal `sig` is ignored by default per POSIX standard.
 pub fn is_default_ignore(sig: i32) -> bool {
     sig == SIGCHLD || sig == SIGURG || sig == SIGWINCH
 }
 
+/// Returns `true` if signal `sig` causes default stop/pause action per POSIX.
 pub fn is_default_stop(sig: i32) -> bool {
     sig == SIGSTOP || sig == SIGTSTP || sig == SIGTTIN || sig == SIGTTOU
 }
 
+/// Constructs a `SignalFrame` on user stack and directs control flow to the user handler.
 fn deliver_signal_to_user(
     pid: i32,
     sig: i32,
@@ -548,6 +567,7 @@ fn deliver_signal_to_user(
     update_signal_mask_and_disposition(pid, sig, &action, blocked);
 }
 
+/// Updates process signal mask and resets handler disposition if SA_RESETHAND is set.
 fn update_signal_mask_and_disposition(pid: i32, sig: i32, action: &SigAction, blocked: SigSet) {
     let mut new_mask = blocked | action.sa_mask;
     if (action.sa_flags & SA_NODEFER) == 0 {
@@ -560,6 +580,7 @@ fn update_signal_mask_and_disposition(pid: i32, sig: i32, action: &SigAction, bl
     }
 }
 
+/// Terminates a CPU-bound task from timer interrupt context upon receiving a fatal signal.
 fn terminate_cpu_bound_task(pid: i32, sig: i32) {
     let ppid = if let Some(proc_lock) = get_current_process() {
         let mut proc = proc_lock.lock();
@@ -672,6 +693,7 @@ pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
     false
 }
 
+/// Returns the real user ID of the calling process.
 pub fn sys_getuid() -> isize {
     match get_current_process() {
         Some(p) => p.lock().uid as isize,
@@ -679,6 +701,7 @@ pub fn sys_getuid() -> isize {
     }
 }
 
+/// Returns the effective user ID of the calling process.
 pub fn sys_geteuid() -> isize {
     match get_current_process() {
         Some(p) => p.lock().euid as isize,
@@ -686,6 +709,7 @@ pub fn sys_geteuid() -> isize {
     }
 }
 
+/// Returns the real group ID of the calling process.
 pub fn sys_getgid() -> isize {
     match get_current_process() {
         Some(p) => p.lock().gid as isize,
@@ -693,6 +717,7 @@ pub fn sys_getgid() -> isize {
     }
 }
 
+/// Returns the effective group ID of the calling process.
 pub fn sys_getegid() -> isize {
     match get_current_process() {
         Some(p) => p.lock().egid as isize,
@@ -704,6 +729,7 @@ pub fn sys_getegid() -> isize {
 // requires a saved set-user-ID field on Process. The current implementation handles
 // the two main cases (root setuid drops everything, non-root no-op), but the model
 // is incomplete without saved-uid/saved-gid.
+/// Sets the real and effective user ID of the calling process.
 pub fn sys_setuid(uid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -720,6 +746,7 @@ pub fn sys_setuid(uid: u32) -> isize {
 }
 
 // TODO: saved-gid for setegid (see sys_setuid TODO above).
+/// Sets the real and effective group ID of the calling process.
 pub fn sys_setgid(gid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -735,6 +762,7 @@ pub fn sys_setgid(gid: u32) -> isize {
     }
 }
 
+/// Sets the calling process's file mode creation mask (umask).
 pub fn sys_umask(mask: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,

@@ -1,4 +1,4 @@
-//! Single-syscall prompt painter.
+//! Single-syscall prompt painter and zero-flicker line buffer renderer.
 //!
 //! Flicker comes from writing one frame (spaces) then overwriting it. The
 //! rule is: never send something you will immediately replace. One write
@@ -6,16 +6,21 @@
 
 use posix_abi::STDOUT_FILENO;
 
+/// Stack-backed output formatting buffer designed for single-syscall atomic terminal writes.
 pub struct LineBuffer<'a> {
+    /// Mutable byte slice destination for rendered characters.
     pub buf: &'a mut [u8],
+    /// Number of formatted bytes accumulated in `buf`.
     pub len: usize,
 }
 
 impl<'a> LineBuffer<'a> {
+    /// Creates a new `LineBuffer` wrapping a mutable byte slice.
     pub fn new(buf: &'a mut [u8]) -> Self {
         Self { buf, len: 0 }
     }
 
+    /// Appends a single byte to the buffer if capacity permits.
     pub fn push_byte(&mut self, b: u8) {
         if self.len < self.buf.len() {
             self.buf[self.len] = b;
@@ -23,6 +28,7 @@ impl<'a> LineBuffer<'a> {
         }
     }
 
+    /// Formats and appends an unsigned integer in base 10 without heap allocation.
     pub fn push_num(&mut self, mut num: usize) {
         if num == 0 {
             self.push_byte(b'0');
@@ -41,12 +47,14 @@ impl<'a> LineBuffer<'a> {
         }
     }
 
+    /// Appends an ASCII / UTF-8 string slice to the buffer.
     pub fn push_str(&mut self, s: &str) {
         for b in s.bytes() {
             self.push_byte(b);
         }
     }
 
+    /// Appends a null-terminated C-string to the buffer.
     pub fn push_cstr(&mut self, s: *const u8) {
         if s.is_null() {
             return;
@@ -60,6 +68,7 @@ impl<'a> LineBuffer<'a> {
         }
     }
 
+    /// Flushes the buffered bytes to standard output via a single `write` syscall.
     pub fn flush(&self) {
         if self.len > 0 {
             unsafe {
@@ -69,6 +78,11 @@ impl<'a> LineBuffer<'a> {
     }
 }
 
+/// Identifies byte indices `(start, end)` encompassing the command token in a line buffer.
+///
+/// # Safety
+///
+/// `buf` must have at least `len` accessible bytes.
 pub unsafe fn cmd_span(buf: &[u8], len: usize) -> (usize, usize) {
     let mut start = 0;
     while start < len && (buf[start] == b' ' || buf[start] == b'\t') {
@@ -87,6 +101,11 @@ pub unsafe fn cmd_span(buf: &[u8], len: usize) -> (usize, usize) {
     (start, end)
 }
 
+/// Paints the prompt, syntax-highlighted command line, and cursor position in a single atomic write.
+///
+/// # Safety
+///
+/// `cwd` must point to a valid null-terminated C-string.
 pub unsafe fn paint_prompt(
     cwd: *const u8,
     buf: &[u8],

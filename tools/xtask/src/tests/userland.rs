@@ -1,9 +1,10 @@
-//! Userland Libraries, Allocator, Panic Formatting, and Line Editor Test Suite.
+//! Userland libraries, allocator, panic formatting, and line editor test suite.
 
 use super::harness::TestRunner;
 use std::collections::BTreeMap;
 use std::fmt::Write;
 
+/// Registers userland slab allocator, panic handling, line editor, and base64 tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "userland",
@@ -27,6 +28,7 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Tests libc small-object slab allocator under 10,000 allocate/free cycles and double-free protection.
 fn test_libc_small_object_allocator() {
     const ARENA_SIZE: usize = 64 * 1024;
     const NUM_CLASSES: usize = 8;
@@ -359,6 +361,7 @@ fn test_libc_small_object_allocator() {
     );
 }
 
+/// Tests panic diagnostic formatting targeting stderr (file descriptor 2) across all userland daemons.
 fn test_userland_panic_fd2() {
     struct SimFdWriter {
         fd: i32,
@@ -459,6 +462,7 @@ fn test_userland_panic_fd2() {
     assert!(coreutils_out.contains(coreutils_msg));
 }
 
+/// Tests interactive line editor navigation, word jumps, bracketed paste splicing, and kill-ring operations.
 fn test_line_editor_navigation_and_paste() {
     const KILL_RING_SIZE: usize = 1024;
 
@@ -673,6 +677,7 @@ fn test_line_editor_navigation_and_paste() {
     assert_eq!(cur_pos, 5);
 }
 
+/// Tests RFC 4648 standard base64 test vectors including padding.
 fn test_base64_rfc4648() {
     fn test_b64(input: &[u8], expected: &[u8]) {
         const B64_CHARS: &[u8; 64] =

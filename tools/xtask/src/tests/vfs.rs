@@ -1,8 +1,9 @@
-//! Virtual File System (VFS), Creation Modes, Permissions, and Audit Journal Test Suite.
+//! Virtual file system (VFS), creation modes, permissions, and audit journal test suite.
 
 use super::harness::TestRunner;
 use posix_abi::*;
 
+/// Registers VFS creation mode, umask, permission checking, and audit journal tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "vfs",
@@ -11,6 +12,7 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Tests file creation mode masking against umask, stat field fidelity, and permission checks.
 fn test_file_creation_mode_and_audit_uid() {
     // 1. Process Credentials & Creation Mode Semantics
     struct SimCreds {

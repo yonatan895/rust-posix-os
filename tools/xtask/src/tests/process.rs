@@ -1,8 +1,9 @@
-//! Process Lifecycle, Scheduling, and Waitpid Test Suite.
+//! Process lifecycle, scheduling, and waitpid test suite.
 
 use super::harness::TestRunner;
 use std::collections::{BTreeMap, VecDeque};
 
+/// Registers process lifecycle, timer, PIC, and scheduler tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "process",
@@ -33,6 +34,7 @@ pub fn register_tests(runner: &mut TestRunner) {
 
 use posix_abi::{pit_calc_divisor, pit_effective_freq};
 
+/// Tests PIT frequency divisor arithmetic, boundary clamping, and invalid frequency rejection.
 fn test_timer_configuration() {
     // 100 Hz standard divisor and effective frequency
     assert_eq!(
@@ -84,6 +86,7 @@ fn test_timer_configuration() {
     );
 }
 
+/// Tests PIC IRQ line and port calculations and monotonic atomic tick sequencing.
 fn test_pic_and_irq_primitives() {
     // PIC IRQ range validation: valid lines 0..=15
     for irq in 0..=15 {
@@ -104,6 +107,7 @@ fn test_pic_and_irq_primitives() {
     assert_eq!(ticks.load(std::sync::atomic::Ordering::Relaxed), 100);
 }
 
+/// Tests preemptive timer-driven round-robin scheduling traces across active tasks.
 fn test_preemptive_timer_round_robin() {
     let mut ready_queue = VecDeque::new();
     ready_queue.push_back(2); // Task 2 waiting
@@ -125,6 +129,7 @@ fn test_preemptive_timer_round_robin() {
     );
 }
 
+/// Tests that processes can only wait on their own direct child processes and receive ECHILD otherwise.
 fn test_waitpid_parentage_isolation() {
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum ProcState {
@@ -214,6 +219,7 @@ fn test_waitpid_parentage_isolation() {
     assert_eq!(res, Err(10), "PID 2 reaped already-reaped child");
 }
 
+/// Tests non-blocking WNOHANG waitpid semantics for running vs zombie child processes.
 fn test_waitpid_wnohang_semantics() {
     #[derive(Clone, Copy, PartialEq, Debug)]
     enum ProcState {

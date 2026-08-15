@@ -3,56 +3,94 @@
 use crate::ostd::mm::{PageFlags, VmSpace, read_pod};
 use posix_abi::*;
 
+/// Expected 4-byte ELF identification magic (`\x7fELF`).
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
+/// ELF identification byte indicating 64-bit architecture.
 pub const ELF_CLASS_64: u8 = 2;
+/// ELF identification byte indicating 2's complement little-endian data.
 pub const ELF_DATA_2LSB: u8 = 1;
+/// ELF machine architecture identifier for x86-64 (AMD64).
 pub const EM_X86_64: u16 = 0x3E;
 
+/// Program header type for loadable segment.
 pub const PT_LOAD: u32 = 1;
+/// Segment permission flag: executable.
 pub const PF_X: u32 = 1;
+/// Segment permission flag: writable.
 pub const PF_W: u32 = 2;
+/// Segment permission flag: readable.
 pub const PF_R: u32 = 4;
 
+/// Highest virtual address boundary for user-space stack allocation.
 pub const USER_STACK_TOP: usize = 0x0000_7FFF_FFFF_0000;
+/// Default user stack allocation size (128 KiB).
 pub const USER_STACK_SIZE: usize = 128 * 1024; // 128 KiB User Stack
 
+/// Standard 64-bit ELF file header representation.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Elf64Header {
+    /// Magic number and architecture/endianness identification bytes.
     pub e_ident: [u8; 16],
+    /// Object file type (e.g., ET_EXEC, ET_DYN).
     pub e_type: u16,
+    /// Target machine instruction set architecture.
     pub e_machine: u16,
+    /// Object file format version.
     pub e_version: u32,
+    /// Virtual entry point address to transfer control to.
     pub e_entry: u64,
+    /// Byte offset to the program header table.
     pub e_phoff: u64,
+    /// Byte offset to the section header table.
     pub e_shoff: u64,
+    /// Processor-specific flags.
     pub e_flags: u32,
+    /// ELF header size in bytes.
     pub e_ehsize: u16,
+    /// Size of a program header table entry in bytes.
     pub e_phentsize: u16,
+    /// Number of entries in the program header table.
     pub e_phnum: u16,
+    /// Size of a section header table entry in bytes.
     pub e_shentsize: u16,
+    /// Number of entries in the section header table.
     pub e_shnum: u16,
+    /// Section header index of the section name string table.
     pub e_shstrndx: u16,
 }
 
+/// Standard 64-bit ELF program header entry.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct Elf64Phdr {
+    /// Segment type (e.g., PT_LOAD).
     pub p_type: u32,
+    /// Segment flags and access permissions (PF_R, PF_W, PF_X).
     pub p_flags: u32,
+    /// Offset of the segment in the file image.
     pub p_offset: u64,
+    /// Virtual address of the segment in memory.
     pub p_vaddr: u64,
+    /// Physical address of the segment (reserved/unused).
     pub p_paddr: u64,
+    /// Size of the segment in the file image.
     pub p_filesz: u64,
+    /// Size of the segment in memory (zero-filled remainder).
     pub p_memsz: u64,
+    /// Required segment alignment boundary.
     pub p_align: u64,
 }
 
+/// Metadata describing the loaded ELF executable memory layout.
 pub struct LoadedElf {
+    /// Initial instruction pointer entry point.
     pub entry_point: usize,
+    /// Initial user stack pointer (RSP) positioned after argv/envp/auxv setup.
     pub user_stack_top: usize,
 }
 
+/// Parses an ELF64 binary image, maps loadable segments into `vm_space`, and prepares the user stack.
 pub fn load_elf(
     elf_bytes: &[u8],
     vm_space: &mut VmSpace,

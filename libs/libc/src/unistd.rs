@@ -3,51 +3,121 @@
 use crate::syscall::*;
 use posix_abi::*;
 
+/// Reads up to `count` bytes from file descriptor `fd` into `buf`.
+///
+/// Returns the number of bytes read, 0 at end-of-file, or a negative error code.
+///
+/// # Safety
+///
+/// `buf` must point to a buffer of at least `count` writable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn read(fd: i32, buf: *mut u8, count: usize) -> isize {
     unsafe { syscall3(SYS_READ, fd as usize, buf as usize, count) as isize }
 }
 
+/// Writes up to `count` bytes from `buf` to the file descriptor `fd`.
+///
+/// Returns the number of bytes written, or a negative error code.
+///
+/// # Safety
+///
+/// `buf` must point to a buffer of at least `count` readable bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn write(fd: i32, buf: *const u8, count: usize) -> isize {
     unsafe { syscall3(SYS_WRITE, fd as usize, buf as usize, count) as isize }
 }
 
+/// Opens the file specified by `path` with flags `flags` and permission mode `mode`.
+///
+/// Returns the new file descriptor on success, or a negative error code.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn open(path: *const u8, flags: i32, mode: u32) -> i32 {
     unsafe { syscall3(SYS_OPEN, path as usize, flags as usize, mode as usize) as i32 }
 }
 
+/// Closes a file descriptor `fd`.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn close(fd: i32) -> i32 {
     unsafe { syscall1(SYS_CLOSE, fd as usize) as i32 }
 }
 
+/// Repositions the read/write offset of the open file descriptor `fd`.
+///
+/// Returns the resulting offset location in bytes, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn lseek(fd: i32, offset: i64, whence: i32) -> i64 {
     unsafe { syscall3(SYS_LSEEK, fd as usize, offset as usize, whence as usize) as i64 }
 }
 
+/// Duplicates an open file descriptor `oldfd`.
+///
+/// Returns the new file descriptor, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dup(oldfd: i32) -> i32 {
     unsafe { syscall1(SYS_DUP, oldfd as usize) as i32 }
 }
 
+/// Duplicates `oldfd` to `newfd`, closing `newfd` first if open.
+///
+/// Returns `newfd` on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn dup2(oldfd: i32, newfd: i32) -> i32 {
     unsafe { syscall2(SYS_DUP2, oldfd as usize, newfd as usize) as i32 }
 }
 
+/// Creates a unidirectional data channel (pipe).
+///
+/// Stores read end in `pipefd[0]` and write end in `pipefd[1]`.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `pipefd` must point to a writable array of two `i32` integers.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn pipe(pipefd: *mut [i32; 2]) -> i32 {
     unsafe { syscall1(SYS_PIPE, pipefd as usize) as i32 }
 }
 
+/// Creates a new process by duplicating the calling process.
+///
+/// Returns 0 in child, child PID in parent, or negative error code on failure.
+///
+/// # Safety
+///
+/// Direct system call invocation duplicating execution context.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn fork() -> i32 {
     unsafe { syscall0(SYS_FORK) as i32 }
 }
 
+/// Executes the program referred to by `path`.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
+/// `argv` and `envp` must point to null-terminated arrays of null-terminated C strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn execve(
     path: *const u8,
@@ -57,46 +127,97 @@ pub unsafe extern "C" fn execve(
     unsafe { syscall3(SYS_EXECVE, path as usize, argv as usize, envp as usize) as i32 }
 }
 
+/// Returns the process ID of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getpid() -> i32 {
     unsafe { syscall0(SYS_GETPID) as i32 }
 }
 
+/// Returns the process ID of the parent of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getppid() -> i32 {
     unsafe { syscall0(SYS_GETPPID) as i32 }
 }
 
+/// Returns the real user ID of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getuid() -> u32 {
     unsafe { syscall0(SYS_GETUID) as u32 }
 }
 
+/// Returns the effective user ID of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn geteuid() -> u32 {
     unsafe { syscall0(SYS_GETEUID) as u32 }
 }
 
+/// Returns the real group ID of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getgid() -> u32 {
     unsafe { syscall0(SYS_GETGID) as u32 }
 }
 
+/// Returns the effective group ID of the calling process.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getegid() -> u32 {
     unsafe { syscall0(SYS_GETEGID) as u32 }
 }
 
+/// Sets the real and effective user ID of the calling process.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setuid(uid: u32) -> i32 {
     unsafe { syscall1(SYS_SETUID, uid as usize) as i32 }
 }
 
+/// Sets the real and effective group ID of the calling process.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn setgid(gid: u32) -> i32 {
     unsafe { syscall1(SYS_SETGID, gid as usize) as i32 }
 }
 
+/// Tests whether a file descriptor refers to a terminal.
+///
+/// Returns 1 if `fd` refers to a terminal, 0 otherwise.
+///
+/// # Safety
+///
+/// Direct system call invocation via `ioctl`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
     let mut term = Termios::default();
@@ -111,32 +232,74 @@ pub unsafe extern "C" fn isatty(fd: i32) -> i32 {
     if res == 0 { 1 } else { 0 }
 }
 
+/// Changes the current working directory of the calling process.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chdir(path: *const u8) -> i32 {
     unsafe { syscall1(SYS_CHDIR, path as usize) as i32 }
 }
 
+/// Gets the current working directory pathname into `buf`.
+///
+/// Returns `buf` on success, or null on failure.
+///
+/// # Safety
+///
+/// `buf` must point to writable memory of at least `size` bytes.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getcwd(buf: *mut u8, size: usize) -> *mut u8 {
     let res = unsafe { syscall2(SYS_GETCWD, buf as usize, size) as isize };
     if res >= 0 { buf } else { core::ptr::null_mut() }
 }
 
+/// Deletes a name from the filesystem.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn unlink(path: *const u8) -> i32 {
     unsafe { syscall1(SYS_UNLINK, path as usize) as i32 }
 }
 
+/// Attempts to create a directory named `path` with permissions `mode`.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn mkdir(path: *const u8, mode: u32) -> i32 {
     unsafe { syscall2(SYS_MKDIR, path as usize, mode as usize) as i32 }
 }
 
+/// Deletes a directory, which must be empty.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `path` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rmdir(path: *const u8) -> i32 {
     unsafe { syscall1(SYS_RMDIR, path as usize) as i32 }
 }
 
+/// Suspends execution of the calling process for `seconds` seconds.
+///
+/// Returns 0 on complete sleep, or unslept seconds remaining if interrupted.
+///
+/// # Safety
+///
+/// Direct system call invocation via `nanosleep`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sleep(seconds: u32) -> u32 {
     let req = Timespec {
@@ -154,6 +317,13 @@ pub unsafe extern "C" fn sleep(seconds: u32) -> u32 {
     rem.tv_sec as u32
 }
 
+/// Suspends execution of the calling process for `usec` microseconds.
+///
+/// Returns 0 on success, or -1 on error.
+///
+/// # Safety
+///
+/// Direct system call invocation via `nanosleep`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn usleep(usec: u64) -> i32 {
     let req = Timespec {
@@ -163,11 +333,25 @@ pub unsafe extern "C" fn usleep(usec: u64) -> i32 {
     unsafe { syscall2(SYS_NANOSLEEP, &req as *const _ as usize, 0) as i32 }
 }
 
+/// Returns global system information.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `info` must point to a valid writable [`Sysinfo`] structure.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn sysinfo(info: *mut Sysinfo) -> i32 {
     unsafe { syscall1(SYS_SYSINFO, info as usize) as i32 }
 }
 
+/// Records an audit log event in the kernel audit trail.
+///
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// `target` and `details` must point to valid null-terminated C strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn audit_log(event_type: u32, target: *const u8, details: *const u8) -> i32 {
     unsafe {
@@ -180,6 +364,13 @@ pub unsafe extern "C" fn audit_log(event_type: u32, target: *const u8, details: 
     }
 }
 
+/// Captures a point-in-time system state audit snapshot.
+///
+/// Returns snapshot identifier on success, or negative error code on failure.
+///
+/// # Safety
+///
+/// `label` must point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn audit_snapshot(label: *const u8, flags: u32) -> i64 {
     unsafe { syscall2(SYS_AUDIT_SNAPSHOT, label as usize, flags as usize) as i64 }

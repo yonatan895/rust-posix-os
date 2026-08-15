@@ -58,6 +58,7 @@ pub fn run_tests(args: &[String]) {
     runner.summary();
 }
 
+/// Parses the optional substring filter argument (`--filter <pattern>` or `-f <pattern>`).
 fn parse_filter(args: &[String]) -> Option<String> {
     let mut iter = args.iter();
     while let Some(arg) = iter.next() {

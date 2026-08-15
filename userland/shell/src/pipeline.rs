@@ -1,8 +1,15 @@
-//! POSIX Shell Pipeline (|) & I/O Redirection (>, >>, <) Execution.
+//! POSIX shell pipeline (`|`) parsing and I/O redirection (`>`, `>>`, `<`) execution engine.
 
 use libc::*;
 use posix_abi::*;
 
+/// Splits a mutable line buffer in-place into null-terminated token arguments in `argv`.
+///
+/// Returns the number of tokens parsed.
+///
+/// # Safety
+///
+/// `line` must point to a valid mutable null-terminated byte slice.
 pub unsafe fn tokenize_line(line: *mut u8, argv: &mut [*const u8; 16]) -> usize {
     let mut argc = 0;
     let mut ptr = line;
@@ -35,19 +42,32 @@ pub unsafe fn tokenize_line(line: *mut u8, argv: &mut [*const u8; 16]) -> usize 
     argc
 }
 
+/// Specifications for standard input and output redirection targets.
 #[derive(Default)]
 pub struct Redirection {
+    /// File path for `<` input redirection, or null if stdin is inherited.
     pub stdin_file: *const u8,
+    /// File path for `>` or `>>` output redirection, or null if stdout is inherited.
     pub stdout_file: *const u8,
+    /// Whether output redirection is in append mode (`>>`).
     pub stdout_append: bool,
 }
 
+/// Represents an individual command execution stage within a pipeline.
 pub struct Stage {
+    /// Argument vector for the stage command.
     pub argv: [*const u8; 16],
+    /// Number of valid arguments in `argv`.
     pub argc: usize,
+    /// I/O redirection settings for this stage.
     pub redir: Redirection,
 }
 
+/// Parses a command segment into arguments and input/output redirection directives.
+///
+/// # Safety
+///
+/// `stage_str` must be a valid mutable pointer to a null-terminated C-string.
 pub unsafe fn parse_stage(stage_str: *mut u8) -> Stage {
     let mut raw_argv: [*const u8; 16] = [core::ptr::null(); 16];
     let raw_argc = unsafe { tokenize_line(stage_str, &mut raw_argv) };
@@ -100,6 +120,11 @@ pub unsafe fn parse_stage(stage_str: *mut u8) -> Stage {
     stage
 }
 
+/// Parses and executes a pipeline containing multiple stages linked by pipes (`|`) and redirections.
+///
+/// # Safety
+///
+/// `line` must point to a valid mutable null-terminated C-string.
 pub unsafe fn execute_pipeline_line(
     line: *mut u8,
     execute_cmd_fn: impl Fn(usize, &[*const u8; 16]),
