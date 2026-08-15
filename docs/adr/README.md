@@ -5,5 +5,6 @@
 | [0001](0001-tcb-boundary.md) | TCB boundary (`ostd` vs `services`) | Accepted, implemented |
 | [0002](0002-locking.md) | Locking discipline, IRQ safety, and lock ordering | Proposed |
 | [0003](0003-task-model.md) | Task model, saved context, and preemption design | Proposed |
+| [0004](0004-arch-abstraction.md) | Architecture abstraction boundary (`x86_64`, `aarch64`, `riscv64`) | Proposed |
 
 Rules for agents and PR shape: [`AGENTS.md`](../../AGENTS.md).

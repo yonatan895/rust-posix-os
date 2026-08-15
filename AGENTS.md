@@ -56,6 +56,7 @@ ADR-0001:
 
 ADR-0002: locking rules (hierarchy, IRQ discipline, no user memory under spinlock) live in docs/adr/0002-locking.md.
 ADR-0003: task model (1:1 process mapping, kernel stack & TSS discipline, preemption) lives in docs/adr/0003-task-model.md.
+ADR-0004: architecture abstraction boundary (`x86_64`, `aarch64`, `riscv64` readiness) lives in docs/adr/0004-arch-abstraction.md.
 
 A change that needs two layers is two PRs (ostd primitive first).
 
