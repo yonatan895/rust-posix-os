@@ -4,11 +4,10 @@
 //! controller (e.g. 8259 PIC) and timer (e.g. 8254 PIT) programming to `ostd::arch`.
 
 #[cfg(target_arch = "x86_64")]
-use crate::ostd::arch::x86_64::{pic, pit};
+use crate::ostd::arch::x86_64::{io_wait, outb, pic, pit};
 
-pub const PIT_FREQUENCY_HZ: u32 = 100;
-pub const PIT_BASE_FREQUENCY_HZ: u32 = 1_193_182;
-pub const PIT_DIVISOR: u16 = (PIT_BASE_FREQUENCY_HZ / PIT_FREQUENCY_HZ) as u16; // 11931 = 0x2E9B
+#[cfg(target_arch = "x86_64")]
+pub use crate::ostd::arch::x86_64::pit::{PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ};
 
 /// Sends End of Interrupt (EOI) acknowledgment to the interrupt controller.
 ///
@@ -43,10 +42,10 @@ pub unsafe fn irq_init() {
         pit::pit_init();
 
         // Unmask IRQ0 (timer) on Master PIC (bit 0 = 0), mask all other IRQs (0xFE)
-        crate::ostd::arch::outb(0x21, 0xFE);
-        crate::ostd::arch::io_wait();
+        outb(0x21, 0xFE);
+        io_wait();
         // Mask all Slave IRQs (0xFF)
-        crate::ostd::arch::outb(0xA1, 0xFF);
-        crate::ostd::arch::io_wait();
+        outb(0xA1, 0xFF);
+        io_wait();
     }
 }

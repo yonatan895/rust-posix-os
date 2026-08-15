@@ -158,4 +158,8 @@ pub unsafe fn set_kernel_stack(stack_top: u64) {
     unsafe {
         (*GLOBAL_TSS.get()).rsp0 = stack_top;
     }
+    // SAFETY: Updating per-CPU kernel stack for fast syscall entry.
+    unsafe {
+        super::syscall::set_syscall_kernel_stack(stack_top);
+    }
 }
