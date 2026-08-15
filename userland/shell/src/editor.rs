@@ -92,50 +92,72 @@ pub fn splice_insert(
     insert_count
 }
 
-const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+pub const B64_CHARS: &[u8; 64] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
-/// Emits an ANSI OSC 52 clipboard copy sequence (`\x1b]52;c;<base64>\x07`) to copy data to the host OS clipboard.
+/// Encodes `src` bytes into RFC 4648 Base64 in `dst`.
+/// Returns the number of encoded bytes written into `dst`.
+pub fn base64_encode(src: &[u8], dst: &mut [u8]) -> usize {
+    let mut out_len = 0;
+    let mut i = 0;
+    while i < src.len() {
+        if out_len + 4 > dst.len() {
+            break;
+        }
+        let rem = src.len() - i;
+        if rem >= 3 {
+            let b0 = src[i];
+            let b1 = src[i + 1];
+            let b2 = src[i + 2];
+            dst[out_len] = B64_CHARS[(b0 >> 2) as usize];
+            dst[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+            dst[out_len + 2] = B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize];
+            dst[out_len + 3] = B64_CHARS[(b2 & 0x3f) as usize];
+            out_len += 4;
+            i += 3;
+        } else if rem == 2 {
+            let b0 = src[i];
+            let b1 = src[i + 1];
+            dst[out_len] = B64_CHARS[(b0 >> 2) as usize];
+            dst[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+            dst[out_len + 2] = B64_CHARS[((b1 & 0x0f) << 2) as usize];
+            dst[out_len + 3] = b'=';
+            out_len += 4;
+            i += 2;
+        } else {
+            let b0 = src[i];
+            dst[out_len] = B64_CHARS[(b0 >> 2) as usize];
+            dst[out_len + 1] = B64_CHARS[((b0 & 0x03) << 4) as usize];
+            dst[out_len + 2] = b'=';
+            dst[out_len + 3] = b'=';
+            out_len += 4;
+            i += 1;
+        }
+    }
+    out_len
+}
+
+/// Emits an ANSI OSC 52 clipboard copy sequence (`\x1b]52;c;<base64>\x07`) in a single syscall
+/// to copy data to the host OS clipboard.
 pub fn osc52_copy(data: &[u8]) {
     if data.is_empty() {
         return;
     }
-    // SAFETY: Emits OSC 52 sequence to stdout fd 1.
+    // Maximum base64 payload for 1024 bytes is 1368 bytes + 8 header/footer bytes = 1376 bytes.
+    let mut out = [0u8; 1536];
+    let header = b"\x1b]52;c;";
+    out[..header.len()].copy_from_slice(header);
+    let mut total = header.len();
+
+    let encoded_len = base64_encode(data, &mut out[total..total + 1400]);
+    total += encoded_len;
+
+    out[total] = 0x07; // BEL terminator
+    total += 1;
+
+    // SAFETY: Flushes complete OSC 52 escape sequence in a single write syscall to stdout fd 1.
     unsafe {
-        libc::write(1, b"\x1b]52;c;".as_ptr(), 7);
-        let mut i = 0;
-        while i < data.len() {
-            let rem = data.len() - i;
-            let mut chunk = [0u8; 4];
-            if rem >= 3 {
-                let b0 = data[i];
-                let b1 = data[i + 1];
-                let b2 = data[i + 2];
-                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
-                chunk[1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
-                chunk[2] = B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize];
-                chunk[3] = B64_CHARS[(b2 & 0x3f) as usize];
-                libc::write(1, chunk.as_ptr(), 4);
-                i += 3;
-            } else if rem == 2 {
-                let b0 = data[i];
-                let b1 = data[i + 1];
-                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
-                chunk[1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
-                chunk[2] = B64_CHARS[((b1 & 0x0f) << 2) as usize];
-                chunk[3] = b'=';
-                libc::write(1, chunk.as_ptr(), 4);
-                i += 2;
-            } else {
-                let b0 = data[i];
-                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
-                chunk[1] = B64_CHARS[((b0 & 0x03) << 4) as usize];
-                chunk[2] = b'=';
-                chunk[3] = b'=';
-                libc::write(1, chunk.as_ptr(), 4);
-                i += 1;
-            }
-        }
-        libc::write(1, b"\x07".as_ptr(), 1);
+        libc::write(1, out.as_ptr(), total);
     }
 }
 
