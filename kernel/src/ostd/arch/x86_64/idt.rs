@@ -98,9 +98,11 @@ pub struct TrapFrame {
 
 impl TrapFrame {
     /// Returns true if this TrapFrame was captured while executing in Ring 3 (User Mode).
+    ///
+    /// Checks that the Code Segment register has RPL = 3 (`cs & 3 == 3`) or matches `USER_CODE_SEL` (`0x20 | 3 = 0x23`).
     #[inline(always)]
     pub fn is_user_mode(&self) -> bool {
-        (self.cs as u16) == super::gdt::USER_CODE_SEL
+        (self.cs & 3) == 3 || (self.cs as u16) == super::gdt::USER_CODE_SEL
     }
 }
 
