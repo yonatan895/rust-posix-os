@@ -4,7 +4,7 @@ mod bench;
 mod build;
 mod initramfs;
 mod qemu;
-mod test;
+mod tests;
 
 use std::env;
 
@@ -33,11 +33,12 @@ fn main() {
         "test" => {
             build::build_all();
             initramfs::create_initramfs();
-            test::run_tests();
+            let test_args = if args.len() > 1 { &args[1..] } else { &[] };
+            tests::run_tests(test_args);
         }
         _ => {
             eprintln!("Unknown command: {}", command);
-            eprintln!("Usage: cargo xtask [bench|build|initramfs|run|test]");
+            eprintln!("Usage: cargo xtask [bench|build|initramfs|run|test] [--filter <pattern>]");
             std::process::exit(1);
         }
     }
