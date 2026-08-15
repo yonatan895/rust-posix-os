@@ -309,7 +309,9 @@ unsafe fn run_efault_hammer_tests() {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    let mut writer = FdWriter(STDERR_FILENO);
+    let _ = core::fmt::write(&mut writer, format_args!("init panic: {}\n", info));
     // SAFETY: Exiting init daemon process with failure code 1.
     unsafe { exit(1) };
 }

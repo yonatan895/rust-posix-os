@@ -252,3 +252,22 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
     }
     written as i32
 }
+
+/// An unbuffered writer targeting a file descriptor, implementing `core::fmt::Write`.
+pub struct FdWriter(pub i32);
+
+impl core::fmt::Write for FdWriter {
+    fn write_str(&mut self, s: &str) -> core::fmt::Result {
+        let bytes = s.as_bytes();
+        let mut written = 0;
+        while written < bytes.len() {
+            // SAFETY: bytes.as_ptr().add(written) is within slice bounds; length is remaining bytes.
+            let ret = unsafe { write(self.0, bytes.as_ptr().add(written), bytes.len() - written) };
+            if ret <= 0 {
+                return Err(core::fmt::Error);
+            }
+            written += ret as usize;
+        }
+        Ok(())
+    }
+}

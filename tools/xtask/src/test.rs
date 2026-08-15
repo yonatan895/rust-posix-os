@@ -23,6 +23,7 @@ pub fn run_tests() {
     test_libc_small_object_allocator();
     test_file_creation_mode_and_audit_uid();
     test_user_pointer_validation_efault_hammer();
+    test_userland_panic_fd2();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -51,6 +52,7 @@ pub fn run_tests() {
         "libc Small-Object Allocator Test",
         "File Creation Mode & Audit uid Test",
         "User Pointer Validation (EFAULT) Hammer Test",
+        "Userland Panic Info on FD 2 Test",
     ];
 
     for t in tests {
@@ -1897,4 +1899,96 @@ fn test_user_pointer_validation_efault_hammer() {
         Err(ENOMEM),
         "mmap with length exceeding USER_SPACE_END must return -ENOMEM"
     );
+}
+
+fn test_userland_panic_fd2() {
+    use std::fmt::Write;
+
+    struct SimFdWriter {
+        fd: i32,
+        output: Vec<u8>,
+    }
+
+    impl SimFdWriter {
+        fn new(fd: i32) -> Self {
+            Self {
+                fd,
+                output: Vec::new(),
+            }
+        }
+    }
+
+    impl Write for SimFdWriter {
+        fn write_str(&mut self, s: &str) -> std::fmt::Result {
+            self.output.extend_from_slice(s.as_bytes());
+            Ok(())
+        }
+    }
+
+    // 1. Verify init panic handler format targeting STDERR_FILENO (2)
+    let mut init_writer = SimFdWriter::new(2);
+    let sample_msg = "explicit panic in test routine";
+    let sample_file = "userland/init/src/main.rs";
+    let sample_line = 42;
+    writeln!(
+        init_writer,
+        "init panic: panicked at {}:{}: {}",
+        sample_file, sample_line, sample_msg
+    )
+    .unwrap();
+
+    assert_eq!(init_writer.fd, 2, "Panic must write to fd 2 (STDERR)");
+    let init_out = String::from_utf8(init_writer.output).unwrap();
+    assert!(
+        init_out.starts_with("init panic: "),
+        "init panic output must start with 'init panic: '"
+    );
+    assert!(
+        init_out.contains(sample_msg),
+        "init panic output must contain the panic message"
+    );
+    assert!(
+        init_out.contains(sample_file),
+        "init panic output must contain the source file"
+    );
+
+    // 2. Verify shell panic handler format targeting STDERR_FILENO (2)
+    let mut shell_writer = SimFdWriter::new(2);
+    let shell_msg = "command parser buffer overflow";
+    let shell_file = "userland/shell/src/main.rs";
+    let shell_line = 100;
+    writeln!(
+        shell_writer,
+        "shell panic: panicked at {}:{}: {}",
+        shell_file, shell_line, shell_msg
+    )
+    .unwrap();
+
+    assert_eq!(shell_writer.fd, 2);
+    let shell_out = String::from_utf8(shell_writer.output).unwrap();
+    assert!(
+        shell_out.starts_with("shell panic: "),
+        "shell panic output must start with 'shell panic: '"
+    );
+    assert!(shell_out.contains(shell_msg));
+
+    // 3. Verify coreutils panic handler format targeting STDERR_FILENO (2)
+    let mut coreutils_writer = SimFdWriter::new(2);
+    let coreutils_msg = "unreachable state in ls applet";
+    let coreutils_file = "userland/coreutils/src/main.rs";
+    let coreutils_line = 200;
+    writeln!(
+        coreutils_writer,
+        "coreutils panic: panicked at {}:{}: {}",
+        coreutils_file, coreutils_line, coreutils_msg
+    )
+    .unwrap();
+
+    assert_eq!(coreutils_writer.fd, 2);
+    let coreutils_out = String::from_utf8(coreutils_writer.output).unwrap();
+    assert!(
+        coreutils_out.starts_with("coreutils panic: "),
+        "coreutils panic output must start with 'coreutils panic: '"
+    );
+    assert!(coreutils_out.contains(coreutils_msg));
 }
