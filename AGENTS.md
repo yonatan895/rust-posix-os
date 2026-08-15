@@ -13,16 +13,6 @@ Zero technical debt. An hour of design beats a week in production.
 5. Do not invent ABI numbers, syscall tables, or dispatcher arms. `libs/posix-abi` is the source of truth.
 6. Do not reconstruct a working protocol from memory. Move or wrap; keep every field (syscall rax writeback, execve rcx/rsp/cr3, Limine requests).
 
-### Bot-Authored PRs
-
-The first push must be review-ready:
-
-1. Title is `type(scope): fact`. Never `Update N files`; the body names the issue, the why, and any userspace-visible format changes (procfs, ABI).
-2. When the diff changes behavior (validator, errno, guard), the new test must cover the boundary the change claims to enforce: overflow at `usize::MAX`, off-by-one at page ends, missing terminator. If no such case exists, the test is a brochure.
-3. Simulated/spec tests in `tools/xtask` say so in a header comment, and never assert tautologies (`elapsed >= 0`, `sum == N` where the sim returns a constant). A sim mirrors real control flow or it does not land.
-4. Benchmarks measure the real path or are labeled simulation. `ns/syscall` requires an actual `syscall` instruction (in-guest, `rdtsc`); a host-side atomic load is `ns/dispatch` at best.
-5. CI is part of the change: a workflow edit is not done until the modified pipeline is green on the PR's own run. Never interpolate `github.event` data into shell; use `env:` + `jq`. New clippy/build steps run on the target the crate actually builds for (`no_std` crates → `x86_64-unknown-none`, not host).
-6. Check the PR's own check runs before pushing: a red or skipped required check on your branch means the work is not done.
 
 ## PR / commit bar
 
