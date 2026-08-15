@@ -131,9 +131,10 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    write_panic_info(STDERR_FILENO, "shell panic", info);
+    // SAFETY: Exiting shell process on panic.
     unsafe {
-        puts(b"shell: fatal panic occurred\n\0".as_ptr());
         exit(1);
     }
 }

@@ -309,7 +309,8 @@ unsafe fn run_efault_hammer_tests() {
 }
 
 #[panic_handler]
-fn panic(_info: &PanicInfo) -> ! {
+fn panic(info: &PanicInfo) -> ! {
+    write_panic_info(STDERR_FILENO, "init panic", info);
     // SAFETY: Exiting init daemon process with failure code 1.
     unsafe { exit(1) };
 }
