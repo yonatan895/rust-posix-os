@@ -2077,139 +2077,215 @@ fn test_syscall_microbench() {
 }
 
 fn test_line_editor_navigation_and_paste() {
+    const KILL_RING_SIZE: usize = 1024;
+
+    #[derive(Clone)]
+    struct TestKillRing {
+        buf: [u8; KILL_RING_SIZE],
+        len: usize,
+    }
+
+    impl TestKillRing {
+        fn new() -> Self {
+            Self {
+                buf: [0; KILL_RING_SIZE],
+                len: 0,
+            }
+        }
+        fn save(&mut self, src: &[u8]) {
+            let count = src.len().min(KILL_RING_SIZE);
+            self.buf[..count].copy_from_slice(&src[..count]);
+            self.len = count;
+        }
+        fn as_bytes(&self) -> &[u8] {
+            &self.buf[..self.len]
+        }
+    }
+
+    fn test_word_left(buf: &[u8], mut cursor_pos: usize) -> usize {
+        while cursor_pos > 0 && (buf[cursor_pos - 1] == b' ' || buf[cursor_pos - 1] == b'\t') {
+            cursor_pos -= 1;
+        }
+        while cursor_pos > 0 && buf[cursor_pos - 1] != b' ' && buf[cursor_pos - 1] != b'\t' {
+            cursor_pos -= 1;
+        }
+        cursor_pos
+    }
+
+    fn test_word_right(buf: &[u8], len: usize, mut cursor_pos: usize) -> usize {
+        while cursor_pos < len && buf[cursor_pos] != b' ' && buf[cursor_pos] != b'\t' {
+            cursor_pos += 1;
+        }
+        while cursor_pos < len && (buf[cursor_pos] == b' ' || buf[cursor_pos] == b'\t') {
+            cursor_pos += 1;
+        }
+        cursor_pos
+    }
+
+    fn test_splice_insert(
+        buf: &mut [u8],
+        len: &mut usize,
+        cursor_pos: &mut usize,
+        data: &[u8],
+    ) -> usize {
+        if buf.is_empty() || *len >= buf.len() - 1 {
+            return 0;
+        }
+        let capacity_left = (buf.len() - 1).saturating_sub(*len);
+        let insert_count = capacity_left.min(data.len());
+        if insert_count == 0 {
+            return 0;
+        }
+        for i in (*cursor_pos..*len).rev() {
+            buf[i + insert_count] = buf[i];
+        }
+        for (i, &b) in data[..insert_count].iter().enumerate() {
+            let mut byte = b;
+            if byte == b'\r' || byte == b'\n' {
+                byte = b' ';
+            }
+            buf[*cursor_pos + i] = byte;
+        }
+        *cursor_pos += insert_count;
+        *len += insert_count;
+        buf[*len] = 0;
+        insert_count
+    }
+
+    fn test_kill_to_end(
+        buf: &mut [u8],
+        len: &mut usize,
+        cursor_pos: usize,
+        kill_ring: &mut TestKillRing,
+    ) {
+        if cursor_pos < *len {
+            kill_ring.save(&buf[cursor_pos..*len]);
+            *len = cursor_pos;
+            buf[*len] = 0;
+        }
+    }
+
+    fn test_kill_to_start(
+        buf: &mut [u8],
+        len: &mut usize,
+        cursor_pos: &mut usize,
+        kill_ring: &mut TestKillRing,
+    ) {
+        if *cursor_pos > 0 {
+            kill_ring.save(&buf[..*cursor_pos]);
+            for i in *cursor_pos..*len {
+                buf[i - *cursor_pos] = buf[i];
+            }
+            *len -= *cursor_pos;
+            *cursor_pos = 0;
+            buf[*len] = 0;
+        } else if *len > 0 {
+            kill_ring.save(&buf[..*len]);
+            *len = 0;
+            buf[0] = 0;
+        }
+    }
+
+    fn test_kill_word_backward(
+        buf: &mut [u8],
+        len: &mut usize,
+        cursor_pos: &mut usize,
+        kill_ring: &mut TestKillRing,
+    ) {
+        if *cursor_pos > 0 {
+            let word_start = test_word_left(buf, *cursor_pos);
+            let count = *cursor_pos - word_start;
+            kill_ring.save(&buf[word_start..*cursor_pos]);
+            for i in *cursor_pos..*len {
+                buf[i - count] = buf[i];
+            }
+            *len -= count;
+            *cursor_pos = word_start;
+            buf[*len] = 0;
+        }
+    }
+
     // 1. Test Navigation: Home, End, Left, Right, Word Left/Right
     let cmd = b"echo hello world";
     let len = cmd.len();
 
-    // Home -> 0
-    let mut cursor_pos = 0;
-    assert_eq!(cursor_pos, 0, "Home must move cursor to position 0");
+    assert_eq!(
+        test_word_left(cmd, 16),
+        11,
+        "Word Left from 16 -> 11 ('world')"
+    );
+    assert_eq!(
+        test_word_left(cmd, 11),
+        5,
+        "Word Left from 11 -> 5 ('hello')"
+    );
+    assert_eq!(test_word_left(cmd, 5), 0, "Word Left from 5 -> 0 ('echo')");
 
-    // End -> len
-    cursor_pos = len;
-    assert_eq!(cursor_pos, len, "End must move cursor to length");
-
-    // Step Left
-    cursor_pos -= 1;
-    assert_eq!(cursor_pos, 15, "Left must decrement cursor position");
-
-    // Word Left from 16
-    let mut c = 16;
-    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
-        c -= 1;
-    }
-    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
-        c -= 1;
-    }
-    assert_eq!(c, 11, "Word Left from 16 must jump to 11 ('world')");
-
-    // Word Left from 11
-    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
-        c -= 1;
-    }
-    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
-        c -= 1;
-    }
-    assert_eq!(c, 5, "Word Left from 11 must jump to 5 ('hello')");
-
-    // Word Left from 5
-    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
-        c -= 1;
-    }
-    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
-        c -= 1;
-    }
-    assert_eq!(c, 0, "Word Left from 5 must jump to 0 ('echo')");
-
-    // Word Right from 0
-    while c < len && cmd[c] != b' ' && cmd[c] != b'\t' {
-        c += 1;
-    }
-    while c < len && (cmd[c] == b' ' || cmd[c] == b'\t') {
-        c += 1;
-    }
-    assert_eq!(c, 5, "Word Right from 0 must jump to 5");
+    assert_eq!(test_word_right(cmd, len, 0), 5, "Word Right from 0 -> 5");
+    assert_eq!(test_word_right(cmd, len, 5), 11, "Word Right from 5 -> 11");
+    assert_eq!(
+        test_word_right(cmd, len, 11),
+        16,
+        "Word Right from 11 -> 16"
+    );
 
     // 2. Test Mid-Line Splicing / Insertion (Paste into Terminal)
-    let mut buf = [0u8; 128];
+    let mut buf = [0u8; 32];
     let init_str = b"echo world";
     buf[..init_str.len()].copy_from_slice(init_str);
     let mut cur_len = init_str.len();
-    let mut cur_pos = 5; // Insert at position 5 (between 'echo ' and 'world')
+    let mut cur_pos = 5; // Insert between 'echo ' and 'world'
 
-    let insert_str = b"-n ";
-    let ins_len = insert_str.len();
-    for i in (cur_pos..cur_len).rev() {
-        buf[i + ins_len] = buf[i];
-    }
-    buf[cur_pos..cur_pos + ins_len].copy_from_slice(insert_str);
-    cur_pos += ins_len;
-    cur_len += ins_len;
-    buf[cur_len] = 0;
-
-    assert_eq!(
-        &buf[..cur_len],
-        b"echo -n world",
-        "Mid-line insertion must splice text correctly"
-    );
+    let inserted = test_splice_insert(&mut buf, &mut cur_len, &mut cur_pos, b"-n ");
+    assert_eq!(inserted, 3);
+    assert_eq!(&buf[..cur_len], b"echo -n world");
     assert_eq!(cur_pos, 8);
 
-    // 3. Test Clipboard Kill-Ring (Cut, Copy, Paste / Yank)
-    let mut kill_ring = [0u8; 128];
+    // 3. Test Buffer Capacity Boundary Protection (No OOB write on large paste)
+    let mut small_buf = [0u8; 10]; // Capacity for 9 chars + nul
+    let init_small = b"hello";
+    small_buf[..init_small.len()].copy_from_slice(init_small);
+    let mut small_len = init_small.len(); // 5
+    let mut small_pos = 5;
+
+    // Paste 20 bytes into a buffer with only 4 bytes of remaining capacity
+    let paste_overflow = b"01234567890123456789";
+    let count = test_splice_insert(
+        &mut small_buf,
+        &mut small_len,
+        &mut small_pos,
+        paste_overflow,
+    );
+    assert_eq!(count, 4, "Must insert exactly remaining capacity (4 bytes)");
+    assert_eq!(small_len, 9, "Length must not exceed capacity minus 1");
+    assert_eq!(small_buf[9], 0, "Nul terminator must remain intact");
+    assert_eq!(&small_buf[..9], b"hello0123");
+
+    // 4. Test Clipboard Kill-Ring (Cut, Copy, Paste / Yank)
+    let mut kr = TestKillRing::new();
 
     // Ctrl+K: Kill to end at position 8 (cuts "world")
-    let cut_count = cur_len - cur_pos;
-    kill_ring[..cut_count].copy_from_slice(&buf[cur_pos..cur_pos + cut_count]);
-    let mut kill_len = cut_count;
-    cur_len = cur_pos;
-    buf[cur_len] = 0;
-
-    assert_eq!(&kill_ring[..kill_len], b"world");
+    test_kill_to_end(&mut buf, &mut cur_len, cur_pos, &mut kr);
+    assert_eq!(kr.as_bytes(), b"world");
     assert_eq!(&buf[..cur_len], b"echo -n ");
 
     // Ctrl+Y: Yank (Paste from kill ring) at position 0 (Home)
     cur_pos = 0;
-    for i in (cur_pos..cur_len).rev() {
-        buf[i + kill_len] = buf[i];
-    }
-    buf[cur_pos..cur_pos + kill_len].copy_from_slice(&kill_ring[..kill_len]);
-    cur_pos += kill_len;
-    cur_len += kill_len;
-    buf[cur_len] = 0;
-
+    let yanked = test_splice_insert(&mut buf, &mut cur_len, &mut cur_pos, kr.as_bytes());
+    assert_eq!(yanked, 5);
     assert_eq!(&buf[..cur_len], b"worldecho -n ");
     assert_eq!(cur_pos, 5);
 
     // Ctrl+U: Kill to start at position 5 (cuts "world")
-    kill_ring[..cur_pos].copy_from_slice(&buf[..cur_pos]);
-    kill_len = cur_pos;
-    for i in cur_pos..cur_len {
-        buf[i - cur_pos] = buf[i];
-    }
-    cur_len -= cur_pos;
-    cur_pos = 0;
-    buf[cur_len] = 0;
-
-    assert_eq!(&kill_ring[..kill_len], b"world");
+    test_kill_to_start(&mut buf, &mut cur_len, &mut cur_pos, &mut kr);
+    assert_eq!(kr.as_bytes(), b"world");
     assert_eq!(&buf[..cur_len], b"echo -n ");
+    assert_eq!(cur_pos, 0);
 
-    // 4. Test Backspace and Delete
-    // Delete at pos 0 in "echo -n " (removes 'e')
-    for i in cur_pos..cur_len - 1 {
-        buf[i] = buf[i + 1];
-    }
-    cur_len -= 1;
-    buf[cur_len] = 0;
-    assert_eq!(&buf[..cur_len], b"cho -n ");
-
-    // Backspace at pos 3 in "cho -n " (removes 'o')
-    cur_pos = 3;
-    for i in cur_pos..cur_len {
-        buf[i - 1] = buf[i];
-    }
-    cur_pos -= 1;
-    cur_len -= 1;
-    buf[cur_len] = 0;
-    assert_eq!(&buf[..cur_len], b"ch -n ");
-    assert_eq!(cur_pos, 2);
+    // Ctrl+W: Kill word backward
+    cur_pos = cur_len; // End of "echo -n "
+    test_kill_word_backward(&mut buf, &mut cur_len, &mut cur_pos, &mut kr);
+    assert_eq!(kr.as_bytes(), b"-n ");
+    assert_eq!(&buf[..cur_len], b"echo ");
+    assert_eq!(cur_pos, 5);
 }

@@ -7,7 +7,8 @@ use crate::line_draw::LineBuffer;
 
 pub const KILL_RING_SIZE: usize = 1024;
 
-#[derive(Clone, Copy)]
+/// In-memory terminal clipboard / kill-ring buffer.
+#[derive(Clone)]
 pub struct KillRing {
     pub buf: [u8; KILL_RING_SIZE],
     pub len: usize,
@@ -27,14 +28,159 @@ impl KillRing {
         self.len = count;
     }
 
-    pub fn yank_into(&self, dest: &mut [u8]) -> usize {
-        let count = self.len.min(dest.len());
-        dest[..count].copy_from_slice(&self.buf[..count]);
-        count
+    pub fn as_bytes(&self) -> &[u8] {
+        &self.buf[..self.len]
     }
 }
 
+// SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
 pub static mut KILL_RING: KillRing = KillRing::new();
+
+/// Moves cursor backward by one word.
+pub fn word_left(buf: &[u8], mut cursor_pos: usize) -> usize {
+    while cursor_pos > 0 && (buf[cursor_pos - 1] == b' ' || buf[cursor_pos - 1] == b'\t') {
+        cursor_pos -= 1;
+    }
+    while cursor_pos > 0 && buf[cursor_pos - 1] != b' ' && buf[cursor_pos - 1] != b'\t' {
+        cursor_pos -= 1;
+    }
+    cursor_pos
+}
+
+/// Moves cursor forward by one word.
+pub fn word_right(buf: &[u8], len: usize, mut cursor_pos: usize) -> usize {
+    while cursor_pos < len && buf[cursor_pos] != b' ' && buf[cursor_pos] != b'\t' {
+        cursor_pos += 1;
+    }
+    while cursor_pos < len && (buf[cursor_pos] == b' ' || buf[cursor_pos] == b'\t') {
+        cursor_pos += 1;
+    }
+    cursor_pos
+}
+
+/// Splices `data` into `buf` at `cursor_pos` safely without out-of-bounds writes.
+/// Returns the number of bytes successfully inserted.
+pub fn splice_insert(
+    buf: &mut [u8],
+    len: &mut usize,
+    cursor_pos: &mut usize,
+    data: &[u8],
+) -> usize {
+    if buf.is_empty() || *len >= buf.len() - 1 {
+        return 0;
+    }
+    let capacity_left = (buf.len() - 1).saturating_sub(*len);
+    let insert_count = capacity_left.min(data.len());
+    if insert_count == 0 {
+        return 0;
+    }
+    // Shift tail elements to the right by insert_count
+    for i in (*cursor_pos..*len).rev() {
+        buf[i + insert_count] = buf[i];
+    }
+    // Copy data into the gap
+    for (i, &b) in data[..insert_count].iter().enumerate() {
+        let mut byte = b;
+        if byte == b'\r' || byte == b'\n' {
+            byte = b' ';
+        }
+        buf[*cursor_pos + i] = byte;
+    }
+    *cursor_pos += insert_count;
+    *len += insert_count;
+    buf[*len] = 0;
+    insert_count
+}
+
+/// Kills (cuts) text from `cursor_pos` to the end of the line into `kill_ring`.
+pub fn kill_to_end(buf: &mut [u8], len: &mut usize, cursor_pos: usize, kill_ring: &mut KillRing) {
+    if cursor_pos < *len {
+        kill_ring.save(&buf[cursor_pos..*len]);
+        *len = cursor_pos;
+        buf[*len] = 0;
+    }
+}
+
+/// Kills (cuts) text from the start of the line up to `cursor_pos` into `kill_ring`.
+pub fn kill_to_start(
+    buf: &mut [u8],
+    len: &mut usize,
+    cursor_pos: &mut usize,
+    kill_ring: &mut KillRing,
+) {
+    if *cursor_pos > 0 {
+        kill_ring.save(&buf[..*cursor_pos]);
+        for i in *cursor_pos..*len {
+            buf[i - *cursor_pos] = buf[i];
+        }
+        *len -= *cursor_pos;
+        *cursor_pos = 0;
+        buf[*len] = 0;
+    } else if *len > 0 {
+        kill_ring.save(&buf[..*len]);
+        *len = 0;
+        buf[0] = 0;
+    }
+}
+
+/// Kills (cuts) the previous word before `cursor_pos` into `kill_ring`.
+pub fn kill_word_backward(
+    buf: &mut [u8],
+    len: &mut usize,
+    cursor_pos: &mut usize,
+    kill_ring: &mut KillRing,
+) {
+    if *cursor_pos > 0 {
+        let word_start = word_left(buf, *cursor_pos);
+        let count = *cursor_pos - word_start;
+        kill_ring.save(&buf[word_start..*cursor_pos]);
+        for i in *cursor_pos..*len {
+            buf[i - count] = buf[i];
+        }
+        *len -= count;
+        *cursor_pos = word_start;
+        buf[*len] = 0;
+    }
+}
+
+/// Yanks (pastes) the contents of `kill_ring` into `buf` at `cursor_pos`.
+pub fn yank(
+    buf: &mut [u8],
+    len: &mut usize,
+    cursor_pos: &mut usize,
+    kill_ring: &KillRing,
+) -> usize {
+    splice_insert(buf, len, cursor_pos, kill_ring.as_bytes())
+}
+
+/// Deletes the character preceding `cursor_pos` (Backspace).
+pub fn backspace(buf: &mut [u8], len: &mut usize, cursor_pos: &mut usize) -> bool {
+    if *cursor_pos > 0 {
+        for i in *cursor_pos..*len {
+            buf[i - 1] = buf[i];
+        }
+        *cursor_pos -= 1;
+        *len -= 1;
+        buf[*len] = 0;
+        true
+    } else {
+        false
+    }
+}
+
+/// Deletes the character at `cursor_pos` (Delete key / Ctrl+D).
+pub fn delete_char(buf: &mut [u8], len: &mut usize, cursor_pos: usize) -> bool {
+    if cursor_pos < *len {
+        for i in cursor_pos..*len - 1 {
+            buf[i] = buf[i + 1];
+        }
+        *len -= 1;
+        buf[*len] = 0;
+        true
+    } else {
+        false
+    }
+}
 
 pub fn is_known_command(cmd: &str, known_commands: &[&str]) -> bool {
     for &k in known_commands {
@@ -52,6 +198,7 @@ pub unsafe fn repaint_prompt_line(
     cursor_pos: usize,
     known_commands: &[&str],
 ) {
+    // SAFETY: Repainting prompt line via single-write LineBuffer syscall.
     unsafe {
         crate::line_draw::paint_prompt(cwd, buf, len, cursor_pos, |cmd| {
             is_known_command(cmd, known_commands)
@@ -70,6 +217,7 @@ pub unsafe fn clear_menu_line(
     let mut out = LineBuffer::new(&mut scratch);
     out.push_str("\n\r\x1b[K\x1b[A");
     out.flush();
+    // SAFETY: Redrawing prompt after clearing menu line.
     unsafe {
         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
     }
@@ -90,12 +238,14 @@ enum EscSeq {
 }
 
 unsafe fn parse_escape_sequence() -> EscSeq {
+    // SAFETY: Reading subsequent bytes of ANSI escape sequence from stdin.
     let b2 = unsafe { libc::getchar() };
     if b2 < 0 {
         return EscSeq::None;
     }
     match b2 as u8 {
         b'[' => {
+            // SAFETY: Reading parameter/action byte from stdin.
             let b3 = unsafe { libc::getchar() };
             if b3 < 0 {
                 return EscSeq::None;
@@ -108,10 +258,12 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                 b'H' => EscSeq::Home,
                 b'F' => EscSeq::End,
                 b'1' => {
+                    // SAFETY: Reading subsequent byte in multi-byte escape sequence.
                     let b4 = unsafe { libc::getchar() };
                     if b4 == b'~' as i32 {
                         EscSeq::Home
                     } else if b4 == b';' as i32 {
+                        // SAFETY: Reading modifier and key code.
                         let b5 = unsafe { libc::getchar() };
                         let b6 = unsafe { libc::getchar() };
                         if b5 == b'5' as i32 {
@@ -130,6 +282,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                     }
                 }
                 b'2' => {
+                    // SAFETY: Checking for bracketed paste start sequence `\x1b[200~`.
                     let b4 = unsafe { libc::getchar() };
                     let b5 = unsafe { libc::getchar() };
                     let b6 = unsafe { libc::getchar() };
@@ -140,6 +293,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                     }
                 }
                 b'3' => {
+                    // SAFETY: Reading tilde terminator for Delete key `\x1b[3~`.
                     let b4 = unsafe { libc::getchar() };
                     if b4 == b'~' as i32 {
                         EscSeq::Delete
@@ -148,6 +302,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                     }
                 }
                 b'4' => {
+                    // SAFETY: Reading tilde terminator for End key `\x1b[4~`.
                     let b4 = unsafe { libc::getchar() };
                     if b4 == b'~' as i32 {
                         EscSeq::End
@@ -156,6 +311,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                     }
                 }
                 b'7' => {
+                    // SAFETY: Reading tilde terminator for Home key `\x1b[7~`.
                     let b4 = unsafe { libc::getchar() };
                     if b4 == b'~' as i32 {
                         EscSeq::Home
@@ -164,6 +320,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
                     }
                 }
                 b'8' => {
+                    // SAFETY: Reading tilde terminator for End key `\x1b[8~`.
                     let b4 = unsafe { libc::getchar() };
                     if b4 == b'~' as i32 {
                         EscSeq::End
@@ -175,6 +332,7 @@ unsafe fn parse_escape_sequence() -> EscSeq {
             }
         }
         b'O' => {
+            // SAFETY: Reading application mode key character.
             let b3 = unsafe { libc::getchar() };
             if b3 < 0 {
                 return EscSeq::None;
@@ -195,12 +353,15 @@ unsafe fn parse_escape_sequence() -> EscSeq {
     }
 }
 
+/// Reads pasted characters from bracketed paste mode (`\x1b[200~` ... `\x1b[201~`).
+/// Grammar: reads stream until trailer `ESC [ 2 0 1 ~`, with partial-match byte replay.
 unsafe fn read_bracketed_paste(buf: &mut [u8], len: &mut usize, cursor_pos: &mut usize) {
     let mut paste_buf = [0u8; 1024];
     let mut paste_len = 0;
     let mut state = 0;
 
     loop {
+        // SAFETY: Reading character from terminal stdin.
         let b = unsafe { libc::getchar() };
         if b < 0 {
             break;
@@ -290,21 +451,8 @@ unsafe fn read_bracketed_paste(buf: &mut [u8], len: &mut usize, cursor_pos: &mut
         }
     }
 
-    if paste_len > 0 && *len < buf.len() - 1 {
-        let max_insert = (buf.len() - 1 - *len).min(paste_len);
-        for i in (*cursor_pos..*len).rev() {
-            buf[i + max_insert] = buf[i];
-        }
-        for i in 0..max_insert {
-            let mut byte = paste_buf[i];
-            if byte == b'\r' || byte == b'\n' {
-                byte = b' ';
-            }
-            buf[*cursor_pos + i] = byte;
-        }
-        *cursor_pos += max_insert;
-        *len += max_insert;
-        buf[*len] = 0;
+    if paste_len > 0 {
+        splice_insert(buf, len, cursor_pos, &paste_buf[..paste_len]);
     }
 }
 
@@ -325,11 +473,13 @@ pub unsafe fn read_line_with_history(
     init_out.push_str("\x1b[?2004h");
     init_out.flush();
 
+    // SAFETY: Repaint initial empty prompt line.
     unsafe {
         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
     }
 
     loop {
+        // SAFETY: Reading next character from terminal stdin.
         let b = unsafe { libc::getchar() };
         if b < 0 {
             continue;
@@ -346,12 +496,14 @@ pub unsafe fn read_line_with_history(
         } else if ch == 0x01 {
             // Ctrl+A -> Move cursor to start of line
             cursor_pos = 0;
+            // SAFETY: Repainting prompt with cursor at start of line.
             unsafe {
                 repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
         } else if ch == 0x05 {
             // Ctrl+E -> Move cursor to end of line
             cursor_pos = len;
+            // SAFETY: Repainting prompt with cursor at end of line.
             unsafe {
                 repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
@@ -359,6 +511,7 @@ pub unsafe fn read_line_with_history(
             // Ctrl+B -> Move cursor backward
             if cursor_pos > 0 {
                 cursor_pos -= 1;
+                // SAFETY: Repainting prompt after cursor move left.
                 unsafe {
                     repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                 }
@@ -367,112 +520,70 @@ pub unsafe fn read_line_with_history(
             // Ctrl+F -> Move cursor forward
             if cursor_pos < len {
                 cursor_pos += 1;
+                // SAFETY: Repainting prompt after cursor move right.
                 unsafe {
                     repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                 }
             }
         } else if ch == 0x0b {
             // Ctrl+K -> Kill from cursor to end of line
-            if cursor_pos < len {
-                unsafe {
-                    let kr = &raw mut KILL_RING;
-                    (*kr).save(&buf[cursor_pos..len]);
-                }
-                len = cursor_pos;
-                buf[len] = 0;
-                if history_cursor == 0 {
-                    draft_len = len.min(MAX_CMD_LEN);
-                    draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
-                }
-                unsafe {
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                }
+            // SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
+            unsafe {
+                let kr = &raw mut KILL_RING;
+                kill_to_end(buf, &mut len, cursor_pos, &mut *kr);
+            }
+            if history_cursor == 0 {
+                draft_len = len.min(MAX_CMD_LEN);
+                draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
+            }
+            // SAFETY: Repainting prompt after killing text to end of line.
+            unsafe {
+                repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
         } else if ch == 0x15 {
-            // Ctrl+U -> Kill from cursor to start of line (or whole line if cursor is at end)
-            if cursor_pos > 0 {
-                unsafe {
-                    let kr = &raw mut KILL_RING;
-                    (*kr).save(&buf[..cursor_pos]);
-                }
-                for i in cursor_pos..len {
-                    buf[i - cursor_pos] = buf[i];
-                }
-                len -= cursor_pos;
-                cursor_pos = 0;
-                buf[len] = 0;
-                if history_cursor == 0 {
-                    draft_len = len.min(MAX_CMD_LEN);
-                    draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
-                }
-                unsafe {
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                }
-            } else if len > 0 {
-                unsafe {
-                    let kr = &raw mut KILL_RING;
-                    (*kr).save(&buf[..len]);
-                }
-                len = 0;
-                buf[0] = 0;
-                if history_cursor == 0 {
-                    draft_len = 0;
-                }
-                unsafe {
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                }
+            // Ctrl+U -> Kill from cursor to start of line (or whole line if cursor is at start)
+            // SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
+            unsafe {
+                let kr = &raw mut KILL_RING;
+                kill_to_start(buf, &mut len, &mut cursor_pos, &mut *kr);
+            }
+            if history_cursor == 0 {
+                draft_len = len.min(MAX_CMD_LEN);
+                draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
+            }
+            // SAFETY: Repainting prompt after killing text to start of line.
+            unsafe {
+                repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
         } else if ch == 0x17 {
             // Ctrl+W -> Kill previous word
-            if cursor_pos > 0 {
-                let mut word_start = cursor_pos;
-                while word_start > 0
-                    && (buf[word_start - 1] == b' ' || buf[word_start - 1] == b'\t')
-                {
-                    word_start -= 1;
-                }
-                while word_start > 0 && buf[word_start - 1] != b' ' && buf[word_start - 1] != b'\t'
-                {
-                    word_start -= 1;
-                }
-                let count = cursor_pos - word_start;
-                unsafe {
-                    let kr = &raw mut KILL_RING;
-                    (*kr).save(&buf[word_start..cursor_pos]);
-                }
-                for i in cursor_pos..len {
-                    buf[i - count] = buf[i];
-                }
-                len -= count;
-                cursor_pos = word_start;
-                buf[len] = 0;
-                if history_cursor == 0 {
-                    draft_len = len.min(MAX_CMD_LEN);
-                    draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
-                }
-                unsafe {
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                }
+            // SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
+            unsafe {
+                let kr = &raw mut KILL_RING;
+                kill_word_backward(buf, &mut len, &mut cursor_pos, &mut *kr);
+            }
+            if history_cursor == 0 {
+                draft_len = len.min(MAX_CMD_LEN);
+                draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
+            }
+            // SAFETY: Repainting prompt after killing previous word.
+            unsafe {
+                repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
         } else if ch == 0x19 {
             // Ctrl+Y -> Yank (paste from kill ring)
+            // SAFETY: Single-threaded REPL execution in Ring 3 interactive shell daemon.
             unsafe {
                 let kr = &raw const KILL_RING;
-                let klen = (*kr).len;
-                if klen > 0 && len + klen < buf.len() - 1 {
-                    for i in (cursor_pos..len).rev() {
-                        buf[i + klen] = buf[i];
-                    }
-                    (*kr).yank_into(&mut buf[cursor_pos..cursor_pos + klen]);
-                    cursor_pos += klen;
-                    len += klen;
-                    buf[len] = 0;
-                    if history_cursor == 0 {
-                        draft_len = len.min(MAX_CMD_LEN);
-                        draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
-                    }
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                }
+                yank(buf, &mut len, &mut cursor_pos, &*kr);
+            }
+            if history_cursor == 0 {
+                draft_len = len.min(MAX_CMD_LEN);
+                draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
+            }
+            // SAFETY: Repainting prompt after yanking from kill ring.
+            unsafe {
+                repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
         } else if ch == 0x0c {
             // Ctrl+L -> Clear screen and repaint prompt
@@ -480,6 +591,7 @@ pub unsafe fn read_line_with_history(
             let mut out = LineBuffer::new(&mut scratch);
             out.push_str("\x1b[2J\x1b[H");
             out.flush();
+            // SAFETY: Repainting prompt after screen clear.
             unsafe {
                 repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
             }
@@ -491,21 +603,18 @@ pub unsafe fn read_line_with_history(
                 out.push_str("\x1b[?2004l\n\r");
                 out.flush();
                 return 0;
-            } else if cursor_pos < len {
-                for i in cursor_pos..len - 1 {
-                    buf[i] = buf[i + 1];
-                }
-                len -= 1;
-                buf[len] = 0;
+            } else if delete_char(buf, &mut len, cursor_pos) {
                 if history_cursor == 0 {
                     draft_len = len.min(MAX_CMD_LEN);
                     draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                 }
+                // SAFETY: Repainting prompt after delete character.
                 unsafe {
                     repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                 }
             }
         } else if ch == b'\t' {
+            // SAFETY: Interactive tab completion.
             unsafe {
                 handle_tab_completion(
                     cwd,
@@ -519,42 +628,43 @@ pub unsafe fn read_line_with_history(
             }
         } else if ch == 0x7f || ch == 0x08 {
             // Backspace -> delete character before cursor
-            if cursor_pos > 0 {
-                for i in cursor_pos..len {
-                    buf[i - 1] = buf[i];
-                }
-                cursor_pos -= 1;
-                len -= 1;
-                buf[len] = 0;
+            if backspace(buf, &mut len, &mut cursor_pos) {
                 if history_cursor == 0 {
                     draft_len = len.min(MAX_CMD_LEN);
                     draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                 }
+                // SAFETY: Repainting prompt after backspace.
                 unsafe {
                     repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                 }
             }
         } else if ch == 0x1b {
+            // SAFETY: Parsing ANSI escape sequence.
             match unsafe { parse_escape_sequence() } {
                 EscSeq::Up => {
                     if history_cursor == 0 {
                         draft_len = len.min(MAX_CMD_LEN);
                         draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                     }
+                    // SAFETY: Traversing previous history entry.
                     unsafe {
                         history_prev(&mut history_cursor, buf, &mut len);
                         cursor_pos = len;
                         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                     }
                 }
-                EscSeq::Down => unsafe {
-                    history_next(&mut history_cursor, buf, &mut len, &draft_buf, draft_len);
-                    cursor_pos = len;
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                },
+                EscSeq::Down => {
+                    // SAFETY: Traversing next history entry.
+                    unsafe {
+                        history_next(&mut history_cursor, buf, &mut len, &draft_buf, draft_len);
+                        cursor_pos = len;
+                        repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
+                    }
+                }
                 EscSeq::Left => {
                     if cursor_pos > 0 {
                         cursor_pos -= 1;
+                        // SAFETY: Repainting prompt after moving cursor left.
                         unsafe {
                             repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                         }
@@ -563,6 +673,7 @@ pub unsafe fn read_line_with_history(
                 EscSeq::Right => {
                     if cursor_pos < len {
                         cursor_pos += 1;
+                        // SAFETY: Repainting prompt after moving cursor right.
                         unsafe {
                             repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                         }
@@ -570,85 +681,68 @@ pub unsafe fn read_line_with_history(
                 }
                 EscSeq::Home => {
                     cursor_pos = 0;
+                    // SAFETY: Repainting prompt at start of line.
                     unsafe {
                         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                     }
                 }
                 EscSeq::End => {
                     cursor_pos = len;
+                    // SAFETY: Repainting prompt at end of line.
                     unsafe {
                         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                     }
                 }
                 EscSeq::WordLeft => {
-                    while cursor_pos > 0
-                        && (buf[cursor_pos - 1] == b' ' || buf[cursor_pos - 1] == b'\t')
-                    {
-                        cursor_pos -= 1;
-                    }
-                    while cursor_pos > 0
-                        && buf[cursor_pos - 1] != b' '
-                        && buf[cursor_pos - 1] != b'\t'
-                    {
-                        cursor_pos -= 1;
-                    }
+                    cursor_pos = word_left(buf, cursor_pos);
+                    // SAFETY: Repainting prompt after word left jump.
                     unsafe {
                         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                     }
                 }
                 EscSeq::WordRight => {
-                    while cursor_pos < len && buf[cursor_pos] != b' ' && buf[cursor_pos] != b'\t' {
-                        cursor_pos += 1;
-                    }
-                    while cursor_pos < len && (buf[cursor_pos] == b' ' || buf[cursor_pos] == b'\t')
-                    {
-                        cursor_pos += 1;
-                    }
+                    cursor_pos = word_right(buf, len, cursor_pos);
+                    // SAFETY: Repainting prompt after word right jump.
                     unsafe {
                         repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                     }
                 }
                 EscSeq::Delete => {
-                    if cursor_pos < len {
-                        for i in cursor_pos..len - 1 {
-                            buf[i] = buf[i + 1];
-                        }
-                        len -= 1;
-                        buf[len] = 0;
+                    if delete_char(buf, &mut len, cursor_pos) {
                         if history_cursor == 0 {
                             draft_len = len.min(MAX_CMD_LEN);
                             draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                         }
+                        // SAFETY: Repainting prompt after deleting character under cursor.
                         unsafe {
                             repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                         }
                     }
                 }
-                EscSeq::BracketedPasteStart => unsafe {
-                    read_bracketed_paste(buf, &mut len, &mut cursor_pos);
+                EscSeq::BracketedPasteStart => {
+                    // SAFETY: Reading bracketed paste sequence from terminal stdin.
+                    unsafe {
+                        read_bracketed_paste(buf, &mut len, &mut cursor_pos);
+                    }
                     if history_cursor == 0 {
                         draft_len = len.min(MAX_CMD_LEN);
                         draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                     }
-                    repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
-                },
+                    // SAFETY: Repainting prompt after bracketed paste.
+                    unsafe {
+                        repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
+                    }
+                }
                 EscSeq::None => {}
             }
         } else if ch >= 0x20 && ch < 0x7f {
-            if len < buf.len() - 1 {
-                if cursor_pos < len {
-                    for i in (cursor_pos..len).rev() {
-                        buf[i + 1] = buf[i];
-                    }
-                }
-                buf[cursor_pos] = ch;
-                cursor_pos += 1;
-                len += 1;
-                buf[len] = 0;
+            let ch_slice = [ch];
+            if splice_insert(buf, &mut len, &mut cursor_pos, &ch_slice) > 0 {
                 if history_cursor == 0 {
                     draft_len = len.min(MAX_CMD_LEN);
                     draft_buf[..draft_len].copy_from_slice(&buf[..draft_len]);
                 }
+                // SAFETY: Repainting prompt after inserting printable character.
                 unsafe {
                     repaint_prompt_line(cwd, buf, len, cursor_pos, known_commands);
                 }
@@ -657,6 +751,7 @@ pub unsafe fn read_line_with_history(
     }
     buf[len] = 0;
     if len > 0 {
+        // SAFETY: Storing non-empty command into in-memory history ring buffer.
         unsafe {
             history_add(&buf[..len], len);
         }
