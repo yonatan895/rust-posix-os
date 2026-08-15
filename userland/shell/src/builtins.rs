@@ -911,3 +911,81 @@ pub unsafe fn handle_id() {
     }
     puts(b"\0".as_ptr());
 }
+
+pub unsafe fn handle_clip(argc: usize, argv: &[*const u8; 16]) {
+    if argc > 1 && !argv[1].is_null() {
+        // SAFETY: Checking for -h / --help or -p / --paste flags.
+        if strcmp(argv[1], b"-h\0".as_ptr()) == 0 || strcmp(argv[1], b"--help\0".as_ptr()) == 0 {
+            puts(b"Usage: clip <text> | <cmd> | clip | clip -p\nSyncs text into in-memory ring and emits ANSI OSC 52 to host clipboard.\0".as_ptr());
+            return;
+        }
+        if strcmp(argv[1], b"-p\0".as_ptr()) == 0 || strcmp(argv[1], b"--paste\0".as_ptr()) == 0 {
+            // SAFETY: Read active in-memory clipboard buffer.
+            let kr = &raw const crate::editor::KILL_RING;
+            let bytes = (*kr).as_bytes();
+            if bytes.is_empty() {
+                puts(b"Clipboard is empty.\0".as_ptr());
+            } else {
+                write(STDOUT_FILENO, bytes.as_ptr(), bytes.len());
+                puts(b"\0".as_ptr());
+            }
+            return;
+        }
+
+        let mut buf = [0u8; 1024];
+        let mut offset = 0;
+        for i in 1..argc {
+            let arg = argv[i];
+            if arg.is_null() {
+                break;
+            }
+            // SAFETY: Reading valid nul-terminated command line argument string.
+            let len = strlen(arg);
+            if offset + len + 1 < buf.len() {
+                if offset > 0 {
+                    buf[offset] = b' ';
+                    offset += 1;
+                }
+                // SAFETY: Copying valid bytes from command argument into stack buffer.
+                buf[offset..offset + len].copy_from_slice(core::slice::from_raw_parts(arg, len));
+                offset += len;
+            }
+        }
+        // SAFETY: Single-threaded shell mutation of global kill-ring buffer and OSC 52 sync.
+        let kr = &raw mut crate::editor::KILL_RING;
+        (*kr).save(&buf[..offset]);
+        crate::editor::osc52_copy(&buf[..offset]);
+        puts(b"Copied to clipboard.\0".as_ptr());
+    } else {
+        let mut buf = [0u8; 1024];
+        let mut total = 0;
+        loop {
+            // SAFETY: Reading piped stream from stdin until EOF or capacity.
+            let n = read(STDIN_FILENO, buf.as_mut_ptr().add(total), buf.len() - total);
+            if n <= 0 {
+                break;
+            }
+            total += n as usize;
+            if total >= buf.len() {
+                break;
+            }
+        }
+        if total > 0 {
+            // SAFETY: Single-threaded shell mutation of global kill-ring buffer and OSC 52 sync.
+            let kr = &raw mut crate::editor::KILL_RING;
+            (*kr).save(&buf[..total]);
+            crate::editor::osc52_copy(&buf[..total]);
+            printf(b"Copied %d bytes to clipboard.\n\0".as_ptr(), total as i32);
+        } else {
+            // SAFETY: Reading active in-memory kill-ring buffer for display.
+            let kr = &raw const crate::editor::KILL_RING;
+            let bytes = (*kr).as_bytes();
+            if bytes.is_empty() {
+                puts(b"Clipboard is empty. Usage: clip <text> | <cmd> | clip\0".as_ptr());
+            } else {
+                write(STDOUT_FILENO, bytes.as_ptr(), bytes.len());
+                puts(b"\0".as_ptr());
+            }
+        }
+    }
+}

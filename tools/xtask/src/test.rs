@@ -2288,4 +2288,58 @@ fn test_line_editor_navigation_and_paste() {
     assert_eq!(kr.as_bytes(), b"-n ");
     assert_eq!(&buf[..cur_len], b"echo ");
     assert_eq!(cur_pos, 5);
+
+    // 5. Test Base64 Encoding with standard RFC 4648 test vectors
+    fn test_b64(input: &[u8], expected: &[u8]) {
+        const B64_CHARS: &[u8; 64] =
+            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+        let mut out = [0u8; 64];
+        let mut out_len = 0;
+        let mut i = 0;
+        while i < input.len() {
+            let rem = input.len() - i;
+            if rem >= 3 {
+                let b0 = input[i];
+                let b1 = input[i + 1];
+                let b2 = input[i + 2];
+                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
+                out[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+                out[out_len + 2] = B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize];
+                out[out_len + 3] = B64_CHARS[(b2 & 0x3f) as usize];
+                out_len += 4;
+                i += 3;
+            } else if rem == 2 {
+                let b0 = input[i];
+                let b1 = input[i + 1];
+                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
+                out[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+                out[out_len + 2] = B64_CHARS[((b1 & 0x0f) << 2) as usize];
+                out[out_len + 3] = b'=';
+                out_len += 4;
+                i += 2;
+            } else {
+                let b0 = input[i];
+                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
+                out[out_len + 1] = B64_CHARS[((b0 & 0x03) << 4) as usize];
+                out[out_len + 2] = b'=';
+                out[out_len + 3] = b'=';
+                out_len += 4;
+                i += 1;
+            }
+        }
+        assert_eq!(
+            &out[..out_len],
+            expected,
+            "RFC 4648 base64 encoding must match standard vector"
+        );
+    }
+
+    test_b64(b"", b"");
+    test_b64(b"f", b"Zg==");
+    test_b64(b"fo", b"Zm8=");
+    test_b64(b"foo", b"Zm9v");
+    test_b64(b"foob", b"Zm9vYg==");
+    test_b64(b"fooba", b"Zm9vYmE=");
+    test_b64(b"foobar", b"Zm9vYmFy");
+    test_b64(b"Rust POSIX OS", b"UnVzdCBQT1NJWCBPUw==");
 }
