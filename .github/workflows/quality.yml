@@ -18,7 +18,7 @@ jobs:
           components: rustfmt, clippy, rust-src
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt (changed .rs only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')
         run: |
           set -euo pipefail
           git fetch origin "${{ github.base_ref }}" --depth=1
@@ -30,15 +30,24 @@ jobs:
           fi
           echo "$files" | xargs rustfmt --edition 2024 --check
       - name: rustfmt (full tree)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
         run: cargo fmt --all -- --check
       - name: clippy host crates
-        run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
+        run: cargo clippy -p posix-abi -p xtask -p libc --all-targets -- -D warnings
       - name: clippy kernel
         env:
           RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
         run: |
           cargo clippy -p kernel \
+            --target x86_64-unknown-none \
+            -Zbuild-std=core,compiler_builtins,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -- -D warnings
+      - name: clippy userland
+        env:
+          RUSTFLAGS: "-C relocation-model=static"
+        run: |
+          cargo clippy -p shell -p init -p coreutils \
             --target x86_64-unknown-none \
             -Zbuild-std=core,compiler_builtins,alloc \
             -Zbuild-std-features=compiler-builtins-mem \
