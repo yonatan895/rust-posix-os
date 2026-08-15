@@ -24,6 +24,11 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
         addr & !0xFFF
     };
 
+    let _end_vaddr = match vaddr.checked_add(pages * PAGE_SIZE) {
+        Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
+        _ => return -(ENOMEM as isize),
+    };
+
     if let Some(ref mut vm) = proc.vm_space {
         for i in 0..pages {
             let page_vaddr = vaddr + i * PAGE_SIZE;
@@ -52,7 +57,10 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
         return -(EINVAL as isize);
     }
     let pages = length.div_ceil(PAGE_SIZE);
-    let end_addr = addr + pages * PAGE_SIZE;
+    let end_addr = match addr.checked_add(pages * PAGE_SIZE) {
+        Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
+        _ => return -(EINVAL as isize),
+    };
 
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -72,7 +80,10 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: i32) -> isize {
         return -(EINVAL as isize);
     }
     let pages = length.div_ceil(PAGE_SIZE);
-    let end_addr = addr + pages * PAGE_SIZE;
+    let end_addr = match addr.checked_add(pages * PAGE_SIZE) {
+        Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
+        _ => return -(ENOMEM as isize),
+    };
 
     let proc_lock = match get_current_process() {
         Some(p) => p,

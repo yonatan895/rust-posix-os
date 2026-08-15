@@ -183,6 +183,12 @@ impl UserSlice {
         if len > 0 && addr == 0 {
             return Err(UserAccessError::NullPointer);
         }
+        if len > 0 {
+            let end = addr.checked_add(len).ok_or(UserAccessError::Overflow)?;
+            if end > USER_SPACE_END {
+                return Err(UserAccessError::OutOfUserRange);
+            }
+        }
         Ok(Self { addr, len })
     }
 
