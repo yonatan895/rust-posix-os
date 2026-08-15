@@ -92,16 +92,64 @@ pub fn splice_insert(
     insert_count
 }
 
-/// Kills (cuts) text from `cursor_pos` to the end of the line into `kill_ring`.
+const B64_CHARS: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+
+/// Emits an ANSI OSC 52 clipboard copy sequence (`\x1b]52;c;<base64>\x07`) to copy data to the host OS clipboard.
+pub fn osc52_copy(data: &[u8]) {
+    if data.is_empty() {
+        return;
+    }
+    // SAFETY: Emits OSC 52 sequence to stdout fd 1.
+    unsafe {
+        libc::write(1, b"\x1b]52;c;".as_ptr(), 7);
+        let mut i = 0;
+        while i < data.len() {
+            let rem = data.len() - i;
+            let mut chunk = [0u8; 4];
+            if rem >= 3 {
+                let b0 = data[i];
+                let b1 = data[i + 1];
+                let b2 = data[i + 2];
+                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
+                chunk[1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+                chunk[2] = B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize];
+                chunk[3] = B64_CHARS[(b2 & 0x3f) as usize];
+                libc::write(1, chunk.as_ptr(), 4);
+                i += 3;
+            } else if rem == 2 {
+                let b0 = data[i];
+                let b1 = data[i + 1];
+                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
+                chunk[1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
+                chunk[2] = B64_CHARS[((b1 & 0x0f) << 2) as usize];
+                chunk[3] = b'=';
+                libc::write(1, chunk.as_ptr(), 4);
+                i += 2;
+            } else {
+                let b0 = data[i];
+                chunk[0] = B64_CHARS[(b0 >> 2) as usize];
+                chunk[1] = B64_CHARS[((b0 & 0x03) << 4) as usize];
+                chunk[2] = b'=';
+                chunk[3] = b'=';
+                libc::write(1, chunk.as_ptr(), 4);
+                i += 1;
+            }
+        }
+        libc::write(1, b"\x07".as_ptr(), 1);
+    }
+}
+
+/// Kills (cuts) text from `cursor_pos` to the end of the line into `kill_ring` and syncs with host clipboard.
 pub fn kill_to_end(buf: &mut [u8], len: &mut usize, cursor_pos: usize, kill_ring: &mut KillRing) {
     if cursor_pos < *len {
         kill_ring.save(&buf[cursor_pos..*len]);
+        osc52_copy(kill_ring.as_bytes());
         *len = cursor_pos;
         buf[*len] = 0;
     }
 }
 
-/// Kills (cuts) text from the start of the line up to `cursor_pos` into `kill_ring`.
+/// Kills (cuts) text from the start of the line up to `cursor_pos` into `kill_ring` and syncs with host clipboard.
 pub fn kill_to_start(
     buf: &mut [u8],
     len: &mut usize,
@@ -110,6 +158,7 @@ pub fn kill_to_start(
 ) {
     if *cursor_pos > 0 {
         kill_ring.save(&buf[..*cursor_pos]);
+        osc52_copy(kill_ring.as_bytes());
         for i in *cursor_pos..*len {
             buf[i - *cursor_pos] = buf[i];
         }
@@ -118,12 +167,13 @@ pub fn kill_to_start(
         buf[*len] = 0;
     } else if *len > 0 {
         kill_ring.save(&buf[..*len]);
+        osc52_copy(kill_ring.as_bytes());
         *len = 0;
         buf[0] = 0;
     }
 }
 
-/// Kills (cuts) the previous word before `cursor_pos` into `kill_ring`.
+/// Kills (cuts) the previous word before `cursor_pos` into `kill_ring` and syncs with host clipboard.
 pub fn kill_word_backward(
     buf: &mut [u8],
     len: &mut usize,
@@ -134,6 +184,7 @@ pub fn kill_word_backward(
         let word_start = word_left(buf, *cursor_pos);
         let count = *cursor_pos - word_start;
         kill_ring.save(&buf[word_start..*cursor_pos]);
+        osc52_copy(kill_ring.as_bytes());
         for i in *cursor_pos..*len {
             buf[i - count] = buf[i];
         }

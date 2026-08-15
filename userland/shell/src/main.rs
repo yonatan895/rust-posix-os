@@ -21,7 +21,7 @@ use libc::*;
 use pipeline::execute_pipeline_line;
 use posix_abi::*;
 
-pub static KNOWN_COMMANDS: [&str; 21] = [
+pub static KNOWN_COMMANDS: [&str; 22] = [
     "help",
     "uname",
     "pwd",
@@ -40,6 +40,7 @@ pub static KNOWN_COMMANDS: [&str; 21] = [
     "journal",
     "snapshot",
     "echo",
+    "clip",
     "async-demo",
     "clear",
     "exit",
@@ -74,7 +75,7 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
     let cmd = argv[0];
     unsafe {
         if strcmp(cmd, b"help\0".as_ptr()) == 0 {
-            puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, id, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
+            puts(b"Available POSIX Shell Commands:\n  help, uname, pwd, id, cd, ls, cp, mv, cat, touch, mkdir, rm,\n  ps, top, monitor, journal, snapshot, echo, clip, async-demo, clear, exit\n\nPipeline: cmd1 | cmd2    Redirect: >, >>, <\0".as_ptr());
         } else if strcmp(cmd, b"uname\0".as_ptr()) == 0 {
             let mut uts = Utsname::default();
             syscall::syscall1(SYS_UNAME, &mut uts as *mut _ as usize);
@@ -117,6 +118,8 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
             handle_rm(argc, argv);
         } else if strcmp(cmd, b"echo\0".as_ptr()) == 0 {
             handle_echo(argc, argv);
+        } else if strcmp(cmd, b"clip\0".as_ptr()) == 0 {
+            handle_clip(argc, argv);
         } else if strcmp(cmd, b"async-demo\0".as_ptr()) == 0 {
             run_async_demo();
         } else if strcmp(cmd, b"clear\0".as_ptr()) == 0 {
