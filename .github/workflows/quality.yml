@@ -33,7 +33,7 @@ jobs:
         if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
         run: cargo fmt --all -- --check
       - name: clippy host crates
-        run: cargo clippy -p posix-abi -p xtask -p libc --all-targets -- -D warnings
+        run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
       - name: clippy kernel
         env:
           RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
@@ -47,7 +47,7 @@ jobs:
         env:
           RUSTFLAGS: "-C relocation-model=static"
         run: |
-          cargo clippy -p shell -p init -p coreutils \
+          cargo clippy -p libc -p shell -p init -p coreutils \
             --target x86_64-unknown-none \
             -Zbuild-std=core,compiler_builtins,alloc \
             -Zbuild-std-features=compiler-builtins-mem \
