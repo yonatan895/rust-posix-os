@@ -9,6 +9,7 @@ use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
 use crate::ostd::sync::SpinLock;
 use alloc::vec::Vec;
 
+/// Global spinlock-protected higher-half direct map (HHDM) virtual address offset.
 pub static HHDM_OFFSET: SpinLock<usize> = SpinLock::new(0);
 
 /// Converts a physical RAM address into its higher-half direct map (HHDM) virtual address.
@@ -42,9 +43,13 @@ pub unsafe fn vmm_init(hhdm: usize) {
 /// Represents a contiguous range of user virtual memory with uniform protection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vma {
+    /// Starting virtual address of the region (page-aligned).
     pub start: usize,
+    /// Ending virtual address of the region (exclusive upper bound, page-aligned).
     pub end: usize,
+    /// POSIX memory protection flags (`PROT_READ`, `PROT_WRITE`, `PROT_EXEC`).
     pub prot: u32,
+    /// POSIX memory mapping flags (`MAP_ANONYMOUS`, `MAP_PRIVATE`, `MAP_SHARED`).
     pub flags: u32,
 }
 
@@ -53,7 +58,9 @@ pub struct Vma {
 /// Encapsulates the hardware MMU root table handle ([`AddressSpace`]) and the list of
 /// active user-space virtual memory areas ([`Vma`]).
 pub struct VmSpace {
+    /// Hardware root page table handle for the CPU MMU.
     pub address_space: AddressSpace,
+    /// Disjoint, sorted list of user virtual memory areas.
     pub vmas: Vec<Vma>,
 }
 

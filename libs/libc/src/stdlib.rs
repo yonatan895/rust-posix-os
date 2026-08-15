@@ -5,48 +5,77 @@ use crate::sys_mman::*;
 use crate::syscall::*;
 use posix_abi::*;
 
-const LARGE_MAGIC: usize = 0x504F5349584D454D; // "POSIXMEM"
-const ARENA_MAGIC: usize = 0x504F53495841524E; // "POSIXARN"
-const FREE_MAGIC: usize = 0x504F534958465245; // "POSIXFRE"
+/// Magic signature for large mmap-backed allocations (`"POSIXMEM"`).
+const LARGE_MAGIC: usize = 0x504F5349584D454D;
+/// Magic signature for arena chunk headers (`"POSIXARN"`).
+const ARENA_MAGIC: usize = 0x504F53495841524E;
+/// Magic signature for freed nodes to guard against double-free (`"POSIXFRE"`).
+const FREE_MAGIC: usize = 0x504F534958465245;
 
-const ARENA_SIZE: usize = 64 * 1024; // 64 KiB chunks
+/// Size of slab arena chunks in bytes (64 KiB).
+const ARENA_SIZE: usize = 64 * 1024;
+/// Number of segregated size classes for small allocations.
 const NUM_CLASSES: usize = 8;
+/// Bin size classes for small allocations in bytes.
 const SIZE_CLASSES: [usize; NUM_CLASSES] = [16, 32, 64, 128, 256, 512, 1024, 2048];
+/// Threshold in bytes below or equal to which the slab/bin allocator is used.
 const SMALL_THRESHOLD: usize = 2048;
+/// Maximum number of tracked arena chunks in fixed table.
 const MAX_ARENAS: usize = 512;
 
+/// Header preceding large mmap memory allocations.
 #[repr(C)]
 struct BlockHeader {
+    /// Total allocation size in bytes including header.
     size: usize,
+    /// Verification magic (`LARGE_MAGIC`).
     magic: usize,
 }
 
+/// Intrusive free list node stored in freed small object memory.
 #[repr(C)]
 struct FreeNode {
+    /// Pointer to next free node in this size class list.
     next: *mut FreeNode,
+    /// Verification magic (`FREE_MAGIC`).
     magic: usize,
 }
 
+/// Header preceding a 64 KiB slab arena chunk.
 #[repr(C)]
 struct ArenaChunk {
+    /// Verification magic (`ARENA_MAGIC`).
     magic: usize,
+    /// Size class index serviced by this chunk.
     class_idx: usize,
+    /// Current bump allocation offset within chunk.
     bump_offset: usize,
+    /// Pointer to next arena chunk in chain.
     next_arena: *mut ArenaChunk,
 }
 
+/// Metadata record tracking virtual address boundaries of an arena.
 #[derive(Clone, Copy)]
 struct ArenaRecord {
+    /// Start virtual address of arena chunk.
     start: usize,
+    /// End virtual address of arena chunk.
     end: usize,
+    /// Size class index serviced by this arena chunk.
     class_idx: usize,
 }
 
+/// Global process-local memory allocator state.
 struct AllocatorState {
+    /// Segregated intrusive free list heads per size class.
     free_lists: [*mut FreeNode; NUM_CLASSES],
+    /// Active bump arena chunk pointers per size class.
     current_arenas: [*mut ArenaChunk; NUM_CLASSES],
+    /// Fixed-size table of all registered arena chunks.
     arena_records: [ArenaRecord; MAX_ARENAS],
+    /// Total count of registered arena chunks.
     arena_count: usize,
+    /// Counter of active/total mmap calls.
     mmap_count: usize,
 }
 
@@ -63,11 +92,19 @@ static mut STATE: AllocatorState = AllocatorState {
     mmap_count: 0,
 };
 
+/// Returns a raw mutable pointer to the process-local allocator state.
 #[inline(always)]
 unsafe fn get_state() -> *mut AllocatorState {
     core::ptr::addr_of_mut!(STATE)
 }
 
+/// Allocates `size` bytes of uninitialized memory.
+///
+/// Returns a pointer to the allocated memory, or null on failure.
+///
+/// # Safety
+///
+/// Returns raw memory pointer that must be freed via [`free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     if size == 0 {
@@ -174,6 +211,13 @@ pub unsafe extern "C" fn malloc(size: usize) -> *mut u8 {
     }
 }
 
+/// Frees a memory block previously allocated by [`malloc`], [`calloc`], or [`realloc`].
+///
+/// If `ptr` is null, no operation is performed.
+///
+/// # Safety
+///
+/// `ptr` must either be null or point to memory allocated by the libc allocator that has not yet been freed.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn free(ptr: *mut u8) {
     if ptr.is_null() {
@@ -213,6 +257,13 @@ pub unsafe extern "C" fn free(ptr: *mut u8) {
     }
 }
 
+/// Allocates zero-initialized memory for an array of `nmemb` elements of `size` bytes each.
+///
+/// Returns a pointer to the zeroed memory, or null on overflow or failure.
+///
+/// # Safety
+///
+/// Returns raw heap memory that must be deallocated using [`free`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut u8 {
     let total = nmemb.saturating_mul(size);
@@ -227,6 +278,13 @@ pub unsafe extern "C" fn calloc(nmemb: usize, size: usize) -> *mut u8 {
     ptr
 }
 
+/// Reallocates a memory block `ptr` to a new size `size` bytes.
+///
+/// Preserves existing content up to the minimum of old and new size.
+///
+/// # Safety
+///
+/// `ptr` must either be null or point to a valid active allocation from the libc allocator.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     if ptr.is_null() {
@@ -281,6 +339,11 @@ pub unsafe extern "C" fn realloc(ptr: *mut u8, size: usize) -> *mut u8 {
     }
 }
 
+/// Terminates calling process immediately with status code `status`.
+///
+/// # Safety
+///
+/// Issues the `SYS_EXIT` syscall and never returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn exit(status: i32) -> ! {
     // SAFETY: Performing direct exit system call.
@@ -292,12 +355,22 @@ pub unsafe extern "C" fn exit(status: i32) -> ! {
     }
 }
 
+/// Abnormally terminates process execution by exiting with status 134 (`SIGABRT`).
+///
+/// # Safety
+///
+/// Calls [`exit`] and never returns.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abort() -> ! {
     // SAFETY: Invoking exit with status 134 (SIGABRT).
     unsafe { exit(134) }
 }
 
+/// Converts a string representing a signed integer to an `i32` value.
+///
+/// # Safety
+///
+/// `s` must be null or point to a valid null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn atoi(s: *const u8) -> i32 {
     if s.is_null() {
@@ -325,17 +398,28 @@ pub unsafe extern "C" fn atoi(s: *const u8) -> i32 {
     }
 }
 
+/// Computes the absolute value of an integer `j`.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn abs(j: i32) -> i32 {
     if j < 0 { -j } else { j }
 }
 
+/// Retrieves the count of mmap allocations performed by the allocator.
+///
+/// # Safety
+///
+/// Reads process-local allocator state.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __libc_get_mmap_count() -> usize {
     // SAFETY: Reading process-local mmap counter from allocator state.
     unsafe { (*get_state()).mmap_count }
 }
 
+/// Resets the count of mmap allocations tracked by the allocator.
+///
+/// # Safety
+///
+/// Modifies process-local allocator state.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn __libc_reset_mmap_count() {
     // SAFETY: Resetting process-local mmap counter in allocator state.

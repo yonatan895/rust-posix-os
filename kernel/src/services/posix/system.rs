@@ -11,6 +11,7 @@ use crate::services::process::get_current_process;
 use crate::services::vfs::*;
 use posix_abi::*;
 
+/// Returns OS and hardware identity metadata in user buffer `buf`.
 pub fn sys_uname(buf: *mut Utsname) -> isize {
     let out = match UserPtr::<Utsname>::from_raw(buf as usize) {
         Ok(p) => p,
@@ -33,6 +34,7 @@ pub fn sys_uname(buf: *mut Utsname) -> isize {
     }
 }
 
+/// Returns overall system resource usage and process count into user buffer `info`.
 pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
     let out = match UserPtr::<Sysinfo>::from_raw(info as usize) {
         Ok(p) => p,
@@ -58,6 +60,7 @@ pub fn sys_sysinfo(info: *mut Sysinfo) -> isize {
     }
 }
 
+/// Copies the calling process's current working directory string into user buffer `buf`.
 pub fn sys_getcwd(buf: *mut u8, size: usize) -> isize {
     if buf.is_null() || size == 0 {
         return -(EINVAL as isize);
@@ -84,6 +87,7 @@ pub fn sys_getcwd(buf: *mut u8, size: usize) -> isize {
     }
 }
 
+/// Changes the calling process's current working directory to `path_ptr`.
 pub fn sys_chdir(path_ptr: *const u8) -> isize {
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {

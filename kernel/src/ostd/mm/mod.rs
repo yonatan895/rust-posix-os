@@ -22,6 +22,10 @@ pub use vmm::{VmSpace, Vma, phys_to_virt, virt_to_phys, zero_phys_frame};
 
 /// Initializes the kernel memory management subsystem (PMM, VMM, and global heap).
 ///
+/// # Panics
+///
+/// Panics if physical frame allocation for the kernel heap fails during early boot.
+///
 /// # Safety
 ///
 /// Must be invoked during early boot with valid bootloader memory responses.

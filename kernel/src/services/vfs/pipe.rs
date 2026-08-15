@@ -7,28 +7,43 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// Capacity of an anonymous pipe circular memory buffer (4 KiB).
 pub const PIPE_BUFFER_SIZE: usize = 4096;
 
+/// Circular ring buffer backing a unidirectional POSIX pipe.
 pub struct PipeBuffer {
+    /// In-memory ring buffer storing pipe bytes.
     data: [u8; PIPE_BUFFER_SIZE],
+    /// Ring buffer read cursor offset.
     read_pos: usize,
+    /// Ring buffer write cursor offset.
     write_pos: usize,
+    /// Number of unread bytes currently stored in the buffer.
     len: usize,
+    /// Active open reader handle reference count.
     readers_open: usize,
+    /// Active open writer handle reference count.
     writers_open: usize,
+    /// Wait queue of blocked reading tasks.
     read_waiters: WaitQueue,
+    /// Wait queue of blocked writing tasks.
     write_waiters: WaitQueue,
 }
 
+/// Inode representing the read end of an anonymous FIFO pipe.
 pub struct PipeReadEnd {
+    /// Reference to the shared ring buffer state.
     buf: Arc<SpinLock<PipeBuffer>>,
 }
 
+/// Inode representing the write end of an anonymous FIFO pipe.
 pub struct PipeWriteEnd {
+    /// Reference to the shared ring buffer state.
     buf: Arc<SpinLock<PipeBuffer>>,
 }
 
 impl PipeBuffer {
+    /// Creates a new paired reader and writer inode connected to a shared pipe buffer.
     #[allow(clippy::new_ret_no_self)]
     pub fn new() -> (Arc<PipeReadEnd>, Arc<PipeWriteEnd>) {
         let buffer = Arc::new(SpinLock::new(PipeBuffer {

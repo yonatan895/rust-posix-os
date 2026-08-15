@@ -7,6 +7,7 @@ use crate::services::vfs::FileHandle;
 use alloc::sync::Arc;
 use posix_abi::*;
 
+/// Creates a new epoll file descriptor.
 pub fn sys_epoll_create1(_flags: i32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -21,6 +22,7 @@ pub fn sys_epoll_create1(_flags: i32) -> isize {
     }
 }
 
+/// Controls an epoll file descriptor interest list (ADD, MOD, DEL).
 pub fn sys_epoll_ctl(epfd: i32, op: i32, fd: i32, event_ptr: *const EpollEvent) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -56,6 +58,7 @@ pub fn sys_epoll_ctl(epfd: i32, op: i32, fd: i32, event_ptr: *const EpollEvent) 
     }
 }
 
+/// Waits for I/O events on an epoll file descriptor.
 pub fn sys_epoll_wait(
     epfd: i32,
     events_ptr: *mut EpollEvent,

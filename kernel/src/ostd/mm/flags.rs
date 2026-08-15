@@ -3,11 +3,16 @@
 //! Provides a portable description of memory page protection and mapping attributes
 //! across all supported CPU architectures (x86_64, aarch64, riscv64).
 
+/// Architecture-neutral representation of page protection and mapping attributes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct PageFlags {
+    /// Whether the page is mapped and present in physical memory.
     pub present: bool,
+    /// Whether the page is writable (false indicates read-only).
     pub writable: bool,
+    /// Whether the page is accessible in user mode (Ring 3).
     pub user: bool,
+    /// Whether code execution is prohibited from this page (NX bit).
     pub no_exec: bool,
 }
 

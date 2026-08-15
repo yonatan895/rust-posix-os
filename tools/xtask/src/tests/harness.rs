@@ -10,16 +10,23 @@ use std::time::{Duration, Instant};
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct TestResult {
+    /// Name of the executed test case.
     pub name: String,
+    /// Test suite classification grouping.
     pub suite: String,
+    /// Whether the test completed without panic.
     pub passed: bool,
+    /// Execution duration of the test.
     pub duration: Duration,
+    /// Panic or failure error diagnostics if failed.
     pub error_message: Option<String>,
 }
 
 /// Test runner orchestrator that executes test cases with timing and panic protection.
 pub struct TestRunner {
+    /// Optional pattern filter restricting execution to matching test names.
     filter: Option<String>,
+    /// Accumulated records of executed test cases.
     results: Vec<TestResult>,
 }
 

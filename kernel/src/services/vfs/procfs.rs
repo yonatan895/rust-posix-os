@@ -8,25 +8,36 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// Dynamic `/proc` file content category.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ProcKind {
+    /// `/proc/meminfo` system memory and heap metrics.
     Meminfo,
+    /// `/proc/stat` CPU ticks and process count statistics.
     Stat,
+    /// `/proc/uptime` system uptime ticks.
     Uptime,
+    /// `/proc/processes` process listing table.
     Processes,
+    /// `/proc/audit_journal` formatted audit log event stream.
     AuditJournal,
+    /// `/proc/snapshots` list of system state snapshots.
     AuditSnapshots,
 }
 
+/// Inode generating dynamic read-only text content on demand for `/proc` nodes.
 pub struct ProcDynamicFile {
+    /// Specific category of proc file to generate.
     pub kind: ProcKind,
 }
 
 impl ProcDynamicFile {
+    /// Creates a new reference-counted dynamic procfs file inode.
     pub fn new(kind: ProcKind) -> Arc<Self> {
         Arc::new(Self { kind })
     }
 
+    /// Renders current dynamic system statistics into a text buffer.
     fn generate_content(&self) -> String {
         update_system_metrics();
         let mon = SYSTEM_MONITOR.lock();

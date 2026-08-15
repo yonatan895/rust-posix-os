@@ -6,6 +6,7 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// Special `/dev/null` character device discarding all writes and returning EOF on reads.
 pub struct DevNull;
 
 impl Inode for DevNull {
@@ -32,6 +33,7 @@ impl Inode for DevNull {
     }
 }
 
+/// Special `/dev/zero` character device returning zero bytes on read and discarding writes.
 pub struct DevZero;
 
 impl Inode for DevZero {
@@ -59,6 +61,7 @@ impl Inode for DevZero {
     }
 }
 
+/// Special `/dev/console` and `/dev/tty` character device connected to the serial COM1 driver.
 pub struct DevConsole;
 
 impl Inode for DevConsole {

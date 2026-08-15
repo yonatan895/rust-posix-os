@@ -1,8 +1,9 @@
-//! Inter-Process Communication (IPC) and Pipe Synchronization Test Suite.
+//! Inter-process communication (IPC) and pipe synchronization test suite.
 
 use super::harness::TestRunner;
 use std::collections::{BTreeMap, VecDeque};
 
+/// Registers all IPC and pipe synchronization tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "ipc",
@@ -16,16 +17,24 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Specification model of a POSIX anonymous pipe with reader/writer queues and capacities.
 struct SpecPipe {
+    /// Internal byte buffer storage.
     buf: Vec<u8>,
+    /// Capacity limit of the pipe buffer in bytes.
     cap: usize,
+    /// Number of open reader file descriptors referencing the pipe.
     readers_open: usize,
+    /// Number of open writer file descriptors referencing the pipe.
     writers_open: usize,
+    /// PIDs of blocked reader processes waiting for data or EOF.
     read_waiters: Vec<i32>,
+    /// PIDs of blocked writer processes waiting for capacity or broken pipe.
     write_waiters: Vec<i32>,
 }
 
 impl SpecPipe {
+    /// Creates a new `SpecPipe` with specified maximum byte capacity.
     fn new(cap: usize) -> Self {
         Self {
             buf: Vec::new(),
@@ -37,6 +46,7 @@ impl SpecPipe {
         }
     }
 
+    /// Reads up to `out.len()` bytes from the pipe buffer into `out`.
     fn read(&mut self, out: &mut [u8], nonblock: bool, caller: i32) -> Result<usize, &'static str> {
         if self.buf.is_empty() {
             if self.writers_open == 0 {
@@ -58,6 +68,7 @@ impl SpecPipe {
         Ok(n)
     }
 
+    /// Writes data from `data` into the pipe buffer up to available capacity.
     fn write(&mut self, data: &[u8], nonblock: bool, caller: i32) -> Result<usize, &'static str> {
         if self.readers_open == 0 {
             return Err("EPIPE");
@@ -79,6 +90,7 @@ impl SpecPipe {
         Ok(to_write)
     }
 
+    /// Closes a writer reference, waking any waiting readers for EOF condition.
     fn close_writer(&mut self) {
         self.writers_open = self.writers_open.saturating_sub(1);
         if self.writers_open == 0 {
@@ -86,6 +98,7 @@ impl SpecPipe {
         }
     }
 
+    /// Closes a reader reference, waking any waiting writers for EPIPE condition.
     fn close_reader(&mut self) {
         self.readers_open = self.readers_open.saturating_sub(1);
         if self.readers_open == 0 {
@@ -94,6 +107,7 @@ impl SpecPipe {
     }
 }
 
+/// Tests pipe blocking, non-blocking EAGAIN, and EOF/EPIPE semantics.
 fn test_pipe_blocking_and_eof_semantics() {
     let mut pipe = SpecPipe::new(4);
     let mut buf = [0u8; 8];
@@ -137,6 +151,7 @@ fn test_pipe_blocking_and_eof_semantics() {
     assert_eq!(pipe2.write(b"a", false, 2), Err("EPIPE"));
 }
 
+/// Tests two-process reader/writer interaction, voluntary blocking, and scheduler wakeups.
 fn test_two_process_pipe_voluntary_context_switch() {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum TaskState {

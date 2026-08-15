@@ -8,21 +8,31 @@ use crate::ostd::mm::user::UserAccessError;
 use crate::ostd::mm::{PageFlags, phys_to_virt, zero_phys_frame};
 use core::arch::asm;
 
+/// Page present attribute bit in x86_64 PTE (bit 0).
 pub const PAGE_PRESENT: u64 = 1 << 0;
+/// Read/Write attribute bit in x86_64 PTE (bit 1, 1 = read/write, 0 = read-only).
 pub const PAGE_WRITABLE: u64 = 1 << 1;
+/// User/Supervisor attribute bit in x86_64 PTE (bit 2, 1 = user/ring 3, 0 = supervisor/ring 0).
 pub const PAGE_USER: u64 = 1 << 2;
+/// Page Size (PS / Huge Page) attribute bit in x86_64 PDE/PDPTE (bit 7).
 pub const PAGE_PS: u64 = 1 << 7;
+/// No-Execute (NX / XD) attribute bit in x86_64 PTE (bit 63).
 pub const PAGE_NX: u64 = 1 << 63;
 
+/// Bitmask extracting the 4 KiB-aligned physical address from an x86_64 PTE (bits 12..51).
 pub const PT_ADDR_MASK: u64 = 0x000F_FFFF_FFFF_F000;
+/// Bitmask extracting a 9-bit page table index (bits 0..8).
 pub const PT_INDEX_MASK: usize = 0x1FF;
 
+/// 4096-byte aligned x86_64 page table level (PML4, PDPT, PD, or PT) containing 512 64-bit PTEs.
 #[repr(C, align(4096))]
 pub struct PageTable {
+    /// 512 64-bit page table entries.
     pub entries: [u64; 512],
 }
 
 impl PageTable {
+    /// Creates an empty page table initialized with all entries set to 0 (not present).
     pub const fn empty() -> Self {
         Self { entries: [0; 512] }
     }

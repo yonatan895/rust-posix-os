@@ -3,32 +3,54 @@
 use core::arch::asm;
 use core::mem::size_of;
 
+/// Kernel 64-bit code segment selector (Ring 0, GDT index 1).
 pub const KERNEL_CODE_SEL: u16 = 0x08;
+/// Kernel data segment selector (Ring 0, GDT index 2).
 pub const KERNEL_DATA_SEL: u16 = 0x10;
+/// User data segment selector (Ring 3, GDT index 3).
 pub const USER_DATA_SEL: u16 = 0x18 | 3;
+/// User 64-bit code segment selector (Ring 3, GDT index 4).
 pub const USER_CODE_SEL: u16 = 0x20 | 3;
+/// Task State Segment (TSS) selector (GDT index 5, 16-byte descriptor).
 pub const TSS_SEL: u16 = 0x28;
 
+/// x86_64 Task State Segment (TSS) structure.
 #[repr(C, packed)]
 pub struct TSS {
+    /// Reserved; must be zero.
     pub reserved0: u32,
+    /// Stack pointer for privilege level 0 (Ring 0 kernel stack).
     pub rsp0: u64,
+    /// Stack pointer for privilege level 1 (unused).
     pub rsp1: u64,
+    /// Stack pointer for privilege level 2 (unused).
     pub rsp2: u64,
+    /// Reserved; must be zero.
     pub reserved1: u64,
+    /// Interrupt Stack Table entry 1.
     pub ist1: u64,
+    /// Interrupt Stack Table entry 2.
     pub ist2: u64,
+    /// Interrupt Stack Table entry 3.
     pub ist3: u64,
+    /// Interrupt Stack Table entry 4.
     pub ist4: u64,
+    /// Interrupt Stack Table entry 5.
     pub ist5: u64,
+    /// Interrupt Stack Table entry 6.
     pub ist6: u64,
+    /// Interrupt Stack Table entry 7.
     pub ist7: u64,
+    /// Reserved; must be zero.
     pub reserved2: u64,
+    /// Reserved; must be zero.
     pub reserved3: u16,
+    /// 16-bit offset to the I/O permission bitmap from the TSS base.
     pub iomap_base: u16,
 }
 
 impl TSS {
+    /// Creates a zero-initialized [`TSS`] with I/O bitmap base pointing past the structure.
     pub const fn new() -> Self {
         Self {
             reserved0: 0,
@@ -56,20 +78,27 @@ impl Default for TSS {
     }
 }
 
+/// x86_64 Global Descriptor Table Register (GDTR) descriptor.
 #[repr(C, packed)]
 pub struct GdtDescriptor {
+    /// Table limit (table size in bytes minus 1).
     pub limit: u16,
+    /// Linear base address of the GDT.
     pub base: u64,
 }
 
+/// Fixed-size x86_64 Global Descriptor Table storing kernel/user segments and the 16-byte TSS descriptor.
 #[repr(C, align(16))]
 pub struct Gdt {
+    /// Raw 64-bit segment descriptor slots (null, kernel code/data, user data/code, 16-byte TSS).
     pub entries: [u64; 7],
 }
 
 use core::cell::SyncUnsafeCell;
 
+/// Global static Task State Segment for the BSP.
 static GLOBAL_TSS: SyncUnsafeCell<TSS> = SyncUnsafeCell::new(TSS::new());
+/// Global static Global Descriptor Table for the BSP.
 static GLOBAL_GDT: SyncUnsafeCell<Gdt> = SyncUnsafeCell::new(Gdt { entries: [0; 7] });
 
 /// Initializes the GDT and loads the 64-bit Task State Segment (TSS).

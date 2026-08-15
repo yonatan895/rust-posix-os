@@ -7,13 +7,18 @@ use crate::ostd::sync::SpinLock;
 use alloc::collections::BTreeMap;
 use posix_abi::*;
 
+/// Central manager for POSIX signal routing, pending queues, masks, and handler actions.
 pub struct SignalManager {
+    /// Mapping of process PID to pending signal bitmask.
     pub pending_signals: SpinLock<BTreeMap<i32, u64>>,
+    /// Mapping of process PID to blocked signal set.
     pub blocked_masks: SpinLock<BTreeMap<i32, SigSet>>,
+    /// Mapping of process PID to registered signal disposition actions for signals 0..31.
     pub signal_actions: SpinLock<BTreeMap<i32, [SigAction; 32]>>,
 }
 
 impl SignalManager {
+    /// Creates a new uninitialized `SignalManager`.
     pub const fn new() -> Self {
         Self {
             pending_signals: SpinLock::new(BTreeMap::new()),
@@ -148,4 +153,5 @@ impl Default for SignalManager {
     }
 }
 
+/// Global system-wide signal manager instance.
 pub static SIGNALS: SignalManager = SignalManager::new();

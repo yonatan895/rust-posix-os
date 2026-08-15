@@ -1,9 +1,10 @@
-//! Workspace Build Automation & Binary Stripping for x86_64 Bare-Metal.
+//! Workspace build automation and binary stripping for x86_64 bare-metal target.
 
 use std::env;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
+/// Compiles all workspace crates for the `x86_64-unknown-none` bare-metal target using build-std.
 pub fn build_all() {
     println!("[xtask] Compiling workspace crates for bare-metal target x86_64-unknown-none...");
     let status = Command::new("cargo")
@@ -30,6 +31,7 @@ pub fn build_all() {
     println!("[xtask] Workspace crates compiled successfully!");
 }
 
+/// Discovers the active `rustc` toolchain sysroot directory path.
 pub fn rustc_sysroot() -> Option<PathBuf> {
     let out = Command::new("rustc")
         .args(["--print", "sysroot"])
@@ -43,6 +45,7 @@ pub fn rustc_sysroot() -> Option<PathBuf> {
     if p.exists() { Some(p) } else { None }
 }
 
+/// Locates the `llvm-strip` or `llvm-objcopy` utility binary in PATH or rustlib sysroot.
 pub fn find_llvm_strip() -> Option<PathBuf> {
     for name in [
         "llvm-strip",
@@ -94,6 +97,7 @@ pub fn find_llvm_strip() -> Option<PathBuf> {
     candidates.into_iter().find(|p| p.exists())
 }
 
+/// Strips debug symbols and unneeded ELF sections from the binary at `path`.
 pub fn strip_binary(path: &Path) {
     let Some(tool) = find_llvm_strip() else {
         eprintln!(

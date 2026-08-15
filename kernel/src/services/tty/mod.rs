@@ -6,13 +6,18 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// Terminal line discipline managing input buffering, canonical line editing, and terminal flags.
 pub struct LineDiscipline {
+    /// Raw uncommitted input character buffer for canonical mode line editing.
     pub input_buffer: Vec<u8>,
+    /// FIFO queue of completed lines/characters ready to be read by userland.
     pub canonical_queue: Vec<u8>,
+    /// POSIX terminal configuration modes and control characters.
     pub termios: Termios,
 }
 
 impl LineDiscipline {
+    /// Creates a new default line discipline with canonical mode and local echo enabled.
     pub fn new() -> Self {
         let termios = Termios {
             c_lflag: ECHO | ICANON | ISIG,
@@ -25,6 +30,9 @@ impl LineDiscipline {
         }
     }
 
+    /// Processes an incoming character from the hardware UART driver.
+    ///
+    /// Returns `Some(byte)` if the character should be echoed back to the transmitter.
     pub fn push_char(&mut self, c: u8) -> Option<u8> {
         let is_canon = (self.termios.c_lflag & ICANON) != 0;
         let is_echo = (self.termios.c_lflag & ECHO) != 0;
@@ -59,11 +67,14 @@ impl Default for LineDiscipline {
     }
 }
 
+/// TTY character device node backed by a `LineDiscipline` and the serial driver.
 pub struct TtyDevice {
+    /// Line discipline state guarded by a spinlock.
     pub ldisc: SpinLock<LineDiscipline>,
 }
 
 impl TtyDevice {
+    /// Allocates a new reference-counted TTY character device node.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             ldisc: SpinLock::new(LineDiscipline::new()),

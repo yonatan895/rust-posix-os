@@ -1,4 +1,4 @@
-//! Syscall Dispatcher, User Pointer Validation, and EFAULT Hammer Test Suite.
+//! Syscall dispatcher, user pointer validation, and EFAULT hammer test suite.
 
 use super::harness::TestRunner;
 use posix_abi::*;
@@ -6,6 +6,7 @@ use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicI32, Ordering};
 use std::time::Instant;
 
+/// Registers syscall dispatcher and user pointer validation tests with the runner.
 pub fn register_tests(runner: &mut TestRunner) {
     runner.run_test(
         "syscall",
@@ -19,6 +20,7 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
+/// Tests adversarial pointer boundaries: null pointers, unmapped pages, page boundaries, and kernel address leakage.
 fn test_user_pointer_validation_efault_hammer() {
     const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
     const PAGE_SIZE: usize = 4096;
@@ -368,6 +370,7 @@ fn test_user_pointer_validation_efault_hammer() {
     );
 }
 
+/// Tests syscall dispatcher fast-path routing and multi-process state retrieval.
 fn test_syscall_microbench() {
     struct SimProcess {
         pid: i32,

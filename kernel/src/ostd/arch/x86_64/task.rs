@@ -20,6 +20,10 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
 }
 
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 3 userland entry.
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_user_kernel_stack(
     stack: &mut [u8],
     entry_point: usize,
@@ -62,6 +66,10 @@ pub fn init_user_kernel_stack(
 /// Thus `TrapFrame.rip` receives `parent_regs.rcx` and `TrapFrame.rflags` receives `parent_regs.r11`,
 /// while the GPR save slots `TrapFrame.rcx` and `TrapFrame.r11` are set to 0.
 /// Returns the initial `saved_kernel_rsp` pointing to the TrapFrame with `rax = 0` (child return value).
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -> usize {
     assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
     let offset = stack.len() - core::mem::size_of::<TrapFrame>();
@@ -95,6 +103,10 @@ pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -
 }
 
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 0 kernel task entry.
+///
+/// # Panics
+///
+/// Panics if `stack.len()` is smaller than `size_of::<TrapFrame>()`.
 pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
     let stack_top = stack.as_ptr() as usize + stack.len();
     assert!(stack.len() >= core::mem::size_of::<TrapFrame>());

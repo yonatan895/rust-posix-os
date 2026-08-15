@@ -4,20 +4,29 @@ use super::gdt::KERNEL_CODE_SEL;
 use super::{rdmsr, wrmsr};
 use core::arch::naked_asm;
 
+/// Extended Feature Enable Register (EFER) MSR address.
 const IA32_EFER: u32 = 0xC0000080;
+/// System Call Target Address (STAR) MSR address.
 const IA32_STAR: u32 = 0xC0000081;
+/// Long Mode System Call Target Address (LSTAR) MSR address.
 const IA32_LSTAR: u32 = 0xC0000082;
+/// System Call Flag Mask (FMASK) MSR address.
 const IA32_FMASK: u32 = 0xC0000084;
+/// Kernel GS Base MSR address used by `swapgs`.
 const IA32_KERNEL_GS_BASE: u32 = 0xC0000102;
 
 use core::cell::SyncUnsafeCell;
 
+/// Per-CPU scratch data referenced via the GS base register during fast `syscall` entry.
 #[repr(C, align(16))]
 pub struct PerCpuData {
+    /// Active kernel stack pointer loaded upon entering `syscall_entry`.
     pub kernel_rsp: u64,
+    /// Temporary save slot for the user stack pointer upon `syscall_entry`.
     pub user_rsp: u64,
 }
 
+/// Global static per-CPU control block for the Bootstrap Processor (BSP).
 static BSP_PER_CPU: SyncUnsafeCell<PerCpuData> = SyncUnsafeCell::new(PerCpuData {
     kernel_rsp: 0,
     user_rsp: 0,
@@ -35,25 +44,42 @@ pub unsafe fn set_syscall_kernel_stack(stack_top: u64) {
     }
 }
 
+/// Register frame constructed on the kernel stack by the fast `syscall` assembly stub.
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct SyscallRegisters {
+    /// General-purpose register R15.
     pub r15: usize,
+    /// General-purpose register R14.
     pub r14: usize,
+    /// General-purpose register R13.
     pub r13: usize,
+    /// General-purpose register R12.
     pub r12: usize,
+    /// Base pointer register RBP.
     pub rbp: usize,
+    /// Base register RBX.
     pub rbx: usize,
+    /// 6th syscall argument (System V ABI).
     pub r9: usize,
+    /// 5th syscall argument (System V ABI).
     pub r8: usize,
+    /// 4th syscall argument (POSIX x86_64 ABI uses R10 instead of RCX).
     pub r10: usize,
+    /// 3rd syscall argument (System V ABI).
     pub rdx: usize,
+    /// 2nd syscall argument (System V ABI).
     pub rsi: usize,
+    /// 1st syscall argument (System V ABI).
     pub rdi: usize,
-    pub rax: usize, // Syscall number on entry, return value on exit
-    pub rcx: usize, // Saved RIP by syscall instruction
-    pub r11: usize, // Saved RFLAGS by syscall instruction
-    pub rsp: usize, // User RSP
+    /// Syscall number on entry, return value on exit (RAX).
+    pub rax: usize,
+    /// Saved user RIP captured by the hardware `syscall` instruction (RCX).
+    pub rcx: usize,
+    /// Saved user RFLAGS captured by the hardware `syscall` instruction (R11).
+    pub r11: usize,
+    /// Saved user stack pointer (RSP).
+    pub rsp: usize,
 }
 
 /// Naked entry point for the x86_64 fast `syscall` instruction.

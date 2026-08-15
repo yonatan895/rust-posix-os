@@ -54,3 +54,25 @@ jobs:
             -Zbuild-std=core,compiler_builtins,alloc \
             -Zbuild-std-features=compiler-builtins-mem \
             -- -D warnings
+      - name: doc coverage host crates
+        env:
+          RUSTDOCFLAGS: "-D missing-docs -D warnings"
+        run: cargo doc --no-deps -p posix-abi -p xtask
+      - name: doc coverage kernel
+        env:
+          RUSTDOCFLAGS: "-D missing-docs -D warnings"
+          RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
+        run: |
+          cargo doc --no-deps -p kernel \
+            --target x86_64-unknown-none \
+            -Zbuild-std=core,compiler_builtins,alloc \
+            -Zbuild-std-features=compiler-builtins-mem
+      - name: doc coverage userland
+        env:
+          RUSTDOCFLAGS: "-D missing-docs -D warnings"
+          RUSTFLAGS: "-C relocation-model=static"
+        run: |
+          cargo doc --no-deps -p libc -p shell -p init -p coreutils \
+            --target x86_64-unknown-none \
+            -Zbuild-std=core,compiler_builtins,alloc \
+            -Zbuild-std-features=compiler-builtins-mem

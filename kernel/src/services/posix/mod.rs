@@ -26,6 +26,11 @@ use crate::ostd::task::SyscallRegisters;
 use crate::services::process::get_current_process;
 use posix_abi::*;
 
+/// Dispatches a POSIX system call according to register values in `r`.
+///
+/// Decodes the system call number in `rax`, passes arguments `rdi`, `rsi`, `rdx`, `r10`,
+/// routes to the appropriate handler, processes any pending signals, and stores
+/// the return value into `r.rax`.
 pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
     let syscall_nr = r.rax;
     let a1 = r.rdi;

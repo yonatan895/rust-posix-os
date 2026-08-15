@@ -7,17 +7,21 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// Inode representing an epoll event monitoring instance.
 pub struct EpollInstance {
+    /// Registered file descriptor interest list guarded by a spinlock.
     interests: SpinLock<BTreeMap<i32, EpollEvent>>,
 }
 
 impl EpollInstance {
+    /// Creates a new reference-counted epoll instance.
     pub fn new() -> Arc<Self> {
         Arc::new(Self {
             interests: SpinLock::new(BTreeMap::new()),
         })
     }
 
+    /// Modifies the interest list of this epoll instance (ADD, MOD, DEL).
     pub fn ctl(&self, op: i32, fd: i32, event: EpollEvent) -> Result<(), i32> {
         let mut map = self.interests.lock();
         match op {
@@ -45,6 +49,7 @@ impl EpollInstance {
         }
     }
 
+    /// Polls monitored descriptors and fills `events` with ready I/O events.
     pub fn wait(&self, events: &mut [EpollEvent], maxevents: usize) -> Result<usize, i32> {
         if maxevents == 0 || events.is_empty() {
             return Err(EINVAL);

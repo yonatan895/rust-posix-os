@@ -8,6 +8,7 @@ use crate::ostd::task::SyscallRegisters;
 
 /// A bootloader-supplied file, already validated as a kernel slice.
 pub struct BootBlob {
+    /// Static byte slice of the payload memory mapped in higher-half direct map.
     pub bytes: &'static [u8],
 }
 

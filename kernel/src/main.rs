@@ -1,3 +1,5 @@
+//! Bare-metal kernel entry point, bootstrap sequence, and panic handler.
+
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
@@ -13,9 +15,14 @@ use core::cell::SyncUnsafeCell;
 use core::panic::PanicInfo;
 use ostd::*;
 
+/// Page-aligned kernel execution stack.
 #[repr(C, align(4096))]
-struct KernelStack([u8; 64 * 1024]);
+struct KernelStack(
+    /// Backing memory array for the stack (64 KiB).
+    [u8; 64 * 1024],
+);
 
+/// Static allocation for the initial bootstrap CPU kernel stack.
 static BOOT_STACK: SyncUnsafeCell<KernelStack> = SyncUnsafeCell::new(KernelStack([0; 64 * 1024]));
 
 /// Kernel entry point called by the Limine bootloader.
@@ -111,6 +118,9 @@ pub unsafe extern "C" fn _start() -> ! {
     }
 }
 
+/// Global kernel panic handler.
+///
+/// Logs diagnostic information to the early serial console and permanently halts the CPU.
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
     log::error!("KERNEL PANIC: {}", info);

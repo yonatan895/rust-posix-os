@@ -8,19 +8,27 @@ use alloc::sync::Arc;
 use alloc::vec::Vec;
 use posix_abi::*;
 
+/// In-memory directory inode storing entries and subdirectories in memory maps.
 pub struct RamFsDir {
+    /// Mapping of entry names to child Inode trait objects.
     pub entries: SpinLock<BTreeMap<String, Arc<dyn Inode>>>,
+    /// Mapping of entry names to strongly-typed child directory inodes.
     pub subdirs: SpinLock<BTreeMap<String, Arc<RamFsDir>>>,
+    /// POSIX file permission mode bits.
     pub mode: SpinLock<u16>,
+    /// Owner user ID.
     pub uid: SpinLock<u32>,
+    /// Owner group ID.
     pub gid: SpinLock<u32>,
 }
 
 impl RamFsDir {
+    /// Creates a new directory inode with default `0755` permissions owned by root.
     pub fn new() -> Arc<Self> {
         Self::new_with_creds(0o755, 0, 0)
     }
 
+    /// Creates a new directory inode with explicit permission mode and ownership credentials.
     pub fn new_with_creds(mode: u16, uid: u32, gid: u32) -> Arc<Self> {
         Arc::new(Self {
             entries: SpinLock::new(BTreeMap::new()),
@@ -31,10 +39,12 @@ impl RamFsDir {
         })
     }
 
+    /// Adds a child inode under `name` to this directory.
     pub fn add_child(&self, name: &str, inode: Arc<dyn Inode>) {
         self.entries.lock().insert(name.to_string(), inode);
     }
 
+    /// Retrieves an existing subdirectory or creates and inserts a new one if absent.
     pub fn get_or_create_subdir(&self, name: &str) -> Arc<RamFsDir> {
         let mut subdirs = self.subdirs.lock();
         if let Some(dir) = subdirs.get(name) {
@@ -140,18 +150,25 @@ impl Inode for RamFsDir {
     }
 }
 
+/// In-memory regular file inode backed by a dynamic byte vector.
 pub struct RamFsFile {
+    /// File payload buffer guarded by a spinlock.
     pub data: SpinLock<Vec<u8>>,
+    /// POSIX file permission mode bits.
     pub mode: SpinLock<u16>,
+    /// Owner user ID.
     pub uid: SpinLock<u32>,
+    /// Owner group ID.
     pub gid: SpinLock<u32>,
 }
 
 impl RamFsFile {
+    /// Creates a new regular file with initial data, mode `0644`, and root ownership.
     pub fn new(initial_data: Vec<u8>) -> Arc<Self> {
         Self::new_with_creds(initial_data, 0o644, 0, 0)
     }
 
+    /// Creates a new regular file with initial data, explicit mode, and ownership credentials.
     pub fn new_with_creds(initial_data: Vec<u8>, mode: u16, uid: u32, gid: u32) -> Arc<Self> {
         Arc::new(Self {
             data: SpinLock::new(initial_data),

@@ -4,6 +4,13 @@ use crate::string::strlen;
 use crate::unistd::{read, write};
 use posix_abi::*;
 
+/// Writes a single byte/character to standard output.
+///
+/// Returns the written character cast to `i32`, or `-1` on error.
+///
+/// # Safety
+///
+/// Performs direct unbuffered write to [`STDOUT_FILENO`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn putchar(c: i32) -> i32 {
     let byte = c as u8;
@@ -11,6 +18,13 @@ pub unsafe extern "C" fn putchar(c: i32) -> i32 {
     if ret == 1 { c } else { -1 }
 }
 
+/// Writes a null-terminated string followed by a newline to standard output.
+///
+/// Returns `0` on success.
+///
+/// # Safety
+///
+/// `s` must be a valid pointer to a null-terminated C string.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
     let len = unsafe { strlen(s) };
@@ -22,6 +36,13 @@ pub unsafe extern "C" fn puts(s: *const u8) -> i32 {
     0
 }
 
+/// Reads a single unsigned char from standard input.
+///
+/// Returns the character value cast to `i32`, or `-1` on end-of-file or error.
+///
+/// # Safety
+///
+/// Performs direct unbuffered read from [`STDIN_FILENO`].
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn getchar() -> i32 {
     let mut buf = 0u8;
@@ -29,17 +50,28 @@ pub unsafe extern "C" fn getchar() -> i32 {
     if n == 1 { buf as i32 } else { -1 }
 }
 
+/// Renames or moves a filesystem object from `oldpath` to `newpath`.
+///
+/// Returns `0` on success, or a negative error code on failure.
+///
+/// # Safety
+///
+/// `oldpath` and `newpath` must be valid pointers to null-terminated C strings.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rename(oldpath: *const u8, newpath: *const u8) -> i32 {
     unsafe { crate::syscall::syscall2(SYS_RENAME, oldpath as usize, newpath as usize) as i32 }
 }
 
+/// In-memory formatting buffer accumulator for formatted string generation.
 pub struct FormatBuffer<'a> {
+    /// Underlying destination byte buffer.
     pub buf: &'a mut [u8],
+    /// Total logical count of bytes emitted (can exceed `buf.len()`).
     pub written: usize,
 }
 
 impl<'a> FormatBuffer<'a> {
+    /// Appends a single byte to the buffer if capacity remains.
     pub fn push(&mut self, b: u8) {
         if self.written < self.buf.len() {
             self.buf[self.written] = b;
@@ -47,16 +79,19 @@ impl<'a> FormatBuffer<'a> {
         self.written += 1;
     }
 
+    /// Appends a string slice to the buffer.
     pub fn write_str(&mut self, s: &str) {
         for b in s.bytes() {
             self.push(b);
         }
     }
 
+    /// Formats an integer in the given radix without field padding.
     pub fn write_num(&mut self, num: i64, base: u8, is_signed: bool) {
         self.write_num_padded(num, base, is_signed, 0);
     }
 
+    /// Formats an integer in the given radix with optional minimum width padding.
     pub fn write_num_padded(&mut self, mut num: i64, base: u8, is_signed: bool, width: usize) {
         let is_neg = is_signed && num < 0;
         if is_neg {
@@ -90,6 +125,14 @@ impl<'a> FormatBuffer<'a> {
     }
 }
 
+/// Formats text according to format specifier into a fixed-size buffer.
+///
+/// Returns the number of characters that would have been written (excluding null terminator).
+///
+/// # Safety
+///
+/// `str_ptr` must point to writable memory of at least `size` bytes if `size > 0`.
+/// `format` must point to a valid null-terminated C format string matching the passed variadic arguments.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn snprintf(
     str_ptr: *mut u8,
@@ -175,6 +218,13 @@ pub unsafe extern "C" fn snprintf(
     written as i32
 }
 
+/// Formats text according to format specifier and writes it to standard output.
+///
+/// Returns the number of characters written.
+///
+/// # Safety
+///
+/// `format` must point to a valid null-terminated C format string matching the passed variadic arguments.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
     let mut buf = [0u8; 1024];
@@ -254,7 +304,10 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
 }
 
 /// An unbuffered writer targeting a file descriptor, implementing `core::fmt::Write`.
-pub struct FdWriter(pub i32);
+pub struct FdWriter(
+    /// Target file descriptor for raw write operations.
+    pub i32,
+);
 
 impl FdWriter {
     /// Creates a new `FdWriter` for the given file descriptor.

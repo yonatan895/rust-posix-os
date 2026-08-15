@@ -9,6 +9,7 @@
 use crate::ostd::mm::{USER_STR_MAX, UserAccessError, copy_cstr_from_user};
 use posix_abi::*;
 
+/// Translates low-level OSTD `UserAccessError` codes to standard POSIX errno values.
 pub fn map_user_error(err: UserAccessError) -> i32 {
     match err {
         UserAccessError::TooLong => ENAMETOOLONG,
