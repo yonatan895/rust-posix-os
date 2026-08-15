@@ -50,11 +50,10 @@ impl ProcDynamicFile {
             }
             ProcKind::Stat => {
                 alloc::format!(
-                    "cpu_ticks {}\nprocesses {}\nprocs_running {}\nasync_cycles {}\n",
+                    "cpu_ticks {}\nprocesses {}\nprocs_running {}\n",
                     mon.sample_tick,
                     mon.total_processes,
-                    mon.running_processes,
-                    mon.async_executor_cycles
+                    mon.running_processes
                 )
             }
             ProcKind::Uptime => {

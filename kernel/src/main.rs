@@ -61,14 +61,6 @@ pub unsafe extern "C" fn _start() -> ! {
 
     services::services_init(ostd::mm::boot_modules());
 
-    ostd::task::executor::async_init();
-    ostd::task::executor::spawn(services::monitor::system_resource_monitor_task());
-    let executed_steps = ostd::task::executor::run_async_tasks();
-    log::info!(
-        "[ASYNC] Kernel async executor initialized (executed {} task steps).",
-        executed_steps
-    );
-
     log::info!("=====================================================");
     log::info!("  Kernel Initialization Complete. Kernel running!   ");
     log::info!("=====================================================");

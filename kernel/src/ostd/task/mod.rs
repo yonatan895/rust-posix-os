@@ -1,10 +1,5 @@
 //! Task and Low-Level Context Switch Abstraction in OSTD.
 
-pub mod async_task;
-pub mod executor;
-
-pub use async_task::yield_now;
-
 use crate::ostd::arch::gdt::{KERNEL_CODE_SEL, KERNEL_DATA_SEL, USER_CODE_SEL, USER_DATA_SEL};
 use crate::ostd::arch::idt::TrapFrame;
 use core::arch::naked_asm;

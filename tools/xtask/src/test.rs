@@ -31,7 +31,6 @@ pub fn run_tests() {
         "POSIX Syscall Dispatcher ABI Interface Test",
         "POSIX SYS_RENAME & VFS Inode Relink Test",
         "ELF64 Executable Binary Loader Test",
-        "Kernel Async Future & Task Waker Executor Test",
         "POSIX Epoll Event Queue & Non-blocking I/O Multiplexing Test",
         "Kernel Background Resource Monitor & ProcFS Telemetry Test",
         "Kernel Security Audit Journal & System Snapshot Test",

@@ -2,7 +2,6 @@
 
 use crate::ostd::mm::{PAGE_SIZE, get_heap_stats, get_pmm_stats};
 use crate::ostd::sync::SpinLock;
-use crate::ostd::task::yield_now;
 use crate::services::process::{PROCESS_TABLE, ProcessState};
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -27,7 +26,6 @@ pub struct SystemMetricsSnapshot {
     pub total_processes: usize,
     pub running_processes: usize,
     pub processes: Vec<ProcessMetric>,
-    pub async_executor_cycles: usize,
 }
 
 impl SystemMetricsSnapshot {
@@ -42,7 +40,6 @@ impl SystemMetricsSnapshot {
             total_processes: 0,
             running_processes: 0,
             processes: Vec::new(),
-            async_executor_cycles: 0,
         }
     }
 }
@@ -96,15 +93,4 @@ pub fn update_system_metrics() {
     monitor.total_processes = proc_metrics.len();
     monitor.running_processes = running_count;
     monitor.processes = proc_metrics;
-    monitor.async_executor_cycles += 1;
-}
-
-pub async fn system_resource_monitor_task() {
-    log::info!("[MONITOR] Background system resource & process telemetry task started.");
-    for _ in 0..5 {
-        update_system_metrics();
-        yield_now().await;
-    }
-    update_system_metrics();
-    log::info!("[MONITOR] Background telemetry monitor task active (metrics updated).");
 }

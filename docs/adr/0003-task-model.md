@@ -2,7 +2,7 @@
 
 - Status: Proposed
 - Date: 2026-08-14
-- Updated: 2026-08-14
+- Updated: 2026-08-15
 - Issue: #25
 
 ## Context
@@ -66,11 +66,18 @@ Each process owns a dedicated, page-aligned kernel stack allocated during proces
      - Set CPU stack pointer `RSP` to `next_proc.saved_kernel_rsp`.
   5. Pop GPRs and execute `iretq`, resuming the new task in userland.
 
-### D5. Async Executor Boundary
+### D5. Async Executor Boundary (removed — Issue #33)
 
-- `ostd::task::executor` is exclusively a **Ring 0 cooperative future runtime** for kernel-internal background work (such as system monitoring).
-- POSIX processes (Ring 3 preemptive tasks) are managed strictly by the `Process` and `Scheduler` subsystems.
-- Future work: the async executor will be polled during idle slices when the scheduler has no ready user processes to run.
+The `ostd::task::executor` cooperative future runtime was **removed** (2026-08-15, Issue #33).
+It ran exactly once during boot for a single `monitor` task that drained its fixed five
+iterations before control reached ring 3, so it was never a live runtime; `/proc` computes
+its metrics on read, so the task provided no value.
+
+- POSIX processes (Ring 3 preemptive tasks) are managed strictly by the `Process` and
+  `Scheduler` subsystems.
+- Reintroduction requires a concrete second async consumer and an executor driven
+  continuously from the idle task loop with a waker on timer ticks. A single boot-drained
+  task does not justify a runtime.
 
 ## Consequences
 
