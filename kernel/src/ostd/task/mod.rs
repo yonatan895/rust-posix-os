@@ -1,16 +1,19 @@
 //! Task and Low-Level Context Switch Abstraction in OSTD.
+//!
+//! Provides architecture-neutral task management primitives adhering to the
+//! unified `TrapFrame`-at-`saved_kernel_rsp` invariant (ADR-0003).
 
-use crate::ostd::arch::gdt::{KERNEL_CODE_SEL, KERNEL_DATA_SEL, USER_CODE_SEL, USER_DATA_SEL};
-use crate::ostd::arch::idt::TrapFrame;
-use core::arch::naked_asm;
+pub use crate::ostd::arch::SyscallRegisters;
+pub use crate::ostd::arch::TrapFrame;
 
 pub const KERNEL_STACK_SIZE: usize = 16 * 1024; // 16 KiB
 
-/// Safely switches the CPU's active kernel stack in the TSS and syscall MSR.
+/// Safely updates the CPU's active kernel stack in the architectural TSS/per-CPU control.
 pub fn switch_active_kernel_stack(stack_top: u64) {
-    unsafe {
-        crate::ostd::arch::gdt::set_kernel_stack(stack_top);
-    }
+    #[cfg(target_arch = "x86_64")]
+    crate::ostd::arch::x86_64::task::switch_active_kernel_stack(stack_top);
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("switch_active_kernel_stack not implemented for this architecture");
 }
 
 /// Safely performs a task switch from `prev_saved_rsp_ptr` to `next_saved_rsp` under interrupt masking.
@@ -18,20 +21,24 @@ pub fn switch_active_kernel_stack(stack_top: u64) {
 /// In OSTD task model, caller passes raw pointer to outgoing PCB AtomicUsize field.
 #[allow(clippy::not_unsafe_ptr_arg_deref)]
 pub fn switch_tasks(prev_saved_rsp_ptr: *mut usize, next_saved_rsp: usize) {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: Disabling interrupts around voluntary context switch.
     unsafe {
         crate::ostd::arch::cli();
-        voluntary_task_switch(prev_saved_rsp_ptr, next_saved_rsp);
+        crate::ostd::arch::x86_64::task::voluntary_task_switch(prev_saved_rsp_ptr, next_saved_rsp);
         crate::ostd::arch::sti();
     }
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("switch_tasks not implemented for this architecture");
 }
 
 /// Kernel idle loop running with interrupts enabled.
 pub extern "C" fn kernel_idle_loop() -> ! {
     loop {
-        unsafe {
-            crate::ostd::arch::sti();
-            crate::ostd::arch::hlt();
-        }
+        #[cfg(target_arch = "x86_64")]
+        crate::ostd::arch::x86_64::task::idle();
+        #[cfg(not(target_arch = "x86_64"))]
+        unimplemented!("kernel_idle_loop not implemented for this architecture");
     }
 }
 
@@ -41,173 +48,32 @@ pub fn init_user_kernel_stack(
     entry_point: usize,
     user_stack_top: usize,
 ) -> usize {
-    assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
-    let offset = stack.len() - core::mem::size_of::<TrapFrame>();
-    let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    unsafe {
-        *frame_ptr = TrapFrame {
-            r15: 0,
-            r14: 0,
-            r13: 0,
-            r12: 0,
-            r11: 0,
-            r10: 0,
-            r9: 0,
-            r8: 0,
-            rbp: 0,
-            rdi: 0,
-            rsi: 0,
-            rdx: 0,
-            rcx: 0,
-            rbx: 0,
-            rax: 0,
-            rip: entry_point as u64,
-            cs: USER_CODE_SEL as u64,
-            rflags: 0x202, // IF=1
-            rsp: user_stack_top as u64,
-            ss: USER_DATA_SEL as u64,
-        };
-    }
-    frame_ptr as usize
+    #[cfg(target_arch = "x86_64")]
+    return crate::ostd::arch::x86_64::task::init_user_kernel_stack(
+        stack,
+        entry_point,
+        user_stack_top,
+    );
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("init_user_kernel_stack not implemented for this architecture")
 }
 
 /// Initializes a child process kernel stack with a synthetic `TrapFrame` cloned from the parent `SyscallRegisters`.
-/// Initializes a child process kernel stack with a synthetic `TrapFrame` cloned from the parent `SyscallRegisters`.
 ///
-/// Under the x86_64 fast syscall contract, `syscall` saves user RIP into `RCX` and user RFLAGS into `R11`.
-/// Thus `TrapFrame.rip` receives `parent_regs.rcx` and `TrapFrame.rflags` receives `parent_regs.r11`,
-/// while the GPR save slots `TrapFrame.rcx` and `TrapFrame.r11` are set to 0.
-/// Returns the initial `saved_kernel_rsp` pointing to the TrapFrame with `rax = 0` (child return value).
-pub fn init_fork_child_stack(
-    stack: &mut [u8],
-    parent_regs: &crate::ostd::arch::syscall::SyscallRegisters,
-) -> usize {
-    assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
-    let offset = stack.len() - core::mem::size_of::<TrapFrame>();
-    let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    // SAFETY: `frame_ptr` points inside the valid `stack` slice.
-    unsafe {
-        *frame_ptr = TrapFrame {
-            r15: parent_regs.r15 as u64,
-            r14: parent_regs.r14 as u64,
-            r13: parent_regs.r13 as u64,
-            r12: parent_regs.r12 as u64,
-            r11: 0, // Saved GPR slot (clobbered by syscall)
-            r10: parent_regs.r10 as u64,
-            r9: parent_regs.r9 as u64,
-            r8: parent_regs.r8 as u64,
-            rbp: parent_regs.rbp as u64,
-            rdi: parent_regs.rdi as u64,
-            rsi: parent_regs.rsi as u64,
-            rdx: parent_regs.rdx as u64,
-            rcx: 0, // Saved GPR slot (clobbered by syscall)
-            rbx: parent_regs.rbx as u64,
-            rax: 0,                      // Child return value from sys_fork = 0
-            rip: parent_regs.rcx as u64, // Return RIP in userland right after syscall
-            cs: USER_CODE_SEL as u64,
-            rflags: parent_regs.r11 as u64, // User RFLAGS
-            rsp: parent_regs.rsp as u64,    // User RSP
-            ss: USER_DATA_SEL as u64,
-        };
-    }
-    frame_ptr as usize
+/// Returns the initial `saved_kernel_rsp` pointing to the TrapFrame with return value 0.
+pub fn init_fork_child_stack(stack: &mut [u8], parent_regs: &SyscallRegisters) -> usize {
+    #[cfg(target_arch = "x86_64")]
+    return crate::ostd::arch::x86_64::task::init_fork_child_stack(stack, parent_regs);
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("init_fork_child_stack not implemented for this architecture")
 }
 
 /// Initializes a kernel stack slice with an initial `TrapFrame` for Ring 0 kernel task entry.
 pub fn init_kernel_task_stack(stack: &mut [u8], entry_point: usize) -> usize {
-    let stack_top = stack.as_ptr() as usize + stack.len();
-    assert!(stack.len() >= core::mem::size_of::<TrapFrame>());
-    let offset = stack.len() - core::mem::size_of::<TrapFrame>();
-    let frame_ptr = (stack.as_mut_ptr() as usize + offset) as *mut TrapFrame;
-    unsafe {
-        *frame_ptr = TrapFrame {
-            r15: 0,
-            r14: 0,
-            r13: 0,
-            r12: 0,
-            r11: 0,
-            r10: 0,
-            r9: 0,
-            r8: 0,
-            rbp: 0,
-            rdi: 0,
-            rsi: 0,
-            rdx: 0,
-            rcx: 0,
-            rbx: 0,
-            rax: 0,
-            rip: entry_point as u64,
-            cs: KERNEL_CODE_SEL as u64,
-            rflags: 0x202, // IF=1
-            rsp: stack_top as u64,
-            ss: KERNEL_DATA_SEL as u64,
-        };
-    }
-    frame_ptr as usize
-}
-
-/// Performs a voluntary task switch by creating a kernel-mode `TrapFrame` on the outgoing stack
-/// and restoring the incoming task's stack via standard `TrapFrame` / `iretq` execution.
-///
-/// # Safety
-///
-/// `prev_saved_rsp` must be a valid pointer to store the outgoing RSP into the PCB.
-/// `next_saved_rsp` must point to a valid `TrapFrame` on the incoming task's kernel stack.
-#[unsafe(naked)]
-pub unsafe extern "C" fn voluntary_task_switch(
-    _prev_saved_rsp: *mut usize,
-    _next_saved_rsp: usize,
-) {
-    naked_asm!(
-        // Push synthetic TrapFrame for returning to kernel mode (CS = 0x08, SS = 0x10)
-        // Hardware frame: [SS, RSP, RFLAGS, CS, RIP]
-        "push 0x10", // SS = KERNEL_DATA_SEL (0x10)
-        "lea rax, [rsp + 8]",
-        "push rax",  // RSP (stack before push)
-        "pushfq",    // RFLAGS
-        "push 0x08", // CS = KERNEL_CODE_SEL (0x08)
-        "lea rax, [1f + rip]",
-        "push rax", // RIP (resume point at label 1)
-        // 15 GPRs: rax, rbx, rcx, rdx, rsi, rdi, rbp, r8..r15
-        "push 0", // rax
-        "push rbx",
-        "push rcx",
-        "push rdx",
-        "push rsi",
-        "push rdi",
-        "push rbp",
-        "push r8",
-        "push r9",
-        "push r10",
-        "push r11",
-        "push r12",
-        "push r13",
-        "push r14",
-        "push r15",
-        // Save current RSP directly into the outgoing PCB field (*prev_saved_rsp = rsp)
-        "mov [rdi], rsp",
-        // Load next_saved_rsp (rsi) into RSP
-        "mov rsp, rsi",
-        // Resume next task via unified TrapFrame pop + iretq
-        "pop r15",
-        "pop r14",
-        "pop r13",
-        "pop r12",
-        "pop r11",
-        "pop r10",
-        "pop r9",
-        "pop r8",
-        "pop rbp",
-        "pop rdi",
-        "pop rsi",
-        "pop rdx",
-        "pop rcx",
-        "pop rbx",
-        "pop rax",
-        "iretq",
-        "1:",
-        "ret",
-    );
+    #[cfg(target_arch = "x86_64")]
+    return crate::ostd::arch::x86_64::task::init_kernel_task_stack(stack, entry_point);
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("init_kernel_task_stack not implemented for this architecture")
 }
 
 /// Transitions the CPU to Ring 3 (user mode) and begins executing userland code.
@@ -215,42 +81,13 @@ pub unsafe extern "C" fn voluntary_task_switch(
 /// # Safety
 ///
 /// `entry_point` must be a valid executable user address, `user_stack_top` must be a valid user stack address,
-/// and `pml4_phys` must be a valid page table physical address.
-#[unsafe(naked)]
-pub unsafe extern "C" fn enter_user_mode(
-    _entry_point: usize,
-    _user_stack_top: usize,
-    _pml4_phys: usize,
-) -> ! {
-    naked_asm!(
-        // rdi: entry_point
-        // rsi: user_stack_top
-        // rdx: pml4_phys
-
-        // Switch to process address space
-        "mov cr3, rdx",
-        // Push iretq frame: [SS, RSP, RFLAGS, CS, RIP]
-        "push 0x1b",  // User Data Segment (SS = 0x18 | 3)
-        "push rsi",   // User Stack Pointer (RSP)
-        "push 0x202", // RFLAGS (IF = 1)
-        "push 0x23",  // User Code Segment (CS = 0x20 | 3)
-        "push rdi",   // User Instruction Pointer (RIP)
-        // Clear general registers
-        "xor rax, rax",
-        "xor rbx, rbx",
-        "xor rcx, rcx",
-        "xor rdx, rdx",
-        "xor rdi, rdi",
-        "xor rsi, rsi",
-        "xor rbp, rbp",
-        "xor r8, r8",
-        "xor r9, r9",
-        "xor r10, r10",
-        "xor r11, r11",
-        "xor r12, r12",
-        "xor r13, r13",
-        "xor r14, r14",
-        "xor r15, r15",
-        "iretq",
-    );
+/// and `root_table` must be a valid page table physical address.
+pub unsafe fn enter_user_mode(entry_point: usize, user_stack_top: usize, root_table: usize) -> ! {
+    #[cfg(target_arch = "x86_64")]
+    // SAFETY: Transitioning CPU to Ring 3 user mode execution.
+    unsafe {
+        crate::ostd::arch::x86_64::task::enter_user_mode(entry_point, user_stack_top, root_table)
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    unimplemented!("enter_user_mode not implemented for this architecture")
 }

@@ -22,7 +22,7 @@ pub(crate) use user_access::{
     copy_optional_user_str, copy_user_path, copy_user_str_array, map_user_error,
 };
 
-use crate::ostd::arch::syscall::SyscallRegisters;
+use crate::ostd::task::SyscallRegisters;
 use crate::services::process::get_current_process;
 use posix_abi::*;
 
