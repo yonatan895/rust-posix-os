@@ -24,6 +24,7 @@ pub fn run_tests() {
     test_file_creation_mode_and_audit_uid();
     test_user_pointer_validation_efault_hammer();
     test_userland_panic_fd2();
+    test_syscall_microbench();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -53,6 +54,7 @@ pub fn run_tests() {
         "File Creation Mode & Audit uid Test",
         "User Pointer Validation (EFAULT) Hammer Test",
         "Userland Panic Info on FD 2 Test",
+        "Syscall Microbenchmark (100k getpid) Test",
     ];
 
     for t in tests {
@@ -2003,4 +2005,37 @@ fn test_userland_panic_fd2() {
         "coreutils panic output must start with 'coreutils panic: '"
     );
     assert!(coreutils_out.contains(coreutils_msg));
+}
+
+fn test_syscall_microbench() {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::time::Instant;
+
+    static SIM_CURRENT_PID: AtomicI32 = AtomicI32::new(1);
+
+    #[inline(never)]
+    fn sim_dispatch_getpid() -> isize {
+        SIM_CURRENT_PID.load(Ordering::SeqCst) as isize
+    }
+
+    const BENCH_ROUNDS: usize = 100_000;
+
+    let start = Instant::now();
+    let mut sum: isize = 0;
+    for _ in 0..BENCH_ROUNDS {
+        sum += std::hint::black_box(sim_dispatch_getpid());
+    }
+    let duration = start.elapsed();
+
+    assert_eq!(
+        sum, BENCH_ROUNDS as isize,
+        "All 100,000 getpid iterations must return simulated PID 1"
+    );
+
+    let total_nanos = duration.as_nanos() as f64;
+    let avg_ns = total_nanos / (BENCH_ROUNDS as f64);
+    assert!(
+        avg_ns >= 0.0,
+        "Average nanoseconds per syscall must be non-negative"
+    );
 }

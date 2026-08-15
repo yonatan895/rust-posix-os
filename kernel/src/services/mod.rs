@@ -57,7 +57,7 @@ pub fn services_init(blobs: alloc::vec::Vec<BootBlob>) {
                 .to_vec(),
         ),
     );
-    etc_dir.add_child("motd", RamFsFile::new(b"Welcome to Rust POSIX OS (Framekernel Model)\nType 'help' for available commands.\n\n".to_vec()));
+    etc_dir.add_child("motd", RamFsFile::new(b"Welcome to Rust POSIX OS (Framekernel Model)\nStatus: VFS, fork, preemptive scheduler, signals active.\nNext: userland networking / SMP.\nType 'help' for available commands.\n\n".to_vec()));
 
     root_dir.add_child("dev", dev_dir);
     root_dir.add_child("proc", proc_dir);
