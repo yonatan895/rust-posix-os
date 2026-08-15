@@ -1,5 +1,6 @@
 //! Cargo xtask automation for Rust POSIX OS.
 
+mod bench;
 mod build;
 mod initramfs;
 mod qemu;
@@ -12,6 +13,11 @@ fn main() {
     let command = args.first().map(|s| s.as_str()).unwrap_or("run");
 
     match command {
+        "bench" => {
+            build::build_all();
+            initramfs::create_initramfs();
+            bench::run_bench();
+        }
         "build" => {
             build::build_all();
             initramfs::create_initramfs();
@@ -31,7 +37,7 @@ fn main() {
         }
         _ => {
             eprintln!("Unknown command: {}", command);
-            eprintln!("Usage: cargo xtask [build|initramfs|run|test]");
+            eprintln!("Usage: cargo xtask [bench|build|initramfs|run|test]");
             std::process::exit(1);
         }
     }

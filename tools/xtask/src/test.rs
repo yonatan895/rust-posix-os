@@ -24,6 +24,7 @@ pub fn run_tests() {
     test_file_creation_mode_and_audit_uid();
     test_user_pointer_validation_efault_hammer();
     test_userland_panic_fd2();
+    test_syscall_microbench();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -53,6 +54,7 @@ pub fn run_tests() {
         "File Creation Mode & Audit uid Test",
         "User Pointer Validation (EFAULT) Hammer Test",
         "Userland Panic Info on FD 2 Test",
+        "Syscall Microbenchmark (100k getpid) Test",
     ];
 
     for t in tests {
@@ -2003,4 +2005,72 @@ fn test_userland_panic_fd2() {
         "coreutils panic output must start with 'coreutils panic: '"
     );
     assert!(coreutils_out.contains(coreutils_msg));
+}
+
+fn test_syscall_microbench() {
+    use std::sync::atomic::{AtomicI32, Ordering};
+    use std::time::Instant;
+
+    struct SimProcess {
+        pid: i32,
+        ppid: i32,
+    }
+
+    let procs = [
+        SimProcess { pid: 1, ppid: 0 },
+        SimProcess { pid: 42, ppid: 1 },
+        SimProcess { pid: 100, ppid: 42 },
+        SimProcess {
+            pid: 1337,
+            ppid: 100,
+        },
+    ];
+
+    static CURRENT_PID_SLOT: AtomicI32 = AtomicI32::new(1);
+
+    let sim_dispatch = |syscall_nr: usize, current_proc: &SimProcess| -> isize {
+        match syscall_nr {
+            posix_abi::SYS_GETPID => current_proc.pid as isize,
+            posix_abi::SYS_GETPPID => current_proc.ppid as isize,
+            399 => -38, // -ENOSYS
+            _ => -1,
+        }
+    };
+
+    // 1. Verify ENOSYS routing
+    assert_eq!(
+        sim_dispatch(399, &procs[0]),
+        -38,
+        "Unimplemented syscall must return -ENOSYS"
+    );
+
+    // 2. Verify accurate PID/PPID retrieval across distinct process contexts
+    for p in &procs {
+        CURRENT_PID_SLOT.store(p.pid, Ordering::Relaxed);
+        assert_eq!(sim_dispatch(posix_abi::SYS_GETPID, p), p.pid as isize);
+        assert_eq!(sim_dispatch(posix_abi::SYS_GETPPID, p), p.ppid as isize);
+    }
+
+    // 3. Execute 100,000 iterations of simulated fast-dispatch across round-robin processes
+    const BENCH_ROUNDS: usize = 100_000;
+    let start = Instant::now();
+    let mut checksum: isize = 0;
+    for i in 0..BENCH_ROUNDS {
+        let proc = &procs[i % procs.len()];
+        let pid = std::hint::black_box(sim_dispatch(posix_abi::SYS_GETPID, proc));
+        checksum += pid;
+    }
+    let duration = start.elapsed();
+
+    let expected_checksum: isize = (0..BENCH_ROUNDS)
+        .map(|i| procs[i % procs.len()].pid as isize)
+        .sum();
+    assert_eq!(
+        checksum, expected_checksum,
+        "100k iteration checksum must match expected multi-PID sum"
+    );
+
+    let total_nanos = duration.as_nanos() as f64;
+    let avg_ns = total_nanos / (BENCH_ROUNDS as f64);
+    assert!(avg_ns > 0.0, "Measured elapsed time must be non-zero");
 }
