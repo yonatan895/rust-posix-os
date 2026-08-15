@@ -256,6 +256,13 @@ pub unsafe extern "C" fn printf(format: *const u8, mut args: ...) -> i32 {
 /// An unbuffered writer targeting a file descriptor, implementing `core::fmt::Write`.
 pub struct FdWriter(pub i32);
 
+impl FdWriter {
+    /// Creates a new `FdWriter` for the given file descriptor.
+    pub const fn new(fd: i32) -> Self {
+        Self(fd)
+    }
+}
+
 impl core::fmt::Write for FdWriter {
     fn write_str(&mut self, s: &str) -> core::fmt::Result {
         let bytes = s.as_bytes();
@@ -270,4 +277,14 @@ impl core::fmt::Write for FdWriter {
         }
         Ok(())
     }
+}
+
+/// Writes formatted `PanicInfo` to the specified file descriptor.
+///
+/// The write is intentionally best-effort: if the file descriptor is closed or unwritable,
+/// the function returns without hanging or panicking recursively.
+pub fn write_panic_info(fd: i32, prefix: &str, info: &core::panic::PanicInfo) {
+    let mut writer = FdWriter::new(fd);
+    // Best-effort write: ignore error if fd is not available to guarantee panic handler can exit.
+    let _ = core::fmt::write(&mut writer, format_args!("{}: {}\n", prefix, info));
 }

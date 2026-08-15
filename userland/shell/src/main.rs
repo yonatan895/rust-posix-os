@@ -132,8 +132,7 @@ pub unsafe fn execute_command(argc: usize, argv: &[*const u8; 16]) {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    let mut writer = FdWriter(STDERR_FILENO);
-    let _ = core::fmt::write(&mut writer, format_args!("shell panic: {}\n", info));
+    write_panic_info(STDERR_FILENO, "shell panic", info);
     // SAFETY: Exiting shell process on panic.
     unsafe {
         exit(1);

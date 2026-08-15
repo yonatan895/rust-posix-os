@@ -1904,9 +1904,12 @@ fn test_user_pointer_validation_efault_hammer() {
 fn test_userland_panic_fd2() {
     use std::fmt::Write;
 
+    // Simulation of FdWriter and write_panic_info shared library helpers in libc::stdio.
+    // Tests the format shape ({crate} panic: {info}\n) and unbuffered streaming over fd 2.
     struct SimFdWriter {
         fd: i32,
         output: Vec<u8>,
+        max_chunk: usize,
     }
 
     impl SimFdWriter {
@@ -1914,13 +1917,21 @@ fn test_userland_panic_fd2() {
             Self {
                 fd,
                 output: Vec::new(),
+                max_chunk: usize::MAX,
             }
         }
     }
 
     impl Write for SimFdWriter {
         fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            self.output.extend_from_slice(s.as_bytes());
+            let bytes = s.as_bytes();
+            let mut written = 0;
+            while written < bytes.len() {
+                let to_write = (bytes.len() - written).min(self.max_chunk);
+                self.output
+                    .extend_from_slice(&bytes[written..written + to_write]);
+                written += to_write;
+            }
             Ok(())
         }
     }
@@ -1952,8 +1963,9 @@ fn test_userland_panic_fd2() {
         "init panic output must contain the source file"
     );
 
-    // 2. Verify shell panic handler format targeting STDERR_FILENO (2)
+    // 2. Verify shell panic handler format targeting STDERR_FILENO (2) with chunked partial writes
     let mut shell_writer = SimFdWriter::new(2);
+    shell_writer.max_chunk = 7; // Test multi-chunk partial write loop
     let shell_msg = "command parser buffer overflow";
     let shell_file = "userland/shell/src/main.rs";
     let shell_line = 100;

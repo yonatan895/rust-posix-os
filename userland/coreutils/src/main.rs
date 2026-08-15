@@ -340,8 +340,7 @@ pub unsafe fn cmd_mv(argc: usize, argv: *const *const u8) -> i32 {
 
 #[panic_handler]
 fn panic(info: &PanicInfo) -> ! {
-    let mut writer = FdWriter(STDERR_FILENO);
-    let _ = core::fmt::write(&mut writer, format_args!("coreutils panic: {}\n", info));
+    write_panic_info(STDERR_FILENO, "coreutils panic", info);
     // SAFETY: Exiting coreutils process on panic.
     unsafe { exit(1) };
 }
