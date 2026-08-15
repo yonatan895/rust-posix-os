@@ -1,28 +1,10 @@
 //! 8254 Programmable Interval Timer (PIT) Driver for x86_64.
 
 use super::{io_wait, outb};
-
-pub const PIT_FREQUENCY_HZ: u32 = 100;
-pub const PIT_BASE_FREQUENCY_HZ: u32 = 1_193_182;
-pub const PIT_MIN_FREQUENCY_HZ: u32 = 19; // 1_193_182 / 65535 ≈ 18.2 Hz
-pub const PIT_MAX_FREQUENCY_HZ: u32 = PIT_BASE_FREQUENCY_HZ; // 1_193_182 / 1 = 1_193_182 Hz
-pub const PIT_DIVISOR: u16 = (PIT_BASE_FREQUENCY_HZ / PIT_FREQUENCY_HZ) as u16; // 11931 = 0x2E9B
-
-/// Computes the 16-bit reload divisor for a requested timer frequency in Hz.
-///
-/// Returns `Some(divisor)` if `hz` falls within the supported range `19..=1_193_182`,
-/// or `None` if the requested frequency cannot be achieved by the 16-bit counter.
-pub const fn pit_calc_divisor(hz: u32) -> Option<u16> {
-    if hz < PIT_MIN_FREQUENCY_HZ || hz > PIT_MAX_FREQUENCY_HZ {
-        return None;
-    }
-    let divisor = PIT_BASE_FREQUENCY_HZ / hz;
-    if divisor == 0 || divisor > 65535 {
-        None
-    } else {
-        Some(divisor as u16)
-    }
-}
+pub use posix_abi::{
+    PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ, PIT_MAX_FREQUENCY_HZ,
+    PIT_MIN_FREQUENCY_HZ, pit_calc_divisor, pit_effective_freq,
+};
 
 /// Initializes the 8254 Programmable Interval Timer (PIT) Channel 0 for a target frequency in Hz.
 ///

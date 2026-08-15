@@ -3,7 +3,7 @@
 //! SpinLock masks CPU interrupts on acquire and restores the previous interrupt
 //! state on drop, preventing deadlocks when acquiring locks held across ISR contexts.
 
-use crate::ostd::irq::{IrqFlags, irq_restore, irq_save};
+use crate::ostd::irq::IrqGuard;
 use core::cell::UnsafeCell;
 use core::ops::{Deref, DerefMut};
 use core::sync::atomic::{AtomicBool, Ordering};
@@ -18,7 +18,7 @@ unsafe impl<T: Send> Send for SpinLock<T> {}
 
 pub struct SpinLockGuard<'a, T> {
     lock: &'a SpinLock<T>,
-    flags: Option<IrqFlags>,
+    guard: IrqGuard,
 }
 
 impl<T> SpinLock<T> {
@@ -30,9 +30,8 @@ impl<T> SpinLock<T> {
     }
 
     pub fn lock(&self) -> SpinLockGuard<'_, T> {
-        // Save previous interrupt state and disable interrupts before acquiring the spinlock
-        // to prevent deadlock if an interrupt handler attempts to take the same lock.
-        let flags = irq_save();
+        // Disables interrupts and stores previous state token inside IrqGuard.
+        let guard = IrqGuard::new();
 
         while self
             .lock
@@ -43,28 +42,21 @@ impl<T> SpinLock<T> {
                 core::hint::spin_loop();
             }
         }
-        SpinLockGuard {
-            lock: self,
-            flags: Some(flags),
-        }
+        SpinLockGuard { lock: self, guard }
     }
 
     pub fn try_lock(&self) -> Option<SpinLockGuard<'_, T>> {
-        // Save previous interrupt state and disable interrupts before attempting lock acquisition.
-        let flags = irq_save();
+        // Disables interrupts and stores previous state token inside IrqGuard.
+        let guard = IrqGuard::new();
 
         if self
             .lock
             .compare_exchange(false, true, Ordering::Acquire, Ordering::Relaxed)
             .is_ok()
         {
-            Some(SpinLockGuard {
-                lock: self,
-                flags: Some(flags),
-            })
+            Some(SpinLockGuard { lock: self, guard })
         } else {
-            // Restore previous interrupt state if lock acquisition failed.
-            irq_restore(flags);
+            // IrqGuard drops and restores interrupts automatically on failed lock acquisition.
             None
         }
     }
@@ -74,8 +66,7 @@ impl<T> SpinLockGuard<'_, T> {
     /// Unlocks the spinlock without restoring the CPU interrupt state (leaves interrupts masked).
     pub fn unlock_without_restoring_interrupts(mut self) {
         self.lock.lock.store(false, Ordering::Release);
-        self.flags = None;
-        core::mem::forget(self);
+        self.guard.disarm();
     }
 }
 
@@ -97,9 +88,6 @@ impl<T> DerefMut for SpinLockGuard<'_, T> {
 impl<T> Drop for SpinLockGuard<'_, T> {
     fn drop(&mut self) {
         self.lock.lock.store(false, Ordering::Release);
-        // Restore CPU interrupt enable state from when the lock was acquired.
-        if let Some(flags) = self.flags.take() {
-            irq_restore(flags);
-        }
+        // `self.guard` drops here and restores interrupts automatically.
     }
 }

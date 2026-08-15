@@ -1,7 +1,12 @@
 //! Interrupt Controller & Hardware Timers in OSTD.
 //!
-//! Exposes architecture-neutral IRQ primitives, delegating architecture-specific
-//! controller (e.g. 8259 PIC) and timer (e.g. 8254 PIT) programming to `ostd::arch`.
+//! ## Portable API Boundary
+//! This module defines the architecture-neutral interrupt and timer interface for OSTD.
+//! - On `x86_64`, `mask`, `unmask`, and `send_eoi` currently delegate to the dual 8259 PIC driver,
+//!   and `ack_timer()` acknowledges PIC IRQ0 (8254 PIT line).
+//! - Architecture-specific controller details remain strictly isolated within `ostd::arch::x86_64`.
+//! - Future architecture ports (e.g. GIC on `aarch64`, PLIC/SBI on `riscv64`) will implement this
+//!   same portable interface without inheriting legacy x86 PIC/IRQ0 semantics.
 
 use core::sync::atomic::{AtomicU64, Ordering};
 
@@ -11,15 +16,16 @@ use crate::ostd::arch::x86_64::{io_wait, outb, pic, pit};
 #[cfg(target_arch = "x86_64")]
 pub use crate::ostd::arch::x86_64::pit::{
     PIT_BASE_FREQUENCY_HZ, PIT_DIVISOR, PIT_FREQUENCY_HZ, PIT_MAX_FREQUENCY_HZ,
-    PIT_MIN_FREQUENCY_HZ, pit_calc_divisor,
+    PIT_MIN_FREQUENCY_HZ, pit_calc_divisor, pit_effective_freq,
 };
 
 pub(crate) static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
-/// Opaque CPU interrupt state token used for safe, portable `irq_save` and `irq_restore`.
+/// Opaque, one-shot CPU interrupt state token used for safe, portable `irq_save` and `irq_restore`.
 ///
-/// The internal representation is private to prevent manual synthesis of invalid CPU flags.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// The internal representation is private and non-copyable to prevent manual synthesis or replay
+/// of CPU interrupt flags.
+#[derive(Debug, PartialEq, Eq)]
 pub struct IrqFlags(usize);
 
 /// RAII guard that disables CPU interrupts upon creation and restores previous interrupt state on drop.
@@ -34,6 +40,12 @@ impl IrqGuard {
         Self {
             flags: Some(irq_save()),
         }
+    }
+
+    /// Disarms the guard without restoring CPU interrupts on drop.
+    #[inline(always)]
+    pub fn disarm(&mut self) {
+        self.flags = None;
     }
 }
 
@@ -60,7 +72,7 @@ pub fn without_interrupts<R, F: FnOnce() -> R>(f: F) -> R {
     f()
 }
 
-/// Disables CPU interrupts and returns the previous interrupt state token.
+/// Disables CPU interrupts and returns an opaque, one-shot interrupt state token.
 #[inline(always)]
 pub fn irq_save() -> IrqFlags {
     #[cfg(target_arch = "x86_64")]
@@ -74,7 +86,9 @@ pub fn irq_save() -> IrqFlags {
     unimplemented!("irq_save not implemented for this architecture")
 }
 
-/// Restores the CPU interrupt state from a previously captured `IrqFlags` token.
+/// Restores the CPU interrupt state from a previously captured one-shot `IrqFlags` token.
+///
+/// Consumes `flags` by value to ensure tokens cannot be replayed.
 #[inline(always)]
 pub fn irq_restore(flags: IrqFlags) {
     #[cfg(target_arch = "x86_64")]
@@ -83,7 +97,10 @@ pub fn irq_restore(flags: IrqFlags) {
         crate::ostd::arch::x86_64::restore_rflags(flags.0 as u64);
     }
     #[cfg(not(target_arch = "x86_64"))]
-    unimplemented!("irq_restore not implemented for this architecture");
+    {
+        let _ = flags;
+        unimplemented!("irq_restore not implemented for this architecture");
+    }
 }
 
 /// Enables CPU interrupts.
@@ -131,7 +148,10 @@ pub fn mask(irq: u8) {
         pic::mask(irq);
     }
     #[cfg(not(target_arch = "x86_64"))]
-    unimplemented!("irq::mask not implemented for this architecture");
+    {
+        let _ = irq;
+        unimplemented!("irq::mask not implemented for this architecture");
+    }
 }
 
 /// Unmasks a hardware IRQ line.
@@ -143,7 +163,10 @@ pub fn unmask(irq: u8) {
         pic::unmask(irq);
     }
     #[cfg(not(target_arch = "x86_64"))]
-    unimplemented!("irq::unmask not implemented for this architecture");
+    {
+        let _ = irq;
+        unimplemented!("irq::unmask not implemented for this architecture");
+    }
 }
 
 /// Sends End of Interrupt (EOI) acknowledgment to the interrupt controller.
@@ -159,7 +182,10 @@ pub unsafe fn send_eoi(irq: u8) {
         pic::send_eoi(irq);
     }
     #[cfg(not(target_arch = "x86_64"))]
-    unimplemented!("send_eoi not implemented for this architecture");
+    {
+        let _ = irq;
+        unimplemented!("send_eoi not implemented for this architecture");
+    }
 }
 
 /// Configures and starts the hardware periodic timer at a specified frequency in Hz.
@@ -170,7 +196,10 @@ pub fn init_timer(hz: u32) {
         pit::pit_init_hz(hz);
     }
     #[cfg(not(target_arch = "x86_64"))]
-    unimplemented!("init_timer not implemented for this architecture");
+    {
+        let _ = hz;
+        unimplemented!("init_timer not implemented for this architecture");
+    }
 }
 
 /// Acknowledges the periodic timer interrupt.

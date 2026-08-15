@@ -31,42 +31,43 @@ pub fn register_tests(runner: &mut TestRunner) {
     );
 }
 
-fn pit_calc_divisor(hz: u32) -> Option<u16> {
-    const PIT_BASE_FREQ: u32 = 1_193_182;
-    const PIT_MIN_FREQ: u32 = 19;
-    const PIT_MAX_FREQ: u32 = PIT_BASE_FREQ;
-
-    if !(PIT_MIN_FREQ..=PIT_MAX_FREQ).contains(&hz) {
-        return None;
-    }
-    let divisor = PIT_BASE_FREQ / hz;
-    if divisor == 0 || divisor > 65535 {
-        None
-    } else {
-        Some(divisor as u16)
-    }
-}
+use posix_abi::{pit_calc_divisor, pit_effective_freq};
 
 fn test_timer_configuration() {
-    // 100 Hz standard divisor
+    // 100 Hz standard divisor and effective frequency
     assert_eq!(
         pit_calc_divisor(100),
         Some(11931),
         "PIT 100 Hz divisor calculation error"
     );
+    assert_eq!(
+        pit_effective_freq(11931),
+        100,
+        "PIT 100 Hz effective frequency calculation error"
+    );
 
-    // Minimum frequency (19 Hz)
+    // Minimum frequency (19 Hz policy bound, divisor 62799)
     assert_eq!(
         pit_calc_divisor(19),
         Some(62799),
         "PIT 19 Hz divisor calculation error"
     );
+    assert_eq!(
+        pit_effective_freq(62799),
+        19,
+        "PIT 19 Hz effective frequency calculation error"
+    );
 
-    // Maximum frequency (1_193_182 Hz -> 1 tick per cycle)
+    // Maximum frequency (1_193_182 Hz -> 1 tick per oscillator cycle)
     assert_eq!(
         pit_calc_divisor(1_193_182),
         Some(1),
         "PIT max freq divisor calculation error"
+    );
+    assert_eq!(
+        pit_effective_freq(1),
+        1_193_182,
+        "PIT max freq effective frequency calculation error"
     );
 
     // Out of range (underflow / overflow)
@@ -74,7 +75,7 @@ fn test_timer_configuration() {
     assert_eq!(
         pit_calc_divisor(18),
         None,
-        "18 Hz (< 19 Hz min) should be rejected"
+        "18 Hz (< 19 Hz min policy bound) should be rejected"
     );
     assert_eq!(
         pit_calc_divisor(2_000_000),

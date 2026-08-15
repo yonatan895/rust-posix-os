@@ -9,11 +9,13 @@
 pub mod errno;
 pub mod flags;
 pub mod syscalls;
+pub mod timer;
 pub mod types;
 
 pub use errno::*;
 pub use flags::*;
 pub use syscalls::*;
+pub use timer::*;
 pub use types::*;
 
 #[cfg(test)]
