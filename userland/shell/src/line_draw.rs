@@ -23,6 +23,24 @@ impl<'a> LineBuffer<'a> {
         }
     }
 
+    pub fn push_num(&mut self, mut num: usize) {
+        if num == 0 {
+            self.push_byte(b'0');
+            return;
+        }
+        let mut digits = [0u8; 10];
+        let mut count = 0;
+        while num > 0 {
+            digits[count] = b'0' + (num % 10) as u8;
+            num /= 10;
+            count += 1;
+        }
+        while count > 0 {
+            count -= 1;
+            self.push_byte(digits[count]);
+        }
+    }
+
     pub fn push_str(&mut self, s: &str) {
         for b in s.bytes() {
             self.push_byte(b);
@@ -73,6 +91,7 @@ pub unsafe fn paint_prompt(
     cwd: *const u8,
     buf: &[u8],
     len: usize,
+    cursor_pos: usize,
     is_known: impl Fn(&str) -> bool,
 ) {
     let mut scratch = [0u8; 1024];
@@ -99,8 +118,18 @@ pub unsafe fn paint_prompt(
             out.push_byte(buf[i]);
         }
     }
-    // Erase leftover glyphs from a longer previous line. Do not space-pad
-    // and then redraw — that is the flicker.
-    out.push_str("\x1b[K\x1b[?25h");
+    // Erase leftover glyphs from a longer previous line.
+    out.push_str("\x1b[K");
+
+    // Reposition cursor to cursor_pos if cursor is not at the end of the line
+    if cursor_pos < len {
+        let back = len - cursor_pos;
+        out.push_str("\x1b[");
+        out.push_num(back);
+        out.push_byte(b'D');
+    }
+
+    // Unhide cursor at target position
+    out.push_str("\x1b[?25h");
     out.flush();
 }

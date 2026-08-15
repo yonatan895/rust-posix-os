@@ -25,6 +25,7 @@ pub fn run_tests() {
     test_user_pointer_validation_efault_hammer();
     test_userland_panic_fd2();
     test_syscall_microbench();
+    test_line_editor_navigation_and_paste();
 
     let tests = [
         "PMM 4KiB Frame Allocator Unit Test",
@@ -2073,4 +2074,142 @@ fn test_syscall_microbench() {
     let total_nanos = duration.as_nanos() as f64;
     let avg_ns = total_nanos / (BENCH_ROUNDS as f64);
     assert!(avg_ns > 0.0, "Measured elapsed time must be non-zero");
+}
+
+fn test_line_editor_navigation_and_paste() {
+    // 1. Test Navigation: Home, End, Left, Right, Word Left/Right
+    let cmd = b"echo hello world";
+    let len = cmd.len();
+
+    // Home -> 0
+    let mut cursor_pos = 0;
+    assert_eq!(cursor_pos, 0, "Home must move cursor to position 0");
+
+    // End -> len
+    cursor_pos = len;
+    assert_eq!(cursor_pos, len, "End must move cursor to length");
+
+    // Step Left
+    cursor_pos -= 1;
+    assert_eq!(cursor_pos, 15, "Left must decrement cursor position");
+
+    // Word Left from 16
+    let mut c = 16;
+    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
+        c -= 1;
+    }
+    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
+        c -= 1;
+    }
+    assert_eq!(c, 11, "Word Left from 16 must jump to 11 ('world')");
+
+    // Word Left from 11
+    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
+        c -= 1;
+    }
+    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
+        c -= 1;
+    }
+    assert_eq!(c, 5, "Word Left from 11 must jump to 5 ('hello')");
+
+    // Word Left from 5
+    while c > 0 && (cmd[c - 1] == b' ' || cmd[c - 1] == b'\t') {
+        c -= 1;
+    }
+    while c > 0 && cmd[c - 1] != b' ' && cmd[c - 1] != b'\t' {
+        c -= 1;
+    }
+    assert_eq!(c, 0, "Word Left from 5 must jump to 0 ('echo')");
+
+    // Word Right from 0
+    while c < len && cmd[c] != b' ' && cmd[c] != b'\t' {
+        c += 1;
+    }
+    while c < len && (cmd[c] == b' ' || cmd[c] == b'\t') {
+        c += 1;
+    }
+    assert_eq!(c, 5, "Word Right from 0 must jump to 5");
+
+    // 2. Test Mid-Line Splicing / Insertion (Paste into Terminal)
+    let mut buf = [0u8; 128];
+    let init_str = b"echo world";
+    buf[..init_str.len()].copy_from_slice(init_str);
+    let mut cur_len = init_str.len();
+    let mut cur_pos = 5; // Insert at position 5 (between 'echo ' and 'world')
+
+    let insert_str = b"-n ";
+    let ins_len = insert_str.len();
+    for i in (cur_pos..cur_len).rev() {
+        buf[i + ins_len] = buf[i];
+    }
+    buf[cur_pos..cur_pos + ins_len].copy_from_slice(insert_str);
+    cur_pos += ins_len;
+    cur_len += ins_len;
+    buf[cur_len] = 0;
+
+    assert_eq!(
+        &buf[..cur_len],
+        b"echo -n world",
+        "Mid-line insertion must splice text correctly"
+    );
+    assert_eq!(cur_pos, 8);
+
+    // 3. Test Clipboard Kill-Ring (Cut, Copy, Paste / Yank)
+    let mut kill_ring = [0u8; 128];
+
+    // Ctrl+K: Kill to end at position 8 (cuts "world")
+    let cut_count = cur_len - cur_pos;
+    kill_ring[..cut_count].copy_from_slice(&buf[cur_pos..cur_pos + cut_count]);
+    let mut kill_len = cut_count;
+    cur_len = cur_pos;
+    buf[cur_len] = 0;
+
+    assert_eq!(&kill_ring[..kill_len], b"world");
+    assert_eq!(&buf[..cur_len], b"echo -n ");
+
+    // Ctrl+Y: Yank (Paste from kill ring) at position 0 (Home)
+    cur_pos = 0;
+    for i in (cur_pos..cur_len).rev() {
+        buf[i + kill_len] = buf[i];
+    }
+    buf[cur_pos..cur_pos + kill_len].copy_from_slice(&kill_ring[..kill_len]);
+    cur_pos += kill_len;
+    cur_len += kill_len;
+    buf[cur_len] = 0;
+
+    assert_eq!(&buf[..cur_len], b"worldecho -n ");
+    assert_eq!(cur_pos, 5);
+
+    // Ctrl+U: Kill to start at position 5 (cuts "world")
+    kill_ring[..cur_pos].copy_from_slice(&buf[..cur_pos]);
+    kill_len = cur_pos;
+    for i in cur_pos..cur_len {
+        buf[i - cur_pos] = buf[i];
+    }
+    cur_len -= cur_pos;
+    cur_pos = 0;
+    buf[cur_len] = 0;
+
+    assert_eq!(&kill_ring[..kill_len], b"world");
+    assert_eq!(&buf[..cur_len], b"echo -n ");
+
+    // 4. Test Backspace and Delete
+    // Delete at pos 0 in "echo -n " (removes 'e')
+    for i in cur_pos..cur_len - 1 {
+        buf[i] = buf[i + 1];
+    }
+    cur_len -= 1;
+    buf[cur_len] = 0;
+    assert_eq!(&buf[..cur_len], b"cho -n ");
+
+    // Backspace at pos 3 in "cho -n " (removes 'o')
+    cur_pos = 3;
+    for i in cur_pos..cur_len {
+        buf[i - 1] = buf[i];
+    }
+    cur_pos -= 1;
+    cur_len -= 1;
+    buf[cur_len] = 0;
+    assert_eq!(&buf[..cur_len], b"ch -n ");
+    assert_eq!(cur_pos, 2);
 }
