@@ -8,7 +8,14 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
     if length == 0 {
         return -(EINVAL as isize);
     }
+    if length > crate::ostd::mm::USER_SPACE_END {
+        return -(ENOMEM as isize);
+    }
     let pages = length.div_ceil(PAGE_SIZE);
+    let byte_len = match pages.checked_mul(PAGE_SIZE) {
+        Some(len) => len,
+        None => return -(ENOMEM as isize),
+    };
 
     let proc_lock = match get_current_process() {
         Some(p) => p,
@@ -18,13 +25,16 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
 
     let vaddr = if addr == 0 {
         let base = proc.mmap_next_vaddr;
-        proc.mmap_next_vaddr += pages * PAGE_SIZE;
+        proc.mmap_next_vaddr = match proc.mmap_next_vaddr.checked_add(byte_len) {
+            Some(next) if next <= crate::ostd::mm::USER_SPACE_END => next,
+            _ => return -(ENOMEM as isize),
+        };
         base
     } else {
         addr & !0xFFF
     };
 
-    let _end_vaddr = match vaddr.checked_add(pages * PAGE_SIZE) {
+    let end_vaddr = match vaddr.checked_add(byte_len) {
         Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
         _ => return -(ENOMEM as isize),
     };
@@ -46,7 +56,7 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
                 return -(ENOMEM as isize);
             }
         }
-        vm.insert_vma(vaddr, vaddr + pages * PAGE_SIZE, prot as u32, flags as u32);
+        vm.insert_vma(vaddr, end_vaddr, prot as u32, flags as u32);
     }
 
     vaddr as isize
@@ -56,8 +66,15 @@ pub fn sys_munmap(addr: usize, length: usize) -> isize {
     if !addr.is_multiple_of(PAGE_SIZE) || length == 0 {
         return -(EINVAL as isize);
     }
+    if length > crate::ostd::mm::USER_SPACE_END {
+        return -(EINVAL as isize);
+    }
     let pages = length.div_ceil(PAGE_SIZE);
-    let end_addr = match addr.checked_add(pages * PAGE_SIZE) {
+    let byte_len = match pages.checked_mul(PAGE_SIZE) {
+        Some(len) => len,
+        None => return -(EINVAL as isize),
+    };
+    let end_addr = match addr.checked_add(byte_len) {
         Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
         _ => return -(EINVAL as isize),
     };
@@ -79,8 +96,15 @@ pub fn sys_mprotect(addr: usize, length: usize, prot: i32) -> isize {
     if !addr.is_multiple_of(PAGE_SIZE) || length == 0 {
         return -(EINVAL as isize);
     }
+    if length > crate::ostd::mm::USER_SPACE_END {
+        return -(ENOMEM as isize);
+    }
     let pages = length.div_ceil(PAGE_SIZE);
-    let end_addr = match addr.checked_add(pages * PAGE_SIZE) {
+    let byte_len = match pages.checked_mul(PAGE_SIZE) {
+        Some(len) => len,
+        None => return -(ENOMEM as isize),
+    };
+    let end_addr = match addr.checked_add(byte_len) {
         Some(end) if end <= crate::ostd::mm::USER_SPACE_END => end,
         _ => return -(ENOMEM as isize),
     };

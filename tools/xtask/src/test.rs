@@ -1845,17 +1845,23 @@ fn test_user_pointer_validation_efault_hammer() {
         if len == 0 {
             return Err(EINVAL);
         }
+        if len > USER_SPACE_END {
+            return Err(ENOMEM);
+        }
         let pages = len.div_ceil(PAGE_SIZE);
+        let byte_len = match pages.checked_mul(PAGE_SIZE) {
+            Some(bytes) => bytes,
+            None => return Err(ENOMEM),
+        };
         let vaddr = if addr == 0 {
             0x0000_7000_0000_0000usize
         } else {
             addr & !PAGE_MASK
         };
-        let end_vaddr = match vaddr.checked_add(pages * PAGE_SIZE) {
+        let _end_vaddr = match vaddr.checked_add(byte_len) {
             Some(end) if end <= USER_SPACE_END => end,
             _ => return Err(ENOMEM),
         };
-        let _ = end_vaddr;
         Ok(vaddr)
     };
 
@@ -1875,5 +1881,20 @@ fn test_user_pointer_validation_efault_hammer() {
         check_mmap_addr(0, 0),
         Err(EINVAL),
         "mmap with length 0 must return -EINVAL"
+    );
+    assert_eq!(
+        check_mmap_addr(0, usize::MAX),
+        Err(ENOMEM),
+        "mmap with usize::MAX length must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(0, usize::MAX - 4000),
+        Err(ENOMEM),
+        "mmap with near-usize::MAX length must return -ENOMEM"
+    );
+    assert_eq!(
+        check_mmap_addr(0, USER_SPACE_END + 1),
+        Err(ENOMEM),
+        "mmap with length exceeding USER_SPACE_END must return -ENOMEM"
     );
 }
