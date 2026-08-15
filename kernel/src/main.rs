@@ -1,6 +1,7 @@
 #![no_std]
 #![no_main]
 #![feature(alloc_error_handler)]
+#![feature(sync_unsafe_cell)]
 
 extern crate alloc;
 
@@ -8,13 +9,14 @@ pub mod ostd;
 #[deny(unsafe_code)]
 pub mod services;
 
+use core::cell::SyncUnsafeCell;
 use core::panic::PanicInfo;
 use ostd::*;
 
 #[repr(C, align(4096))]
 struct KernelStack([u8; 64 * 1024]);
 
-static mut BOOT_STACK: KernelStack = KernelStack([0; 64 * 1024]);
+static BOOT_STACK: SyncUnsafeCell<KernelStack> = SyncUnsafeCell::new(KernelStack([0; 64 * 1024]));
 
 /// Kernel entry point called by the Limine bootloader.
 ///
@@ -23,6 +25,7 @@ static mut BOOT_STACK: KernelStack = KernelStack([0; 64 * 1024]);
 /// Must be invoked by a compliant 64-bit bootloader with paging and stack initialized.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn _start() -> ! {
+    // SAFETY: Initialize early COM1 serial driver for panic and logging.
     unsafe {
         serial_init();
     }
@@ -31,17 +34,20 @@ pub unsafe extern "C" fn _start() -> ! {
     log::info!("  Target: x86_64 | Standard: POSIX.1-2024 (IEEE)     ");
     log::info!("=====================================================");
 
-    let stack_top = (&raw const BOOT_STACK as u64) + (64 * 1024);
+    let stack_top = (BOOT_STACK.get() as u64) + (64 * 1024);
+    // SAFETY: Initialize GDT and 64-bit TSS using dedicated static boot stack address.
     unsafe {
         gdt_init(stack_top);
     }
     log::info!("[OSTD] GDT and 64-bit TSS loaded successfully.");
 
+    // SAFETY: Initialize IDT exception vectors and timer IRQ handler.
     unsafe {
         idt_init();
     }
     log::info!("[OSTD] IDT and exception vectors configured.");
 
+    // SAFETY: Initialize physical memory management, kernel heap, and virtual address paging.
     unsafe {
         mm_init();
     }
@@ -49,11 +55,13 @@ pub unsafe extern "C" fn _start() -> ! {
 
     limine::init_framebuffer();
 
+    // SAFETY: Arm x86_64 fast system call MSRs (LSTAR/STAR/FMASK).
     unsafe {
         syscall_init(stack_top);
     }
     log::info!("[OSTD] Fast system call MSRs (LSTAR/STAR/FMASK) armed.");
 
+    // SAFETY: Remap PIC and configure PIT periodic timer.
     unsafe {
         irq_init();
     }
@@ -80,6 +88,7 @@ pub unsafe extern "C" fn _start() -> ! {
                 entry,
                 stack
             );
+            // SAFETY: Transitioning CPU to Ring 3 execution for PID 1 (init daemon).
             unsafe {
                 ostd::task::enter_user_mode(entry, stack, pml4);
             }
@@ -87,6 +96,7 @@ pub unsafe extern "C" fn _start() -> ! {
     }
 
     loop {
+        // SAFETY: Halting CPU when idle in kernel main loop.
         unsafe {
             arch::hlt();
         }
@@ -97,6 +107,7 @@ pub unsafe extern "C" fn _start() -> ! {
 fn panic(info: &PanicInfo) -> ! {
     log::error!("KERNEL PANIC: {}", info);
     loop {
+        // SAFETY: Halting CPU on fatal panic.
         unsafe { ostd::arch::hlt() };
     }
 }

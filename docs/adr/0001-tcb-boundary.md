@@ -54,6 +54,8 @@ in `services/`.
 - Honest `sys_fork` → `-ENOSYS` until VMA + page-table clone/COW.
 - Per-process `mmap_next_vaddr` (bump, not a VMA list). Reset on `exec`.
 - SysV AMD64 user stack on execve (argc, argv, envp, auxv).
+- Eradication of `static mut` globals in favor of `SyncUnsafeCell` and `AtomicU64` with CI grep enforcement.
+- Per-operation `unsafe` scoping with required `// SAFETY:` rationale comments.
 
 ## Still open
 
