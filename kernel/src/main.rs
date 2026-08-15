@@ -30,10 +30,10 @@ pub unsafe extern "C" fn _start() -> ! {
         serial_init();
     }
     log::info!("=====================================================");
-    log::info!("  Rust POSIX Operating System (Framekernel Model)   ");
+    log::info!("  Rust POSIX Operating System (Framekernel Model)    ");
     log::info!("  Target: x86_64 | Standard: POSIX.1-2024 (IEEE)     ");
-    log::info!("  Implemented: VFS, fork, preemptive scheduler, signals");
-    log::info!("  Next: userland networking / SMP                   ");
+    log::info!("  Implemented: VFS, fork, scheduler, signals, IPC    ");
+    log::info!("  Next: userland networking / SMP                    ");
     log::info!("=====================================================");
 
     let stack_top = (BOOT_STACK.get() as u64) + (64 * 1024);
@@ -72,9 +72,9 @@ pub unsafe extern "C" fn _start() -> ! {
     services::services_init(ostd::mm::boot_modules());
 
     log::info!("=====================================================");
-    log::info!("  Kernel Initialization Complete. Kernel running!   ");
-    log::info!("  Status: VFS, fork, preemptive scheduler, signals active");
-    log::info!("  Next: userland networking / SMP                   ");
+    log::info!("  Kernel Initialization Complete. Kernel running!    ");
+    log::info!("  Status: VFS, fork, scheduler, signals active       ");
+    log::info!("  Next: userland networking / SMP                    ");
     log::info!("=====================================================");
 
     if let Some(init_proc_lock) = services::process::get_current_process() {

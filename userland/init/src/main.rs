@@ -46,6 +46,12 @@ pub unsafe extern "C" fn _start() -> ! {
         run_efault_hammer_tests();
     }
 
+    // Run Syscall Microbenchmark (100,000 getpid fast syscalls in-guest)
+    // SAFETY: Executing in-guest hardware fast-syscall benchmark to measure real hardware cycles.
+    unsafe {
+        run_syscall_microbench();
+    }
+
     // Launch interactive POSIX Shell
     // SAFETY: Outputting status message to stdout.
     unsafe {
@@ -305,6 +311,46 @@ unsafe fn run_efault_hammer_tests() {
     // SAFETY: Announcing success to stdout.
     unsafe {
         puts(b"[init] User Pointer Validation (EFAULT) Hammer Tests PASSED!\n\0".as_ptr());
+    }
+}
+
+#[inline(always)]
+fn read_tsc() -> u64 {
+    // SAFETY: RDTSC is an unprivileged user-mode instruction on x86_64.
+    unsafe { core::arch::x86_64::_rdtsc() }
+}
+
+unsafe fn run_syscall_microbench() {
+    // SAFETY: Outputting benchmark start message to stdout.
+    unsafe {
+        puts(b"[bench] Running in-guest syscall microbenchmark (100,000 getpid)...\n\0".as_ptr());
+    }
+
+    // Warm-up cache lines and branch predictors (1,000 getpid syscalls)
+    for _ in 0..1000 {
+        // SAFETY: Invoking getpid fast syscall.
+        let _ = unsafe { getpid() };
+    }
+
+    let start_tsc = read_tsc();
+    let mut last_pid = 0;
+    for _ in 0..100_000 {
+        // SAFETY: Invoking getpid fast syscall (ring 3 -> ring 0 -> sysretq).
+        last_pid = unsafe { getpid() };
+    }
+    let end_tsc = read_tsc();
+
+    let total_cycles = end_tsc.saturating_sub(start_tsc);
+    let avg_cycles = total_cycles / 100_000;
+
+    // SAFETY: Writing measured in-guest microbenchmark results to stdout/serial.
+    unsafe {
+        printf(
+            b"[bench] In-guest 100k getpid complete: %u total cycles (~%u cycles/syscall, PID=%d)\n\0".as_ptr(),
+            total_cycles as u32,
+            avg_cycles as u32,
+            last_pid,
+        );
     }
 }
 

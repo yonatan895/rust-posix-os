@@ -1,7 +1,9 @@
 //! Syscall microbenchmark suite for Rust POSIX OS.
 //!
-//! Measures syscall dispatch latency, cycles, and throughput across 100,000 iterations
-//! of `getpid` to establish a performance baseline for future kernel optimizations.
+//! Provides accurate performance benchmarking:
+//! 1. In-guest hardware fast-syscall benchmark: Executed in PID 1 user space under QEMU
+//!    timing 100,000 real `syscall` instruction ring transitions with `rdtsc`.
+//! 2. Host fast-syscall dispatcher simulation: Measures dispatcher routing logic overhead.
 
 use posix_abi::SYS_GETPID;
 use std::sync::atomic::{AtomicI32, Ordering};
@@ -9,11 +11,11 @@ use std::time::Instant;
 
 static SIMULATED_PID: AtomicI32 = AtomicI32::new(1);
 
-/// Simulates the kernel fast syscall dispatcher entry point for `SYS_GETPID`.
+/// Simulates host-side dispatcher routing logic for `SYS_GETPID`.
 #[inline(never)]
-fn simulated_syscall_dispatch(syscall_nr: usize) -> isize {
+fn simulated_dispatcher_routing(syscall_nr: usize) -> isize {
     match syscall_nr {
-        SYS_GETPID => SIMULATED_PID.load(Ordering::SeqCst) as isize,
+        SYS_GETPID => SIMULATED_PID.load(Ordering::Relaxed) as isize,
         _ => -1,
     }
 }
@@ -29,18 +31,19 @@ fn read_cpu_tsc() -> u64 {
     0
 }
 
-/// Runs the 100,000 iteration `getpid` syscall microbenchmark.
+/// Runs the 100,000 iteration host dispatcher simulation benchmark.
 pub fn run_bench() {
     const ITERATIONS: usize = 100_000;
 
     println!("===============================================================");
     println!("  Rust POSIX OS - Syscall Microbenchmark Suite                 ");
-    println!("  Benchmark: 100,000 iterations of SYS_GETPID (Fast Dispatch)  ");
+    println!("  Mode: Host Syscall Dispatcher Logic Simulation               ");
+    println!("  Note: In-guest hardware syscalls (rdtsc) run during boot.    ");
     println!("===============================================================");
 
     // Warm-up cache lines and branch predictors (1,000 iterations)
     for _ in 0..1000 {
-        std::hint::black_box(simulated_syscall_dispatch(SYS_GETPID));
+        std::hint::black_box(simulated_dispatcher_routing(SYS_GETPID));
     }
 
     let start_tsc = read_cpu_tsc();
@@ -48,7 +51,7 @@ pub fn run_bench() {
 
     let mut last_pid = 0;
     for _ in 0..ITERATIONS {
-        let pid = std::hint::black_box(simulated_syscall_dispatch(SYS_GETPID));
+        let pid = std::hint::black_box(simulated_dispatcher_routing(SYS_GETPID));
         last_pid = pid;
     }
 
@@ -64,21 +67,24 @@ pub fn run_bench() {
     let avg_cycles = total_cycles as f64 / (ITERATIONS as f64);
 
     println!(
-        "[bench] Completed {} iterations in {:.4?}",
+        "[bench] Completed {} dispatcher iterations in {:.4?}",
         ITERATIONS, elapsed
     );
-    println!("[bench] Average Latency:  {:.2} ns/syscall", avg_ns_per_op);
+    println!(
+        "[bench] Dispatcher Routing Latency:  {:.2} ns/dispatch",
+        avg_ns_per_op
+    );
     if total_cycles > 0 {
         println!(
-            "[bench] Average Cycles:   {:.1} cycles/syscall (Total: {} cycles)",
+            "[bench] Dispatcher Cycles:           {:.1} cycles/dispatch (Total: {} cycles)",
             avg_cycles, total_cycles
         );
     }
     println!(
-        "[bench] Throughput:       {:.2} M syscalls/sec ({:.0} ops/sec)",
+        "[bench] Dispatcher Throughput:       {:.2} M dispatches/sec ({:.0} ops/sec)",
         ops_per_sec / 1_000_000.0,
         ops_per_sec
     );
     println!("===============================================================");
-    println!("[bench] Syscall microbenchmark baseline established successfully!");
+    println!("[bench] Syscall dispatcher baseline established successfully!");
 }
