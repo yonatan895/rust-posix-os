@@ -53,7 +53,6 @@ pub struct Idt {
 }
 
 use core::cell::SyncUnsafeCell;
-use core::sync::atomic::{AtomicU64, Ordering};
 
 static GLOBAL_IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt {
     entries: [IdtEntry::missing(); 256],
@@ -154,7 +153,7 @@ pub unsafe extern "C" fn rust_general_protection_fault(
     }
 }
 
-pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
+pub use crate::ostd::irq::TIMER_TICKS;
 
 /// Rust timer tick handler called by `timer_interrupt_stub`.
 ///
@@ -164,11 +163,8 @@ pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 /// Returns the kernel stack pointer for the process that should resume execution.
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_timer_tick_handler(current_rsp: usize) -> usize {
-    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
-    // SAFETY: Sending End of Interrupt for IRQ0 to PIC.
-    unsafe {
-        crate::ostd::irq::send_eoi(0);
-    }
+    crate::ostd::irq::tick();
+    crate::ostd::irq::ack_timer();
     let mut next_rsp = crate::services::scheduler::timer_tick_schedule(current_rsp);
     let target_pid =
         crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::SeqCst);

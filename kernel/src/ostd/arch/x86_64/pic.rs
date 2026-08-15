@@ -1,6 +1,6 @@
 //! 8259 Programmable Interrupt Controller (PIC) Driver for x86_64.
 
-use super::{io_wait, outb};
+use super::{inb, io_wait, outb};
 
 /// Remaps the legacy dual 8259 Programmable Interrupt Controllers (PIC).
 ///
@@ -50,6 +50,38 @@ pub unsafe fn pic_disable() {
         outb(0x21, 0xFF);
         io_wait();
         outb(0xA1, 0xFF);
+        io_wait();
+    }
+}
+
+/// Masks the specified IRQ line (0..15) on the 8259 PIC.
+///
+/// # Safety
+///
+/// Directly reads and writes PIC interrupt mask registers.
+pub unsafe fn mask(irq: u8) {
+    // SAFETY: Reading and modifying PIC mask register.
+    unsafe {
+        let port = if irq < 8 { 0x21 } else { 0xA1 };
+        let bit = if irq < 8 { irq } else { irq - 8 };
+        let val = inb(port) | (1 << bit);
+        outb(port, val);
+        io_wait();
+    }
+}
+
+/// Unmasks the specified IRQ line (0..15) on the 8259 PIC.
+///
+/// # Safety
+///
+/// Directly reads and writes PIC interrupt mask registers.
+pub unsafe fn unmask(irq: u8) {
+    // SAFETY: Reading and modifying PIC mask register.
+    unsafe {
+        let port = if irq < 8 { 0x21 } else { 0xA1 };
+        let bit = if irq < 8 { irq } else { irq - 8 };
+        let val = inb(port) & !(1 << bit);
+        outb(port, val);
         io_wait();
     }
 }
