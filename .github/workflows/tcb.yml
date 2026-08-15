@@ -30,3 +30,13 @@ jobs:
             exit 1
           fi
           echo "TCB boundary intact: no unsafe in kernel/src/services."
+      - name: Enforce ADR-0001 R5 (No static mut in kernel/src)
+        run: |
+          set -euo pipefail
+          # Check for forbidden static mut globals across kernel/src/ (excluding 'static lifetime)
+          if grep -RnE --include='*.rs' "(^|[^'])static[[:space:]]+mut\b" kernel/src/; then
+            echo "::error::static mut in kernel/src violates ADR-0001 and TCB soundness."
+            echo "::error::Use SyncUnsafeCell, Atomic, or SpinLock instead."
+            exit 1
+          fi
+          echo "Soundness intact: 0 static mut globals in kernel/src."

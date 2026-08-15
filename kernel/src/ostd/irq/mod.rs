@@ -15,6 +15,7 @@ pub const PIT_DIVISOR: u16 = (PIT_BASE_FREQUENCY_HZ / PIT_FREQUENCY_HZ) as u16; 
 ///
 /// Directly programs legacy 8259 PIC hardware ports (`0x20`, `0x21`, `0xA0`, `0xA1`).
 pub unsafe fn pic_remap(offset1: u8, offset2: u8) {
+    // SAFETY: Programming 8259 PIC initialization command words (ICW1..ICW4).
     unsafe {
         // ICW1: Start initialization sequence in cascade mode
         outb(0x20, 0x11);
@@ -48,6 +49,7 @@ pub unsafe fn pic_remap(offset1: u8, offset2: u8) {
 ///
 /// Directly manipulates legacy 8259 PIC hardware registers.
 pub unsafe fn pic_disable() {
+    // SAFETY: Masking all IRQ lines on Master and Slave PICs via I/O ports.
     unsafe {
         outb(0x21, 0xFF);
         io_wait();
@@ -62,6 +64,7 @@ pub unsafe fn pic_disable() {
 ///
 /// Directly sends EOI command byte `0x20` to PIC command registers.
 pub unsafe fn send_eoi(irq: u8) {
+    // SAFETY: Sending EOI acknowledgment byte 0x20 to PIC command port.
     unsafe {
         if irq >= 8 {
             outb(0xA0, 0x20);
@@ -76,6 +79,7 @@ pub unsafe fn send_eoi(irq: u8) {
 ///
 /// Directly writes configuration commands and reload counts to PIT I/O ports (`0x43`, `0x40`).
 pub unsafe fn pit_init() {
+    // SAFETY: Programming PIT Channel 0 mode 3 square wave generator with 100 Hz divisor.
     unsafe {
         // Mode/Command register (0x43): Channel 0, Access lo/hi byte, Mode 3 (Square Wave), Binary 16-bit
         outb(0x43, 0x36);
@@ -99,6 +103,7 @@ pub unsafe fn pit_init() {
 ///
 /// Must be called during single-threaded kernel boot before interrupts are enabled.
 pub unsafe fn irq_init() {
+    // SAFETY: Remapping PIC, programming PIT timer, and unmasking timer IRQ0.
     unsafe {
         // Remap PIC: Master -> 0x20..0x27, Slave -> 0x28..0x2F
         pic_remap(0x20, 0x28);

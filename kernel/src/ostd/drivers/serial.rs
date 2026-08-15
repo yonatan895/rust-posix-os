@@ -31,6 +31,7 @@ impl SerialPort {
     ///
     /// Directly programs UART hardware registers over I/O ports.
     pub unsafe fn init(&mut self) {
+        // SAFETY: Programming UART 8250 registers to 38400 baud, 8N1, FIFO enabled.
         unsafe {
             outb(self.port + 1, 0x00); // Disable interrupts
             outb(self.port + 3, 0x80); // Enable DLAB (set baud rate divisor)
@@ -43,6 +44,7 @@ impl SerialPort {
     }
 
     fn is_transmit_empty(&self) -> bool {
+        // SAFETY: Reading Line Status Register on COM port to check transmit empty bit.
         unsafe { (inb(self.port + 5) & 0x20) != 0 }
     }
 
@@ -50,12 +52,14 @@ impl SerialPort {
         while !self.is_transmit_empty() {
             core::hint::spin_loop();
         }
+        // SAFETY: Writing byte to UART data transmitter port.
         unsafe {
             outb(self.port, byte);
         }
     }
 
     pub fn drain_hardware_fifo(&mut self) {
+        // SAFETY: Reading Line Status Register and RX data port from COM port.
         unsafe {
             while (inb(self.port + 5) & 1) != 0 {
                 let byte = inb(self.port);
@@ -144,6 +148,7 @@ impl log::Log for KernelLogger {
 ///
 /// Must be called during single-threaded boot initialization.
 pub unsafe fn serial_init() {
+    // SAFETY: Initializing COM1 UART hardware during boot.
     unsafe {
         SERIAL1.lock().init();
     }

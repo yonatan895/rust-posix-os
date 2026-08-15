@@ -52,9 +52,12 @@ pub struct Idt {
     pub entries: [IdtEntry; 256],
 }
 
-static mut GLOBAL_IDT: Idt = Idt {
+use core::cell::SyncUnsafeCell;
+use core::sync::atomic::{AtomicU64, Ordering};
+
+static GLOBAL_IDT: SyncUnsafeCell<Idt> = SyncUnsafeCell::new(Idt {
     entries: [IdtEntry::missing(); 256],
-};
+});
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -102,14 +105,18 @@ pub struct TrapFrame {
 /// `frame` must point to a valid hardware exception stack frame.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, error_code: u64) {
+    // SAFETY: Reading CR2 register to obtain the faulting virtual address.
     let fault_addr = unsafe { read_cr2() };
+    // SAFETY: Dereferencing valid hardware exception frame pointer passed by CPU.
+    let rip = unsafe { (*frame).rip };
     log::error!(
         "PAGE FAULT (#PF) at 0x{:016x}, Error Code: 0x{:x}, RIP: 0x{:016x}",
         fault_addr,
         error_code,
-        unsafe { (*frame).rip }
+        rip
     );
     loop {
+        // SAFETY: Halting CPU on unrecoverable page fault.
         unsafe { asm!("hlt") };
     }
 }
@@ -124,17 +131,20 @@ pub unsafe extern "C" fn rust_general_protection_fault(
     frame: *const InterruptFrame,
     error_code: u64,
 ) {
+    // SAFETY: Dereferencing valid hardware exception frame pointer passed by CPU.
+    let rip = unsafe { (*frame).rip };
     log::error!(
         "GENERAL PROTECTION FAULT (#GP), Error Code: 0x{:x}, RIP: 0x{:016x}",
         error_code,
-        unsafe { (*frame).rip }
+        rip
     );
     loop {
+        // SAFETY: Halting CPU on unrecoverable general protection fault.
         unsafe { asm!("hlt") };
     }
 }
 
-pub static mut TIMER_TICKS: u64 = 0;
+pub static TIMER_TICKS: AtomicU64 = AtomicU64::new(0);
 
 /// Rust timer tick handler called by `timer_interrupt_stub`.
 ///
@@ -144,14 +154,16 @@ pub static mut TIMER_TICKS: u64 = 0;
 /// Returns the kernel stack pointer for the process that should resume execution.
 #[unsafe(no_mangle)]
 pub extern "C" fn rust_timer_tick_handler(current_rsp: usize) -> usize {
+    TIMER_TICKS.fetch_add(1, Ordering::Relaxed);
+    // SAFETY: Sending End of Interrupt for IRQ0 to PIC.
     unsafe {
-        TIMER_TICKS = TIMER_TICKS.wrapping_add(1);
         crate::ostd::irq::send_eoi(0);
     }
     let mut next_rsp = crate::services::scheduler::timer_tick_schedule(current_rsp);
     let target_pid =
         crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::SeqCst);
     if target_pid > 0 && crate::services::ipc::SIGNALS.has_unblocked_signals(target_pid) {
+        // SAFETY: next_rsp points to a valid TrapFrame on the kernel stack.
         let frame = unsafe { &mut *(next_rsp as *mut TrapFrame) };
         let terminated = crate::services::posix::check_and_deliver_signals_irq(frame, target_pid);
         if terminated {
@@ -246,16 +258,22 @@ pub unsafe extern "C" fn page_fault_stub() {
 ///
 /// Must be invoked during single-threaded boot initialization.
 pub unsafe fn idt_init() {
+    let idt_ptr = GLOBAL_IDT.get();
+
+    // SAFETY: Arming exception and timer interrupt handlers in IDT during single-threaded boot.
     unsafe {
-        GLOBAL_IDT.entries[0x0D].set_handler(gp_fault_stub as *const () as usize, 0, 0); // #GP
-        GLOBAL_IDT.entries[0x0E].set_handler(page_fault_stub as *const () as usize, 0, 0); // #PF
-        GLOBAL_IDT.entries[0x20].set_handler(timer_interrupt_stub as *const () as usize, 0, 0); // PIT Timer IRQ0
+        (*idt_ptr).entries[0x0D].set_handler(gp_fault_stub as *const () as usize, 0, 0); // #GP
+        (*idt_ptr).entries[0x0E].set_handler(page_fault_stub as *const () as usize, 0, 0); // #PF
+        (*idt_ptr).entries[0x20].set_handler(timer_interrupt_stub as *const () as usize, 0, 0); // PIT Timer IRQ0
+    }
 
-        let descriptor = IdtDescriptor {
-            limit: (size_of::<Idt>() - 1) as u16,
-            base: &raw const GLOBAL_IDT as u64,
-        };
+    let descriptor = IdtDescriptor {
+        limit: (size_of::<Idt>() - 1) as u16,
+        base: idt_ptr as u64,
+    };
 
+    // SAFETY: Loading IDT descriptor into CPU via lidt instruction.
+    unsafe {
         asm!("lidt [{}]", in(reg) &descriptor, options(nostack));
     }
 }
