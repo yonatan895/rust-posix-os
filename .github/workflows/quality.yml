@@ -18,19 +18,21 @@ jobs:
           components: rustfmt, clippy, rust-src
       - uses: Swatinem/rust-cache@v2
       - name: rustfmt (changed .rs only)
-        if: github.event_name == 'pull_request'
+        if: github.event_name == 'pull_request' && !contains(github.event.pull_request.labels.*.name, 'ci:full')
+        env:
+          BASE_REF: ${{ github.base_ref }}
         run: |
           set -euo pipefail
-          git fetch origin "${{ github.base_ref }}" --depth=1
+          git fetch origin "$BASE_REF" --depth=1
           files=$(git diff --name-only --diff-filter=ACMR \
-            "origin/${{ github.base_ref }}...HEAD" | grep '\.rs$' || true)
+            "origin/$BASE_REF...HEAD" | grep '\.rs$' || true)
           if [ -z "$files" ]; then
             echo "No Rust files changed; skip rustfmt."
             exit 0
           fi
           echo "$files" | xargs rustfmt --edition 2024 --check
       - name: rustfmt (full tree)
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
         run: cargo fmt --all -- --check
       - name: clippy host crates
         run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
@@ -39,6 +41,15 @@ jobs:
           RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
         run: |
           cargo clippy -p kernel \
+            --target x86_64-unknown-none \
+            -Zbuild-std=core,compiler_builtins,alloc \
+            -Zbuild-std-features=compiler-builtins-mem \
+            -- -D warnings
+      - name: clippy userland
+        env:
+          RUSTFLAGS: "-C relocation-model=static"
+        run: |
+          cargo clippy -p libc -p shell -p init -p coreutils \
             --target x86_64-unknown-none \
             -Zbuild-std=core,compiler_builtins,alloc \
             -Zbuild-std-features=compiler-builtins-mem \

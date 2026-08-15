@@ -2,10 +2,7 @@ name: CI/CD Pipeline
 
 on:
   pull_request:
-    types: [opened, synchronize, reopened, ready_for_review]
-    paths-ignore:
-      - "**/*.md"
-      - "LICENSE*"
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
   push:
     tags:
       - "v*"
@@ -24,14 +21,60 @@ env:
   CARGO_PROFILE_DEV_DEBUG: "0"
 
 jobs:
+  filter:
+    name: Check Paths & Labels
+    runs-on: ubuntu-latest
+    if: |
+      github.event_name != 'pull_request' ||
+      github.event.action != 'labeled' ||
+      github.event.label.name == 'ci:full' ||
+      contains(github.event.pull_request.labels.*.name, 'ci:full')
+    outputs:
+      should_run: ${{ steps.check.outputs.should_run }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: check
+        name: Check changed files and ci:full label
+        env:
+          IS_PR: ${{ github.event_name == 'pull_request' }}
+          HAS_CI_FULL: ${{ contains(github.event.pull_request.labels.*.name, 'ci:full') }}
+          BASE_REF: ${{ github.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ "$IS_PR" != "true" ]; then
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Check if ci:full label is present on PR
+          if [ "$HAS_CI_FULL" = "true" ]; then
+            echo "PR has ci:full label; running full CI matrix."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          # Check if any non-markdown / non-license files changed
+          git fetch origin "$BASE_REF" --depth=1
+          diff_files=$(git diff --name-only "origin/$BASE_REF...HEAD" || true)
+          code_files=$(echo "$diff_files" | grep -vE '(\.md$|^LICENSE)' || true)
+          if [ -n "$code_files" ]; then
+            echo "Code files changed; running CI matrix."
+            echo "should_run=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Only markdown or license files changed; skipping build and qemu."
+            echo "should_run=false" >> "$GITHUB_OUTPUT"
+          fi
+
   rust-quality:
     name: Quality
+    needs: filter
+    if: needs.filter.outputs.should_run == 'true'
     uses: ./.github/workflows/quality.yml
 
   build:
     name: Build (${{ matrix.os }})
-    needs: rust-quality
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
+    needs: [filter, rust-quality]
+    if: needs.filter.outputs.should_run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ci:full'))
     runs-on: ${{ matrix.os }}
     timeout-minutes: 35
     strategy:
@@ -83,8 +126,8 @@ jobs:
 
   qemu:
     name: QEMU smoke test
-    if: github.event_name != 'pull_request' || github.event.pull_request.draft == false
-    needs: build
+    needs: [filter, build]
+    if: needs.filter.outputs.should_run == 'true' && (github.event_name != 'pull_request' || github.event.pull_request.draft == false || contains(github.event.pull_request.labels.*.name, 'ci:full'))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
