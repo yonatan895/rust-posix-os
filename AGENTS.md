@@ -13,6 +13,7 @@ Zero technical debt. An hour of design beats a week in production.
 5. Do not invent ABI numbers, syscall tables, or dispatcher arms. `libs/posix-abi` is the source of truth.
 6. Do not reconstruct a working protocol from memory. Move or wrap; keep every field (syscall rax writeback, execve rcx/rsp/cr3, Limine requests).
 
+
 ## PR / commit bar
 
 One concern. One invariant. Diff matches title and body.
@@ -21,6 +22,7 @@ Do not:
 - Bundle TCB/kernel work with userland, or two ADRs, unless the second is a one-line call-site update.
 - Add a string to `tools/xtask/src/test.rs` that always prints `[PASS]`. A test runs code or it is not a test.
 - Claim an invariant is done if only half exists (`mmap tracking` ≠ bump pointer).
+- Open a `test(...)` PR whose diff changes runtime behavior. If the diff changes a validator or a syscall, the type is `fix`/`feat` and the test is evidence, not the change.
 - Put `#[no_mangle] extern "C"` in `ostd` so `deny(unsafe_code)` holds. That ABI is safe. `ostd` must not name `services`.
 - Export raw TCB pointers (`*mut Limine*`, CR3, page tables). New ostd items are private/`pub(crate)` unless the PR names the export and why.
 - Invent boot values (HHDM offset, memmap). Missing response → panic/halt.
@@ -49,7 +51,7 @@ ADR-0001:
 - R2. User memory only via `ostd::mm::user`. Errno mapping only in `services/posix/user_access.rs`.
 - R3. Boot protocol only in `ostd::limine`. Services take `BootBlob`, never `Limine*`.
 - R4. Address-space / context switch only in `ostd`.
-- R5. Every `unsafe` block has `// SAFETY:` stating why it is sound.
+- R5. Every `unsafe` block has a `// SAFETY:` stating why it is sound — the invariant, not the action. `// SAFETY: Initialize GDT` is a restatement; `// SAFETY: single-threaded boot, no concurrent access` is a rationale. Applies in userland too.
 - R6. A change that touches scheduler, context switch, IDT, or return-to-user paths is not mergeable on host-side tests alone. The QEMU smoke job must run and pass; do not merge on a skipped QEMU job.
 
 ADR-0002: locking rules (hierarchy, IRQ discipline, no user memory under spinlock) live in docs/adr/0002-locking.md.
@@ -66,6 +68,7 @@ Make illegal states unrepresentable. Wait for a third call site before generaliz
 - Errors: `UserAccessError` in ostd; errno only in posix-abi + `user_access`.
 - `exec` resets per-image fields (`mmap_next_vaddr`, …). `fork` copies VMAs + those fields, or stays `-ENOSYS`.
 - Put a limit on everything. Fail fast. Assertions = programmer error (crash). Operating errors = errno.
+- Check every arithmetic step on user-controlled sizes, not just the last: `checked_add(addr, pages * PAGE_SIZE)` is hollow when the multiply wraps first. `checked_mul` feeds `checked_add`.
 
 ## 3. Prune before you add
 
@@ -77,6 +80,8 @@ Delete or shrink first: duplicate helpers, globals that should be fields, lying 
 - `cargo xtask test` only lists checks that execute. Prefer `#[cfg(test)]` on host-buildable crates (`posix-abi`, stack-layout helpers).
 - QEMU smoke must assert a serial string the change actually prints.
 - No feature lands without a real check of the valid *and* invalid path (null, unmapped, too long, missing terminator).
+- A simulation test must include the boundary input that motivated the change (`usize::MAX` length, straddle into an unmapped page, cap ± 1). Asserting on literals the test just formatted is a tautology — it cannot fail.
+- Benchmarks: measure the real path (in-guest syscall, real IRQ) or label the output `simulation`/`dispatch`. Never print `ns/syscall` for a host function call.
 
 ## 5. Always branch from main, PR to main
 
@@ -95,6 +100,9 @@ git push -u origin HEAD
 - P4. User-stack frame protocols where the return path pops bytes the restore code doesn't account for (ret pops the restorer → frame base is rsp-8, not rsp).
 - P5. Waking a blocked task without the woken syscall checking why it woke (EINTR). Every wake must be matched by a pending-condition check at the resume site.
 - P6. Cleanup walking a metadata list (VMAs) instead of ground truth (page tables).
+- P7. `checked_add` over an unchecked multiply (`vaddr.checked_add(pages * PAGE_SIZE)`): the multiply wraps before the add is checked, and the guard passes. Check every step; the test vector is `usize::MAX`.
+- P8. Self-simulation tests and benchmarks: the mock asserts on its own literals and stays green when the real code regresses. Mirror tests must encode the motivating boundary; prefer exercising the real helper.
+- P9. CI treated as config, not code: a workflow change merged with its own job red, or `github.event` data interpolated into a `run:` shell (injection). The changed workflow must be green on the PR that changes it.
 
 ## Architecture
 
@@ -111,23 +119,31 @@ Boot: Limine → ostd init → services init → first user process.
 Syscall: `ostd::arch::syscall` trampoline → `with_syscall_regs` → `services::posix::dispatch_syscall` → `sys_*`.
 The `#[no_mangle] extern "C"` stub lives in **services** (safe). Raw `*mut` deref lives in ostd.
 
+Done since this list was written: `VmSpace` + VMA tracking, `sys_fork`, preemptive round-robin scheduling, signals, EFAULT user-pointer hardening, userland panic → fd 2, `ci:full` escape hatch, in-guest syscall bench.
+
 Still open (order):
 1. VFS: pass cwd/creds in; never lock `Process` from VFS (IRQ-off hang).
-2. `VmSpace`: `Vec<Vma>`; mmap/munmap/exit/fork.
-3. `sys_fork` only after (2).
-4. SysV stack is done; coreutils argv is a separate userland PR.
-5. Task model documented in docs/adr/0003-task-model.md.
+2. mmap failure path: a mid-loop mapping failure leaves the bump advanced and partial mappings behind. Roll back or document.
+3. coreutils argv (userland PR).
+4. Userland networking.
+5. SMP.
+6. exec-time ASLR.
 
 ## Checklist
 
 - [ ] Branched from latest `main`; PR targets `main`
 - [ ] One concern; title/body match the diff
+- [ ] Title names the change (`type(scope): fact`); body links the issue; nothing auto-generated
 - [ ] Read every file you will edit; did not drop an existing contract
 - [ ] Named the layer and the invariant; named what is *not* done
 - [ ] Deleted something before adding something
 - [ ] Real test (not an xtask `[PASS]` string); QEMU string if user-visible
+- [ ] Tests/benchmarks execute the real path or are labeled simulation; every assertion can fail; the motivating boundary value is a test case
 - [ ] `unsafe` only in `ostd/`; `ostd` does not import `services`
+- [ ] Every `// SAFETY:` states the invariant that makes it sound (kernel and userland), not the action it performs
+- [ ] Size arithmetic on user input: every step checked (`checked_mul` before `checked_add`); `usize::MAX` and cap ± 1 tested
 - [ ] Caps + fail-closed on user lengths and boot responses
+- [ ] Workflow changes: the changed workflow is green on this PR; no `github.event` interpolation into `run:` shell
 - [ ] Lock discipline: for every `.lock()` you wrote or moved, listed what is already held and named the tier; acquisition follows ADR-0002 D1 order
 - [ ] State machines: every state transition is guarded (never overwrite terminal states like Zombie); the guard and ALL its side effects (requeue, wake, notify) live in the same conditional block
 - [ ] Blocking paths use mark → register → re-check → sleep; every wake site has a corresponding blocked-state producer (grepped for both halves)
