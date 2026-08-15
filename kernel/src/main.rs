@@ -81,7 +81,11 @@ pub unsafe extern "C" fn _start() -> ! {
         let (entry, stack, pml4) = {
             let proc = init_proc_lock.lock();
             if let Some(ref vm) = proc.vm_space {
-                (proc.entry_point, proc.user_stack_top, vm.pml4_phys)
+                (
+                    proc.entry_point,
+                    proc.user_stack_top,
+                    vm.address_space.as_phys(),
+                )
             } else {
                 (0, 0, 0)
             }

@@ -1,39 +1,32 @@
-//! Virtual Memory Manager (VMM) - 4-Level x86_64 Paging.
+//! Virtual Memory Manager (VMM) and Architecture-Neutral Address Space Model.
+//!
+//! Provides the portable [`VmSpace`] and [`Vma`] abstraction layer. Low-level MMU
+//! page table manipulation is delegated to architecture-specific backends (`ostd::arch`).
 
+use super::address_space::AddressSpace;
+use super::flags::PageFlags;
 use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
 use crate::ostd::sync::SpinLock;
 use alloc::vec::Vec;
 
-pub const PAGE_PRESENT: u64 = 1 << 0;
-pub const PAGE_WRITABLE: u64 = 1 << 1;
-pub const PAGE_USER: u64 = 1 << 2;
-pub const PAGE_NX: u64 = 1 << 63;
-
 pub static HHDM_OFFSET: SpinLock<usize> = SpinLock::new(0);
 
-#[repr(C, align(4096))]
-pub struct PageTable {
-    pub entries: [u64; 512],
-}
-
-impl PageTable {
-    pub const fn empty() -> Self {
-        Self { entries: [0; 512] }
-    }
-}
-
+/// Converts a physical RAM address into its higher-half direct map (HHDM) virtual address.
+#[inline(always)]
 pub fn phys_to_virt(phys: usize) -> usize {
     phys + *HHDM_OFFSET.lock()
 }
 
+/// Converts a higher-half direct map (HHDM) virtual address into its physical RAM address.
+#[inline(always)]
 pub fn virt_to_phys(virt: usize) -> usize {
     virt.saturating_sub(*HHDM_OFFSET.lock())
 }
 
-/// Zero one 4 KiB physical frame via the HHDM.
+/// Zeroes one 4 KiB physical frame via the HHDM.
 pub fn zero_phys_frame(phys: usize) {
     let virt = phys_to_virt(phys) as *mut u8;
-    // SAFETY: HHDM covers all physical RAM. Frame base is 4KiB page-aligned.
+    // SAFETY: HHDM covers all physical RAM. Frame base is 4 KiB page-aligned.
     unsafe { core::ptr::write_bytes(virt, 0, PAGE_SIZE) };
 }
 
@@ -46,6 +39,7 @@ pub unsafe fn vmm_init(hhdm: usize) {
     *HHDM_OFFSET.lock() = hhdm;
 }
 
+/// Represents a contiguous range of user virtual memory with uniform protection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Vma {
     pub start: usize,
@@ -54,95 +48,44 @@ pub struct Vma {
     pub flags: u32,
 }
 
+/// Process Virtual Memory Address Space.
+///
+/// Encapsulates the hardware MMU root table handle ([`AddressSpace`]) and the list of
+/// active user-space virtual memory areas ([`Vma`]).
 pub struct VmSpace {
-    pub pml4_phys: usize,
+    pub address_space: AddressSpace,
     pub vmas: Vec<Vma>,
 }
 
-#[inline(always)]
-fn pt_indices(virt_addr: usize) -> (usize, usize, usize, usize) {
-    (
-        (virt_addr >> 39) & 0x1FF,
-        (virt_addr >> 30) & 0x1FF,
-        (virt_addr >> 21) & 0x1FF,
-        (virt_addr >> 12) & 0x1FF,
-    )
-}
-
-#[inline(always)]
-fn pte_phys(entry: u64) -> usize {
-    (entry & 0x000F_FFFF_FFFF_F000) as usize
-}
-
-/// Gets or creates an intermediate page table level.
-///
-/// # Safety
-/// `table` must be a valid pointer to an initialized PageTable in the HHDM.
-unsafe fn get_or_create_table(
-    table: *mut PageTable,
-    idx: usize,
-    flags: u64,
-) -> Result<*mut PageTable, &'static str> {
-    // SAFETY: caller guarantees valid table pointer and index is within 0..512.
-    unsafe {
-        if (*table).entries[idx] & PAGE_PRESENT == 0 {
-            let frame = alloc_frame().ok_or("Out of physical frames for page table")?;
-            zero_phys_frame(frame);
-            (*table).entries[idx] =
-                (frame as u64) | PAGE_PRESENT | PAGE_WRITABLE | (flags & PAGE_USER);
-        }
-        let next_phys = pte_phys((*table).entries[idx]);
-        Ok(phys_to_virt(next_phys) as *mut PageTable)
-    }
-}
-
-/// Reads an intermediate page table if present.
-///
-/// # Safety
-/// `table` must be a valid pointer to an initialized PageTable in the HHDM.
-unsafe fn get_table(table: *const PageTable, idx: usize) -> Option<*const PageTable> {
-    // SAFETY: caller guarantees valid table pointer and index is within 0..512.
-    unsafe {
-        if (*table).entries[idx] & PAGE_PRESENT == 0 {
-            None
-        } else {
-            let next_phys = pte_phys((*table).entries[idx]);
-            Some(phys_to_virt(next_phys) as *const PageTable)
-        }
-    }
-}
-
 impl VmSpace {
+    /// Backward-compatibility accessor for the root table physical address.
+    #[inline(always)]
+    pub fn pml4_phys(&self) -> usize {
+        self.address_space.as_phys()
+    }
+
+    /// Allocates and initializes a new user virtual address space with higher-half kernel isolation.
     pub fn new() -> Option<Self> {
-        let pml4_phys = alloc_frame()?;
-        let pml4_virt = phys_to_virt(pml4_phys) as *mut PageTable;
-        // SAFETY: `pml4_virt` is a valid HHDM pointer to our newly allocated frame.
+        let root_phys = alloc_frame()?;
+        zero_phys_frame(root_phys);
+
+        let active_root = AddressSpace::current().as_phys();
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Copying kernel mappings into newly allocated page table root frame.
         unsafe {
-            core::ptr::write_bytes(pml4_virt, 0, 1);
-            // Copy higher-half kernel mappings from current active PML4
-            let active_pml4 =
-                phys_to_virt(crate::ostd::arch::read_cr3() as usize & !0xFFF) as *const PageTable;
-            for i in 256..512 {
-                (*pml4_virt).entries[i] = (*active_pml4).entries[i];
-            }
+            crate::ostd::arch::x86_64::paging::copy_kernel_mappings(root_phys, active_root);
         }
+
         Some(Self {
-            pml4_phys,
+            address_space: AddressSpace(root_phys),
             vmas: Vec::new(),
         })
     }
 
-    /// Load this address space into CR3.
+    /// Activates this address space in the CPU memory management unit.
+    #[inline(always)]
     pub fn activate(&self) {
-        // SAFETY: `pml4_phys` is a 4 KiB-aligned page-table root we allocated
-        // and initialized in `new`. Reloading CR3 is valid in ring 0.
-        unsafe {
-            core::arch::asm!(
-                "mov cr3, {}",
-                in(reg) self.pml4_phys,
-                options(nostack, preserves_flags)
-            );
-        }
+        self.address_space.activate();
     }
 
     /// Inserts a VMA into the sorted VMA list, merging adjacent regions with identical prot/flags.
@@ -309,13 +252,7 @@ impl VmSpace {
         let aligned_end = (end + PAGE_SIZE - 1) & !0xFFF;
         let mut page_vaddr = aligned_start;
 
-        let mut flags = PAGE_PRESENT | PAGE_USER;
-        if new_prot & (posix_abi::PROT_WRITE as u32) != 0 {
-            flags |= PAGE_WRITABLE;
-        }
-        if new_prot & (posix_abi::PROT_EXEC as u32) == 0 {
-            flags |= PAGE_NX;
-        }
+        let flags = PageFlags::from_prot(new_prot);
 
         while page_vaddr < aligned_end {
             self.set_page_flags(page_vaddr, flags);
@@ -340,32 +277,15 @@ impl VmSpace {
     }
 
     /// Updates page table flags for a mapped virtual page.
-    ///
-    /// Note: `invlpg` invalidates the local CPU TLB for `virt_addr` under the uniprocessor
-    /// model where active process mutations occur on the current CR3.
-    pub fn set_page_flags(&mut self, virt_addr: usize, new_flags: u64) {
-        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
-
-        // SAFETY: Table pointers are valid HHDM views of allocated page tables.
+    pub fn set_page_flags(&mut self, virt_addr: usize, flags: PageFlags) {
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Delegating PTE attribute update to architecture backend.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
-            let Some(pdpt) = get_table(pml4, pml4_idx) else {
-                return;
-            };
-            let Some(pd) = get_table(pdpt, pdpt_idx) else {
-                return;
-            };
-            let Some(pt) = get_table(pd, pd_idx) else {
-                return;
-            };
-            let pt_mut = pt as *mut PageTable;
-
-            let entry = (*pt_mut).entries[pt_idx];
-            if entry & PAGE_PRESENT != 0 {
-                let phys_base = pte_phys(entry) as u64;
-                (*pt_mut).entries[pt_idx] = phys_base | new_flags | PAGE_PRESENT;
-                core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
-            }
+            crate::ostd::arch::x86_64::paging::set_page_flags(
+                self.address_space.as_phys(),
+                virt_addr,
+                flags,
+            );
         }
     }
 
@@ -374,67 +294,39 @@ impl VmSpace {
         &mut self,
         virt_addr: usize,
         phys_addr: usize,
-        flags: u64,
+        flags: PageFlags,
     ) -> Result<(), &'static str> {
-        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
-
-        // SAFETY: Table pointers are HHDM views of frames we allocated or copied from kernel PML4.
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Delegating page mapping to architecture backend.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-            let pdpt = get_or_create_table(pml4, pml4_idx, flags)?;
-            let pd = get_or_create_table(pdpt, pdpt_idx, flags)?;
-            let pt = get_or_create_table(pd, pd_idx, flags)?;
-
-            (*pt).entries[pt_idx] = (phys_addr as u64) | flags | PAGE_PRESENT;
+            crate::ostd::arch::x86_64::paging::map_page(
+                self.address_space.as_phys(),
+                virt_addr,
+                phys_addr,
+                flags,
+            )
         }
-        Ok(())
     }
 
     /// Unmaps a 4 KiB virtual page from this address space and frees its physical frame.
     pub fn unmap_page(&mut self, virt_addr: usize) {
-        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Delegating unmapping to architecture backend.
+        let freed_frame = unsafe {
+            crate::ostd::arch::x86_64::paging::unmap_page(self.address_space.as_phys(), virt_addr)
+        };
 
-        // SAFETY: Table pointers are HHDM views of allocated frames.
-        unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
-            let Some(pdpt) = get_table(pml4, pml4_idx) else {
-                return;
-            };
-            let Some(pd) = get_table(pdpt, pdpt_idx) else {
-                return;
-            };
-            let Some(pt) = get_table(pd, pd_idx) else {
-                return;
-            };
-            let pt_mut = pt as *mut PageTable;
-
-            let entry = (*pt_mut).entries[pt_idx];
-            if entry & PAGE_PRESENT != 0 {
-                let phys = pte_phys(entry);
-                (*pt_mut).entries[pt_idx] = 0;
-                free_frame(phys);
-                core::arch::asm!("invlpg [{}]", in(reg) virt_addr, options(nostack, preserves_flags));
-            }
+        if let Some(phys) = freed_frame {
+            free_frame(phys);
         }
     }
 
     /// Translates a virtual address to its mapped physical address.
     pub fn translate(&self, virt_addr: usize) -> Option<usize> {
-        let (pml4_idx, pdpt_idx, pd_idx, pt_idx) = pt_indices(virt_addr);
-        let offset = virt_addr & 0xFFF;
-
-        // SAFETY: Table pointers are HHDM views of allocated frames.
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Delegating translation to architecture backend.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *const PageTable;
-            let pdpt = get_table(pml4, pml4_idx)?;
-            let pd = get_table(pdpt, pdpt_idx)?;
-            let pt = get_table(pd, pd_idx)?;
-
-            let entry = (*pt).entries[pt_idx];
-            if entry & PAGE_PRESENT == 0 {
-                return None;
-            }
-            Some(pte_phys(entry) + offset)
+            crate::ostd::arch::x86_64::paging::translate(self.address_space.as_phys(), virt_addr)
         }
     }
 
@@ -443,7 +335,7 @@ impl VmSpace {
         &mut self,
         start_virt: usize,
         size: usize,
-        flags: u64,
+        flags: PageFlags,
     ) -> Result<(), &'static str> {
         let aligned_start = start_virt & !0xFFF;
         let aligned_end = (start_virt + size + PAGE_SIZE - 1) & !0xFFF;
@@ -457,10 +349,10 @@ impl VmSpace {
         }
 
         let mut prot = posix_abi::PROT_READ as u32;
-        if flags & PAGE_WRITABLE != 0 {
+        if flags.writable {
             prot |= posix_abi::PROT_WRITE as u32;
         }
-        if flags & PAGE_NX == 0 {
+        if !flags.no_exec {
             prot |= posix_abi::PROT_EXEC as u32;
         }
         self.insert_vma(aligned_start, aligned_end, prot, 0);
@@ -495,26 +387,11 @@ impl VmSpace {
         Ok(())
     }
 
-    /// Creates an independent clone of this address space by allocating a new PML4
+    /// Creates an independent clone of this address space by allocating a new root table
     /// and eagerly duplicating all physical memory pages recorded in the VMA list.
     pub fn clone_from(&self) -> Option<Self> {
-        let pml4_phys = alloc_frame()?;
-        let pml4_virt = phys_to_virt(pml4_phys) as *mut PageTable;
-        // SAFETY: `pml4_virt` is a newly allocated 4KiB page frame.
-        unsafe {
-            core::ptr::write_bytes(pml4_virt, 0, 1);
-            // Copy higher-half kernel entries (256..512) from current active PML4
-            let active_pml4 =
-                phys_to_virt(crate::ostd::arch::read_cr3() as usize & !0xFFF) as *const PageTable;
-            for i in 256..512 {
-                (*pml4_virt).entries[i] = (*active_pml4).entries[i];
-            }
-        }
-
-        let mut new_vm = Self {
-            pml4_phys,
-            vmas: self.vmas.clone(),
-        };
+        let mut new_vm = Self::new()?;
+        new_vm.vmas = self.vmas.clone();
 
         for vma in &self.vmas {
             let mut vaddr = vma.start & !0xFFF;
@@ -529,14 +406,7 @@ impl VmSpace {
                         core::ptr::copy_nonoverlapping(parent_src, child_dst, PAGE_SIZE);
                     }
 
-                    let mut flags = PAGE_PRESENT | PAGE_USER;
-                    if vma.prot & (posix_abi::PROT_WRITE as u32) != 0 {
-                        flags |= PAGE_WRITABLE;
-                    }
-                    if vma.prot & (posix_abi::PROT_EXEC as u32) == 0 {
-                        flags |= PAGE_NX;
-                    }
-
+                    let flags = PageFlags::from_prot(vma.prot);
                     let _ = new_vm.map_page(vaddr, child_phys, flags);
                 }
                 vaddr += PAGE_SIZE;
@@ -549,50 +419,22 @@ impl VmSpace {
 
 impl Drop for VmSpace {
     fn drop(&mut self) {
-        // INVARIANT: An address space must not be torn down while it is actively loaded in CR3.
+        // INVARIANT: An address space must not be torn down while it is actively loaded in MMU.
         // The calling task must switch to a different address space (e.g. kernel/idle PML4) before dropping.
-        // SAFETY: Reading CR3 is a non-mutating control register read safe in ring 0.
         debug_assert_ne!(
-            (unsafe { crate::ostd::arch::read_cr3() } as usize) & !0xFFF,
-            self.pml4_phys,
-            "Attempted to drop VmSpace while it is still actively loaded in CR3"
+            AddressSpace::current(),
+            self.address_space,
+            "Attempted to drop VmSpace while it is still actively loaded in MMU"
         );
 
-        // Free lower-half page table hierarchy and all mapped leaf data frames (even for non-VMA pages).
-        // SAFETY: `pml4_phys` was allocated by alloc_frame and is valid HHDM memory.
+        #[cfg(target_arch = "x86_64")]
+        // SAFETY: Freeing lower-half page table hierarchy of inactive address space.
         unsafe {
-            let pml4 = phys_to_virt(self.pml4_phys) as *mut PageTable;
-            for i in 0..256 {
-                if (*pml4).entries[i] & PAGE_PRESENT != 0 {
-                    let pdpt_phys = ((*pml4).entries[i] & 0x000F_FFFF_FFFF_F000) as usize;
-                    let pdpt = phys_to_virt(pdpt_phys) as *mut PageTable;
-                    for j in 0..512 {
-                        if (*pdpt).entries[j] & PAGE_PRESENT != 0 {
-                            let pd_phys = ((*pdpt).entries[j] & 0x000F_FFFF_FFFF_F000) as usize;
-                            let pd = phys_to_virt(pd_phys) as *mut PageTable;
-                            for k in 0..512 {
-                                if (*pd).entries[k] & PAGE_PRESENT != 0 {
-                                    let pt_phys =
-                                        ((*pd).entries[k] & 0x000F_FFFF_FFFF_F000) as usize;
-                                    let pt = phys_to_virt(pt_phys) as *mut PageTable;
-                                    for l in 0..512 {
-                                        if (*pt).entries[l] & PAGE_PRESENT != 0 {
-                                            let leaf_phys =
-                                                ((*pt).entries[l] & 0x000F_FFFF_FFFF_F000) as usize;
-                                            free_frame(leaf_phys);
-                                        }
-                                    }
-                                    free_frame(pt_phys);
-                                }
-                            }
-                            free_frame(pd_phys);
-                        }
-                    }
-                    free_frame(pdpt_phys);
-                }
-            }
-            free_frame(self.pml4_phys);
+            crate::ostd::arch::x86_64::paging::free_page_table_hierarchy(
+                self.address_space.as_phys(),
+            );
         }
+
         self.vmas.clear();
     }
 }

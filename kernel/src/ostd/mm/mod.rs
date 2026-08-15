@@ -1,23 +1,24 @@
 //! Memory Management Subsystem in OSTD.
 
+pub mod address_space;
 pub mod boot;
+pub mod flags;
 pub mod heap;
 pub mod pmm;
 pub mod pod;
 pub mod user;
 pub mod vmm;
 
+pub use address_space::AddressSpace;
 pub use boot::{BootBlob, boot_modules, with_syscall_regs};
+pub use flags::PageFlags;
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
 pub use pmm::{PAGE_SIZE, alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats};
 pub use pod::read_pod;
 pub use user::{
     USER_SPACE_END, USER_STR_MAX, UserAccessError, UserPtr, UserSlice, copy_cstr_from_user,
 };
-pub use vmm::{
-    PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, phys_to_virt, virt_to_phys,
-    zero_phys_frame,
-};
+pub use vmm::{VmSpace, Vma, phys_to_virt, virt_to_phys, zero_phys_frame};
 
 /// Initializes the kernel memory management subsystem (PMM, VMM, and global heap).
 ///

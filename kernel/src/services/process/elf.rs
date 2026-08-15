@@ -1,6 +1,6 @@
 //! ELF64 Executable Loader & System V AMD64 ABI User Stack Setup.
 
-use crate::ostd::mm::{PAGE_NX, PAGE_PRESENT, PAGE_USER, PAGE_WRITABLE, VmSpace, read_pod};
+use crate::ostd::mm::{PageFlags, VmSpace, read_pod};
 use posix_abi::*;
 
 pub const ELF_MAGIC: [u8; 4] = [0x7F, b'E', b'L', b'F'];
@@ -84,13 +84,12 @@ pub fn load_elf(
         let phdr: Elf64Phdr = read_pod(elf_bytes, offset).ok_or("Program header out of bounds")?;
 
         if phdr.p_type == PT_LOAD {
-            let mut flags = PAGE_PRESENT | PAGE_USER;
-            if phdr.p_flags & PF_W != 0 {
-                flags |= PAGE_WRITABLE;
-            }
-            if phdr.p_flags & PF_X == 0 {
-                flags |= PAGE_NX;
-            }
+            let flags = PageFlags {
+                present: true,
+                writable: phdr.p_flags & PF_W != 0,
+                user: true,
+                no_exec: phdr.p_flags & PF_X == 0,
+            };
 
             let vaddr = phdr.p_vaddr as usize;
             let memsz = phdr.p_memsz as usize;
@@ -115,11 +114,7 @@ pub fn load_elf(
     }
 
     let stack_bottom = USER_STACK_TOP - USER_STACK_SIZE;
-    vm_space.alloc_and_map_range(
-        stack_bottom,
-        USER_STACK_SIZE,
-        PAGE_PRESENT | PAGE_USER | PAGE_WRITABLE,
-    )?;
+    vm_space.alloc_and_map_range(stack_bottom, USER_STACK_SIZE, PageFlags::user_data())?;
 
     let initial_rsp = setup_user_stack(
         vm_space,
