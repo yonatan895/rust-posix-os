@@ -6,8 +6,11 @@ pub mod paging;
 pub mod pic;
 pub mod pit;
 pub mod syscall;
+pub mod task;
 
+pub use idt::TrapFrame;
 pub use paging::tlb_flush;
+pub use syscall::SyscallRegisters;
 
 use core::arch::asm;
 

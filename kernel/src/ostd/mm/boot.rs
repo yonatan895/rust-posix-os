@@ -3,8 +3,8 @@
 //! Lives in the TCB so `services/` never dereferences Limine pointers or
 //! the asm trampoline's register save area (ADR-0001 R3 / dispatcher).
 
-use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::ostd::limine::{LimineFile, LimineModuleResponse};
+use crate::ostd::task::SyscallRegisters;
 
 /// A bootloader-supplied file, already validated as a kernel slice.
 pub struct BootBlob {

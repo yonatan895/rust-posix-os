@@ -1,10 +1,6 @@
-//! POSIX Process Lifecycle & Signal System Calls.
-
 use super::{copy_user_path, map_user_error};
-use crate::ostd::arch::gdt::USER_CODE_SEL;
-use crate::ostd::arch::idt::TrapFrame;
-use crate::ostd::arch::syscall::SyscallRegisters;
 use crate::ostd::mm::{USER_STR_MAX, UserPtr};
+use crate::ostd::task::{SyscallRegisters, TrapFrame};
 use crate::services::ipc::SIGNALS;
 use crate::services::process::*;
 use core::sync::atomic::Ordering;
@@ -586,7 +582,7 @@ fn terminate_cpu_bound_task(pid: i32, sig: i32) {
 /// user signal handler, or terminates CPU-bound tasks on `SIGKILL`/`SIGTERM`.
 pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
     // Only deliver signals when returning to ring 3 (user mode)
-    if (frame.cs as u16) != USER_CODE_SEL {
+    if !frame.is_user_mode() {
         return false;
     }
 

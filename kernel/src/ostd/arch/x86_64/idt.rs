@@ -96,6 +96,14 @@ pub struct TrapFrame {
     pub ss: u64,
 }
 
+impl TrapFrame {
+    /// Returns true if this TrapFrame was captured while executing in Ring 3 (User Mode).
+    #[inline(always)]
+    pub fn is_user_mode(&self) -> bool {
+        (self.cs as u16) == super::gdt::USER_CODE_SEL
+    }
+}
+
 // Handlers in Rust
 
 /// Rust handler for Page Fault (#PF) exceptions.
