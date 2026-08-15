@@ -911,3 +911,57 @@ pub unsafe fn handle_id() {
     }
     puts(b"\0".as_ptr());
 }
+
+pub unsafe fn handle_clip(argc: usize, argv: &[*const u8; 16]) {
+    if argc > 1 && !argv[1].is_null() {
+        let mut buf = [0u8; 1024];
+        let mut offset = 0;
+        for i in 1..argc {
+            let arg = argv[i];
+            if arg.is_null() {
+                break;
+            }
+            let len = strlen(arg);
+            if offset + len + 1 < buf.len() {
+                if offset > 0 {
+                    buf[offset] = b' ';
+                    offset += 1;
+                }
+                buf[offset..offset + len].copy_from_slice(core::slice::from_raw_parts(arg, len));
+                offset += len;
+            }
+        }
+        let kr = &raw mut crate::editor::KILL_RING;
+        (*kr).save(&buf[..offset]);
+        crate::editor::osc52_copy(&buf[..offset]);
+        puts(b"Copied to clipboard.\0".as_ptr());
+    } else {
+        let mut buf = [0u8; 1024];
+        let mut total = 0;
+        loop {
+            let n = read(STDIN_FILENO, buf.as_mut_ptr().add(total), buf.len() - total);
+            if n <= 0 {
+                break;
+            }
+            total += n as usize;
+            if total >= buf.len() {
+                break;
+            }
+        }
+        if total > 0 {
+            let kr = &raw mut crate::editor::KILL_RING;
+            (*kr).save(&buf[..total]);
+            crate::editor::osc52_copy(&buf[..total]);
+            printf(b"Copied %d bytes to clipboard.\n\0".as_ptr(), total as i32);
+        } else {
+            let kr = &raw const crate::editor::KILL_RING;
+            let bytes = (*kr).as_bytes();
+            if bytes.is_empty() {
+                puts(b"Clipboard is empty. Usage: clip <text> | cmd | clip\0".as_ptr());
+            } else {
+                write(STDOUT_FILENO, bytes.as_ptr(), bytes.len());
+                puts(b"\0".as_ptr());
+            }
+        }
+    }
+}
