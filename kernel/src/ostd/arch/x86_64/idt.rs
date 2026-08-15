@@ -1,4 +1,4 @@
-//! Interrupt Descriptor Table (IDT) and Exception Handling.
+//! Interrupt Descriptor Table (IDT) and Exception Handling for x86_64.
 
 use super::gdt::KERNEL_CODE_SEL;
 use super::read_cr2;
