@@ -171,7 +171,7 @@ const PF_USER: u64 = 1 << 2;
 ///
 /// All three paths flush the TLB entry with `invlpg` before returning.
 fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
-    use crate::ostd::mm::cow::{cow_dec_ref, cow_inc_ref, cow_ref_count};
+    use crate::ostd::mm::cow::{cow_dec_ref, cow_ref_count};
     use crate::ostd::mm::flags::PageFlags;
     use crate::ostd::mm::pmm::{PAGE_SIZE, alloc_frame};
     use crate::ostd::mm::vmm::{phys_to_virt, zero_phys_frame};
@@ -203,33 +203,33 @@ fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     let base_flags = PageFlags::from_prot(vma.prot);
 
     // ── Scenario 2 & 3: CoW write fault on a present-but-read-only page ────
-    if is_present && is_write && vma_writable {
-        if let Some(old_phys) = vm.translate(page_addr) {
-            let old_phys_aligned = old_phys & !(PAGE_SIZE - 1);
-            if cow_ref_count(old_phys_aligned) > 1 {
-                // Shared frame — allocate a private copy.
-                let Some(new_phys) = alloc_frame() else {
-                    return false;
-                };
-                let src = phys_to_virt(old_phys_aligned) as *const u8;
-                let dst = phys_to_virt(new_phys) as *mut u8;
-                // SAFETY: src and dst are HHDM virtual addresses of distinct non-overlapping
-                // 4 KiB physical frames. PAGE_SIZE bytes are copied to break CoW sharing.
-                unsafe {
-                    core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
-                }
-                cow_dec_ref(old_phys_aligned);
-                let _ = vm.map_page(page_addr, new_phys, base_flags);
-            } else {
-                // Sole owner — just make the existing PTE writable.
-                vm.set_page_flags(page_addr, base_flags);
-            }
-            // SAFETY: Flushing the TLB entry for page_addr after PTE modification.
+    if is_present && is_write && vma_writable
+        && let Some(old_phys) = vm.translate(page_addr)
+    {
+        let old_phys_aligned = old_phys & !(PAGE_SIZE - 1);
+        if cow_ref_count(old_phys_aligned) > 1 {
+            // Shared frame — allocate a private copy.
+            let Some(new_phys) = alloc_frame() else {
+                return false;
+            };
+            let src = phys_to_virt(old_phys_aligned) as *const u8;
+            let dst = phys_to_virt(new_phys) as *mut u8;
+            // SAFETY: src and dst are HHDM virtual addresses of distinct non-overlapping
+            // 4 KiB physical frames. PAGE_SIZE bytes are copied to break CoW sharing.
             unsafe {
-                asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags));
+                core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
             }
-            return true;
+            cow_dec_ref(old_phys_aligned);
+            let _ = vm.map_page(page_addr, new_phys, base_flags);
+        } else {
+            // Sole owner — just make the existing PTE writable.
+            vm.set_page_flags(page_addr, base_flags);
         }
+        // SAFETY: Flushing the TLB entry for page_addr after PTE modification.
+        unsafe {
+            asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags));
+        }
+        return true;
     }
 
     // ── Scenario 1: Demand page — page not present, VMA covers the address ─
@@ -297,7 +297,7 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
         error_code,
         rip
     );
-    crate::services::ipc::SIGNALS.send_signal(pid, posix_abi::SIGTERM);
+    let _ = crate::services::ipc::SIGNALS.send_signal(pid, posix_abi::SIGTERM);
     // Return to user mode — the timer tick will deliver the signal and terminate the process.
 }
 

@@ -6,7 +6,7 @@
 use super::address_space::AddressSpace;
 use super::cow::cow_dec_ref;
 use super::flags::PageFlags;
-use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
+use super::pmm::{PAGE_SIZE, alloc_frame};
 use crate::ostd::sync::SpinLock;
 use alloc::vec::Vec;
 
