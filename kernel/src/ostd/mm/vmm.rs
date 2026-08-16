@@ -4,6 +4,7 @@
 //! page table manipulation is delegated to architecture-specific backends (`ostd::arch`).
 
 use super::address_space::AddressSpace;
+use super::cow::cow_dec_ref;
 use super::flags::PageFlags;
 use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
 use crate::ostd::sync::SpinLock;
@@ -325,11 +326,15 @@ impl VmSpace {
         unimplemented!("VmSpace::map_page() not implemented for this architecture")
     }
 
-    /// Unmaps a 4 KiB virtual page from this address space and frees its physical frame.
+    /// Unmaps a 4 KiB virtual page from this address space.
+    ///
+    /// The underlying physical frame is released via [`cow_dec_ref`], which only
+    /// calls [`free_frame`] when no other address space still holds a reference
+    /// to it (important for CoW-shared pages after `clone_cow`).
     pub fn unmap_page(&mut self, virt_addr: usize) {
         #[cfg(target_arch = "x86_64")]
         // SAFETY: `self.address_space.as_phys()` is a valid root table. `virt_addr` is page-aligned
-        // and cleared from the page tables. Any unmapped physical frame is returned to be freed.
+        // and cleared from the page tables. The returned physical address is decremented via cow_dec_ref.
         let freed_frame = unsafe {
             crate::ostd::arch::x86_64::paging::unmap_page(self.address_space.as_phys(), virt_addr)
         };
@@ -338,7 +343,7 @@ impl VmSpace {
             unimplemented!("VmSpace::unmap_page() not implemented for this architecture");
 
         if let Some(phys) = freed_frame {
-            free_frame(phys);
+            cow_dec_ref(phys);
         }
     }
 
@@ -413,8 +418,69 @@ impl VmSpace {
         Ok(())
     }
 
-    /// Creates an independent clone of this address space by allocating a new root table
-    /// and eagerly duplicating all physical memory pages recorded in the VMA list.
+    /// Creates a Copy-on-Write clone of this address space.
+    ///
+    /// All currently mapped writable pages are marked read-only in **both** the parent
+    /// and the new child, and their [`cow_ref_count`] is incremented. A write fault in
+    /// either space will be caught by `rust_page_fault_handler`, which allocates a fresh
+    /// private frame, copies the content, and restores write permission for that process.
+    ///
+    /// Read-only and execute-only pages (code, rodata) are shared without a refcount bump
+    /// because they can never trigger a CoW break.
+    pub fn clone_cow(&self) -> Option<Self> {
+        use super::cow::cow_inc_ref;
+
+        let mut child = Self::new()?;
+        child.vmas = self.vmas.clone();
+
+        for vma in &self.vmas {
+            let mut vaddr = vma.start & !0xFFF;
+            let end_vaddr = (vma.end + PAGE_SIZE - 1) & !0xFFF;
+            while vaddr < end_vaddr {
+                if let Some(phys) = self.translate(vaddr) {
+                    let phys_aligned = phys & !0xFFF;
+
+                    // Derive flags: writable pages become read-only in both spaces
+                    // to arm the CoW write-fault mechanism.
+                    let base_flags = PageFlags::from_prot(vma.prot);
+                    let shared_flags = PageFlags {
+                        writable: false,
+                        ..base_flags
+                    };
+
+                    let is_writable = (vma.prot & posix_abi::PROT_WRITE as u32) != 0;
+
+                    if is_writable {
+                        // Demote parent PTE to read-only (CoW protection).
+                        #[cfg(target_arch = "x86_64")]
+                        // SAFETY: `self.address_space.as_phys()` is the parent's valid root table.
+                        // `vaddr` is a canonical user virtual address within a mapped VMA.
+                        // `set_page_flags` only updates the permission bits; the mapping is preserved.
+                        unsafe {
+                            crate::ostd::arch::x86_64::paging::set_page_flags(
+                                self.address_space.as_phys(),
+                                vaddr,
+                                shared_flags,
+                            );
+                        }
+                        cow_inc_ref(phys_aligned);
+                        let _ = child.map_page(vaddr, phys_aligned, shared_flags);
+                    } else {
+                        // Read-only pages can be shared without CoW plumbing.
+                        let _ = child.map_page(vaddr, phys_aligned, base_flags);
+                    }
+                }
+                vaddr += PAGE_SIZE;
+            }
+        }
+
+        Some(child)
+    }
+
+    /// Creates an independent eager clone of this address space (legacy path, pre-CoW).
+    ///
+    /// Prefer [`clone_cow`] for `fork()`; this method is retained for tests and
+    /// any path that genuinely needs an immediately diverged copy.
     pub fn clone_from(&self) -> Option<Self> {
         let mut new_vm = Self::new()?;
         new_vm.vmas = self.vmas.clone();
