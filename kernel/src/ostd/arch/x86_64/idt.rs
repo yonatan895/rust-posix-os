@@ -150,9 +150,9 @@ impl TrapFrame {
 /// Set when the fault was caused by a present page (protection violation).
 const PF_PRESENT: u64 = 1 << 0;
 /// Set when the fault was caused by a write access.
-const PF_WRITE:   u64 = 1 << 1;
+const PF_WRITE: u64 = 1 << 1;
 /// Set when the fault originated from user mode (CPL = 3).
-const PF_USER:    u64 = 1 << 2;
+const PF_USER: u64 = 1 << 2;
 
 /// Attempt to handle a page fault in the context of the currently running process.
 ///
@@ -173,30 +173,34 @@ const PF_USER:    u64 = 1 << 2;
 fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     use crate::ostd::mm::cow::{cow_dec_ref, cow_inc_ref, cow_ref_count};
     use crate::ostd::mm::flags::PageFlags;
-    use crate::ostd::mm::pmm::{PAGE_SIZE, alloc_frame};
+    use crate::ostd::mm::pmm::{alloc_frame, PAGE_SIZE};
     use crate::ostd::mm::vmm::{phys_to_virt, zero_phys_frame};
     use crate::services::process::{CURRENT_PID, PROCESS_TABLE};
     use core::sync::atomic::Ordering;
     use posix_abi::PROT_WRITE;
 
     let is_present = (error_code & PF_PRESENT) != 0;
-    let is_write   = (error_code & PF_WRITE)   != 0;
-    let page_addr  = fault_addr & !(PAGE_SIZE - 1);
+    let is_write = (error_code & PF_WRITE) != 0;
+    let page_addr = fault_addr & !(PAGE_SIZE - 1);
 
     let pid = CURRENT_PID.load(Ordering::SeqCst);
     let proc_arc = PROCESS_TABLE.lock().get(&pid).cloned();
-    let Some(arc) = proc_arc else { return false; };
+    let Some(arc) = proc_arc else {
+        return false;
+    };
     let mut proc = arc.lock();
-    let Some(vm) = proc.vm_space.as_mut() else { return false; };
+    let Some(vm) = proc.vm_space.as_mut() else {
+        return false;
+    };
 
     // Retrieve the VMA covering the faulting address.
     let vma = match vm.find_vma(fault_addr) {
         Some(v) => *v,
-        None    => return false,
+        None => return false,
     };
 
     let vma_writable = (vma.prot & PROT_WRITE as u32) != 0;
-    let base_flags   = PageFlags::from_prot(vma.prot);
+    let base_flags = PageFlags::from_prot(vma.prot);
 
     // ── Scenario 2 & 3: CoW write fault on a present-but-read-only page ────
     if is_present && is_write && vma_writable {
@@ -204,12 +208,16 @@ fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
             let old_phys_aligned = old_phys & !(PAGE_SIZE - 1);
             if cow_ref_count(old_phys_aligned) > 1 {
                 // Shared frame — allocate a private copy.
-                let Some(new_phys) = alloc_frame() else { return false; };
+                let Some(new_phys) = alloc_frame() else {
+                    return false;
+                };
                 let src = phys_to_virt(old_phys_aligned) as *const u8;
                 let dst = phys_to_virt(new_phys) as *mut u8;
                 // SAFETY: src and dst are HHDM virtual addresses of distinct non-overlapping
                 // 4 KiB physical frames. PAGE_SIZE bytes are copied to break CoW sharing.
-                unsafe { core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE); }
+                unsafe {
+                    core::ptr::copy_nonoverlapping(src, dst, PAGE_SIZE);
+                }
                 cow_dec_ref(old_phys_aligned);
                 let _ = vm.map_page(page_addr, new_phys, base_flags);
             } else {
@@ -217,18 +225,24 @@ fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
                 vm.set_page_flags(page_addr, base_flags);
             }
             // SAFETY: Flushing the TLB entry for page_addr after PTE modification.
-            unsafe { asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags)); }
+            unsafe {
+                asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags));
+            }
             return true;
         }
     }
 
     // ── Scenario 1: Demand page — page not present, VMA covers the address ─
     if !is_present {
-        let Some(phys) = alloc_frame() else { return false; };
+        let Some(phys) = alloc_frame() else {
+            return false;
+        };
         zero_phys_frame(phys);
         let _ = vm.map_page(page_addr, phys, base_flags);
         // SAFETY: Flushing the TLB entry for the newly mapped page.
-        unsafe { asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags)); }
+        unsafe {
+            asm!("invlpg [{}]", in(reg) page_addr, options(nostack, preserves_flags));
+        }
         return true;
     }
 
@@ -256,7 +270,9 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
     if !is_user {
         log::error!(
             "KERNEL PAGE FAULT at 0x{:016x}, error=0x{:x}, rip=0x{:016x}",
-            fault_addr, error_code, rip
+            fault_addr,
+            error_code,
+            rip
         );
         loop {
             // SAFETY: Halting the CPU indefinitely on an unrecoverable kernel page fault.
@@ -276,7 +292,10 @@ pub unsafe extern "C" fn rust_page_fault_handler(frame: *const InterruptFrame, e
     let pid = CURRENT_PID.load(Ordering::SeqCst);
     log::warn!(
         "Unhandled user page fault: pid={} addr=0x{:016x} err=0x{:x} rip=0x{:016x}",
-        pid, fault_addr, error_code, rip
+        pid,
+        fault_addr,
+        error_code,
+        rip
     );
     crate::services::ipc::SIGNALS.send_signal(pid, posix_abi::SIGTERM);
     // Return to user mode — the timer tick will deliver the signal and terminate the process.
