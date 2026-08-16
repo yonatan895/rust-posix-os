@@ -173,7 +173,7 @@ const PF_USER: u64 = 1 << 2;
 fn try_handle_page_fault(fault_addr: usize, error_code: u64) -> bool {
     use crate::ostd::mm::cow::{cow_dec_ref, cow_inc_ref, cow_ref_count};
     use crate::ostd::mm::flags::PageFlags;
-    use crate::ostd::mm::pmm::{alloc_frame, PAGE_SIZE};
+    use crate::ostd::mm::pmm::{PAGE_SIZE, alloc_frame};
     use crate::ostd::mm::vmm::{phys_to_virt, zero_phys_frame};
     use crate::services::process::{CURRENT_PID, PROCESS_TABLE};
     use core::sync::atomic::Ordering;
