@@ -2,6 +2,7 @@
 
 pub mod address_space;
 pub mod boot;
+pub mod cow;
 pub mod flags;
 pub mod heap;
 pub mod pmm;
@@ -11,6 +12,7 @@ pub mod vmm;
 
 pub use address_space::AddressSpace;
 pub use boot::{BootBlob, boot_modules, with_syscall_regs};
+pub use cow::{cow_dec_ref, cow_inc_ref, cow_ref_count, zero_page_phys};
 pub use flags::PageFlags;
 pub use heap::{HEAP_ALLOCATOR, get_heap_stats};
 pub use pmm::{PAGE_SIZE, alloc_contiguous_frames, alloc_frame, free_frame, get_pmm_stats};
