@@ -99,22 +99,28 @@ pub unsafe extern "C" fn _start() -> ! {
 /// Counter for failed assertions in the test suite.
 static FAILED_TESTS: core::sync::atomic::AtomicUsize = core::sync::atomic::AtomicUsize::new(0);
 
-macro_rules! check_efault {
-    ($expr:expr, $name:expr) => {
-        // SAFETY: Executing test syscall with intentional adversarial pointer to verify kernel EFAULT handling.
+macro_rules! check_errno {
+    ($expr:expr, $expected_errno:expr, $name:expr) => {
+        // SAFETY: Executing test syscall with intentional adversarial arguments.
         let res = unsafe { $expr } as isize;
-        if res != -(EFAULT as isize) {
+        if res != -($expected_errno as isize) {
             // SAFETY: Printing failure diagnostic to standard error.
             unsafe {
                 printf(
                     b"[FAIL] %s: expected errno %d, got %d\n\0".as_ptr(),
                     $name,
-                    EFAULT as i32,
+                    $expected_errno as i32,
                     -res as i32,
                 );
             }
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
+    };
+}
+
+macro_rules! check_efault {
+    ($expr:expr, $name:expr) => {
+        check_errno!($expr, EFAULT, $name);
     };
 }
 
@@ -146,7 +152,7 @@ unsafe fn run_efault_hammer_tests() {
         check_efault!(stat(b"/dev/null\0".as_ptr(), p as *mut Stat), name);
     }
 
-    check_efault!(
+    check_errno!(
         mmap(
             kern,
             4096,
@@ -155,9 +161,10 @@ unsafe fn run_efault_hammer_tests() {
             -1,
             0
         ),
+        ENOMEM,
         b"mmap(kern)\0".as_ptr()
     );
-    check_efault!(
+    check_errno!(
         mmap(
             null,
             usize::MAX,
@@ -166,6 +173,7 @@ unsafe fn run_efault_hammer_tests() {
             -1,
             0
         ),
+        ENOMEM,
         b"mmap(len=MAX)\0".as_ptr()
     );
 
@@ -173,7 +181,7 @@ unsafe fn run_efault_hammer_tests() {
     // SAFETY: Querying system metrics to valid local buffer.
     if unsafe { sysinfo(&mut si_before) } == 0 && si_before.totalram > 0 {
         let excessive_len = (si_before.totalram as usize).saturating_add(1024 * 1024 * 1024);
-        check_efault!(
+        check_errno!(
             mmap(
                 null,
                 excessive_len,
@@ -182,6 +190,7 @@ unsafe fn run_efault_hammer_tests() {
                 -1,
                 0
             ),
+            ENOMEM,
             b"mmap(excessive)\0".as_ptr()
         );
         let mut si_after = Sysinfo::default();
