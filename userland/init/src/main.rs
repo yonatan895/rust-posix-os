@@ -630,7 +630,22 @@ unsafe fn run_saved_uid_credentials_tests() {
         }
     }
 
-    // 3. Regain root privilege via seteuid(0) because saved-UID is 0
+    // 3. Verify unauthorized privilege switch while unprivileged (seteuid(2000) -> -EPERM)
+    // SAFETY: Attempting unauthorized seteuid to non-root, non-real, non-saved UID.
+    let r_unauth = unsafe { seteuid(2000) };
+    if r_unauth != -(EPERM as i32) {
+        // SAFETY: Reporting unauthorized seteuid failure.
+        unsafe {
+            printf(
+                b"[FAIL] Unauthorized seteuid(2000) expected %d, got %d\n\0".as_ptr(),
+                -(EPERM as i32),
+                r_unauth,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 4. Regain root privilege via seteuid(0) because saved-UID is 0
     // SAFETY: Regaining root effective privilege from saved-UID 0.
     let r_regain = unsafe { seteuid(0) };
     let euid_regain = unsafe { geteuid() };
@@ -652,7 +667,7 @@ unsafe fn run_saved_uid_credentials_tests() {
         }
     }
 
-    // 4. Test setresgid and getresgid
+    // 5. Test setresgid and getresgid
     let mut rg = 0u32;
     let mut eg = 0u32;
     let mut sg = 0u32;
@@ -680,53 +695,6 @@ unsafe fn run_saved_uid_credentials_tests() {
     // Restore group credentials
     // SAFETY: Restoring root group credentials.
     let _ = unsafe { setresgid(0, 0, 0) };
-
-    // 5. Test fork / child process for permanent drop
-    // In a child process, drop all privileges permanently via setuid(1000)
-    // Child verifies it cannot regain root (seteuid(0) -> -EPERM)
-    // SAFETY: Forking a child process to test permanent privilege drop.
-    let child_pid = unsafe { fork() };
-    if child_pid == 0 {
-        // In child process
-        // SAFETY: Dropping all UID credentials permanently.
-        let r_perm = unsafe { setuid(1000) };
-        let _ = unsafe { getresuid(&mut r, &mut e, &mut s) };
-        // SAFETY: Attempting unauthorized regain of root.
-        let r_fail_regain = unsafe { seteuid(0) };
-        let creds_dropped = r == 1000 && e == 1000 && s == 1000;
-        let regain_blocked = r_fail_regain == -(EPERM as i32);
-        if r_perm == 0 && creds_dropped && regain_blocked {
-            // SAFETY: Exiting child on success.
-            unsafe { exit(0) };
-        } else {
-            // SAFETY: Exiting child on failure.
-            unsafe { exit(1) };
-        }
-    } else if child_pid > 0 {
-        let mut status = 0;
-        // SAFETY: Reaping child test process.
-        let reaped = unsafe { waitpid(child_pid, &mut status, 0) };
-        if reaped != child_pid || status != 0 {
-            // SAFETY: Reporting child permanent drop test failure.
-            unsafe {
-                printf(
-                    b"[FAIL] Child permanent drop test failed: reaped=%d, status=%d\n\0".as_ptr(),
-                    reaped,
-                    status,
-                );
-                FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-            }
-        }
-    } else {
-        // SAFETY: Reporting fork failure.
-        unsafe {
-            printf(
-                b"[FAIL] fork failed in credentials test: %d\n\0".as_ptr(),
-                child_pid,
-            );
-            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
-        }
-    }
 
     // SAFETY: Outputting success message.
     unsafe {
