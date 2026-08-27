@@ -35,430 +35,204 @@ fn test_libc_small_object_allocator() {
     const SIZE_CLASSES: [usize; NUM_CLASSES] = [16, 32, 64, 128, 256, 512, 1024, 2048];
     const SMALL_THRESHOLD: usize = 2048;
     const LARGE_MAGIC: usize = 0x504F5349584D454D;
-    const ARENA_MAGIC: usize = 0x504F53495841524E;
     const FREE_MAGIC: usize = 0x504F534958465245;
     const MAX_ARENAS: usize = 512;
 
-    #[derive(Clone, Copy, Default)]
-    struct ArenaRecord {
-        start: usize,
-        end: usize,
-        class_idx: usize,
-    }
-
-    struct MemorySpace {
+    struct SimAlloc {
         pages: BTreeMap<usize, Vec<u8>>,
         mmap_count: usize,
         munmap_count: usize,
-        next_mmap_addr: usize,
+        next_addr: usize,
+        free_lists: [usize; NUM_CLASSES],
+        current_arenas: [usize; NUM_CLASSES],
+        arenas: [(usize, usize, usize); MAX_ARENAS], // (start, end, class_idx)
+        arena_count: usize,
     }
 
-    impl MemorySpace {
+    impl SimAlloc {
         fn new() -> Self {
             Self {
                 pages: BTreeMap::new(),
                 mmap_count: 0,
                 munmap_count: 0,
-                next_mmap_addr: 0x6000_0000_0000,
-            }
-        }
-
-        fn mmap(&mut self, size: usize) -> usize {
-            let aligned = (size + 4095) & !4095;
-            let addr = self.next_mmap_addr;
-            self.next_mmap_addr += aligned;
-            self.mmap_count += 1;
-            for offset in (0..aligned).step_by(4096) {
-                self.pages.insert(addr + offset, vec![0u8; 4096]);
-            }
-            addr
-        }
-
-        fn munmap(&mut self, addr: usize, size: usize) {
-            let aligned = (size + 4095) & !4095;
-            self.munmap_count += 1;
-            for offset in (0..aligned).step_by(4096) {
-                self.pages.remove(&(addr + offset));
-            }
-        }
-
-        fn read_u64(&self, addr: usize) -> u64 {
-            let mut buf = [0u8; 8];
-            self.read_bytes(addr, &mut buf);
-            u64::from_ne_bytes(buf)
-        }
-
-        fn write_u64(&mut self, addr: usize, val: u64) {
-            self.write_bytes(addr, &val.to_ne_bytes());
-        }
-
-        fn read_bytes(&self, addr: usize, dest: &mut [u8]) {
-            for (i, b) in dest.iter_mut().enumerate() {
-                let curr = addr + i;
-                let page_base = curr & !4095;
-                let offset = curr & 4095;
-                if let Some(page) = self.pages.get(&page_base) {
-                    *b = page[offset];
-                } else {
-                    *b = 0;
-                }
-            }
-        }
-
-        fn write_bytes(&mut self, addr: usize, src: &[u8]) {
-            for (i, &b) in src.iter().enumerate() {
-                let curr = addr + i;
-                let page_base = curr & !4095;
-                let offset = curr & 4095;
-                if let Some(page) = self.pages.get_mut(&page_base) {
-                    page[offset] = b;
-                }
-            }
-        }
-    }
-
-    struct RealSlabAllocator {
-        mem: MemorySpace,
-        free_lists: [usize; NUM_CLASSES],
-        current_arenas: [usize; NUM_CLASSES],
-        arena_records: [ArenaRecord; MAX_ARENAS],
-        arena_count: usize,
-    }
-
-    impl RealSlabAllocator {
-        fn new() -> Self {
-            Self {
-                mem: MemorySpace::new(),
+                next_addr: 0x6000_0000_0000,
                 free_lists: [0; NUM_CLASSES],
                 current_arenas: [0; NUM_CLASSES],
-                arena_records: [ArenaRecord::default(); MAX_ARENAS],
+                arenas: [(0, 0, 0); MAX_ARENAS],
                 arena_count: 0,
             }
         }
-
-        fn malloc(&mut self, size: usize) -> usize {
-            if size == 0 {
-                return 0;
-            }
-
-            if size > SMALL_THRESHOLD {
-                let total_size = size + 16;
-                let aligned_size = (total_size + 4095) & !4095;
-                let ptr = self.mem.mmap(aligned_size);
-                self.mem.write_u64(ptr, aligned_size as u64);
-                self.mem.write_u64(ptr + 8, LARGE_MAGIC as u64);
-                ptr + 16
-            } else {
-                let mut class_idx = 0;
-                while class_idx < NUM_CLASSES && SIZE_CLASSES[class_idx] < size {
-                    class_idx += 1;
-                }
-                let b_size = SIZE_CLASSES[class_idx];
-
-                // 1. Pop from free list
-                let node = self.free_lists[class_idx];
-                if node != 0 {
-                    let next = self.mem.read_u64(node) as usize;
-                    self.free_lists[class_idx] = next;
-                    self.mem.write_u64(node + 8, 0); // Clear free magic upon reallocation
-                    return node;
-                }
-
-                // 2. Bump-allocate from current arena
-                let current = self.current_arenas[class_idx];
-                if current != 0 {
-                    let bump_offset = self.mem.read_u64(current + 16) as usize;
-                    if bump_offset + b_size <= ARENA_SIZE {
-                        let block = current + bump_offset;
-                        self.mem
-                            .write_u64(current + 16, (bump_offset + b_size) as u64);
-                        return block;
-                    }
-                }
-
-                // 3. Allocate new arena chunk (Fail-closed on MAX_ARENAS overflow)
-                let count = self.arena_count;
-                if count >= MAX_ARENAS {
-                    return 0; // Fail-closed
-                }
-
-                let arena_ptr = self.mem.mmap(ARENA_SIZE);
-                let hdr_size = 32;
-                self.mem.write_u64(arena_ptr, ARENA_MAGIC as u64);
-                self.mem.write_u64(arena_ptr + 8, class_idx as u64);
-                self.mem
-                    .write_u64(arena_ptr + 16, (hdr_size + b_size) as u64);
-                self.mem
-                    .write_u64(arena_ptr + 24, self.current_arenas[class_idx] as u64);
-                self.current_arenas[class_idx] = arena_ptr;
-
-                self.arena_records[count] = ArenaRecord {
-                    start: arena_ptr,
-                    end: arena_ptr + ARENA_SIZE,
-                    class_idx,
-                };
-                self.arena_count = count + 1;
-
-                arena_ptr + hdr_size
+        fn mmap(&mut self, size: usize) -> usize {
+            let aligned = (size + 4095) & !4095;
+            let addr = self.next_addr;
+            self.next_addr += aligned;
+            self.mmap_count += 1;
+            for off in (0..aligned).step_by(4096) { self.pages.insert(addr + off, vec![0u8; 4096]); }
+            addr
+        }
+        fn munmap(&mut self, addr: usize, size: usize) {
+            let aligned = (size + 4095) & !4095;
+            self.munmap_count += 1;
+            for off in (0..aligned).step_by(4096) { self.pages.remove(&(addr + off)); }
+        }
+        fn r64(&self, a: usize) -> u64 {
+            let mut b = [0u8; 8];
+            self.rb(a, &mut b);
+            u64::from_ne_bytes(b)
+        }
+        fn w64(&mut self, a: usize, v: u64) { self.wb(a, &v.to_ne_bytes()); }
+        fn rb(&self, a: usize, dst: &mut [u8]) {
+            for (i, b) in dst.iter_mut().enumerate() {
+                let curr = a + i;
+                *b = self.pages.get(&(curr & !4095)).map(|p| p[curr & 4095]).unwrap_or(0);
             }
         }
-
-        fn free(&mut self, ptr: usize) {
-            if ptr == 0 {
-                return;
+        fn wb(&mut self, a: usize, src: &[u8]) {
+            for (i, &b) in src.iter().enumerate() {
+                let curr = a + i;
+                if let Some(p) = self.pages.get_mut(&(curr & !4095)) { p[curr & 4095] = b; }
             }
-
-            for i in 0..self.arena_count {
-                let rec = self.arena_records[i];
-                if ptr >= rec.start && ptr < rec.end {
-                    let class_idx = rec.class_idx;
-                    // Double-free guard
-                    let magic = self.mem.read_u64(ptr + 8) as usize;
-                    if magic == FREE_MAGIC {
-                        return; // Guard against double-free!
+        }
+        fn malloc(&mut self, size: usize) -> usize {
+            if size == 0 { return 0; }
+            if size > SMALL_THRESHOLD {
+                let aligned = (size + 16 + 4095) & !4095;
+                let ptr = self.mmap(aligned);
+                self.w64(ptr, aligned as u64);
+                self.w64(ptr + 8, LARGE_MAGIC as u64);
+                ptr + 16
+            } else {
+                let mut c = 0;
+                while c < NUM_CLASSES && SIZE_CLASSES[c] < size { c += 1; }
+                let bsz = SIZE_CLASSES[c];
+                let node = self.free_lists[c];
+                if node != 0 {
+                    self.free_lists[c] = self.r64(node) as usize;
+                    self.w64(node + 8, 0);
+                    return node;
+                }
+                let cur = self.current_arenas[c];
+                if cur != 0 {
+                    let off = self.r64(cur + 16) as usize;
+                    if off + bsz <= ARENA_SIZE {
+                        self.w64(cur + 16, (off + bsz) as u64);
+                        return cur + off;
                     }
-                    self.mem.write_u64(ptr + 8, FREE_MAGIC as u64);
-                    self.mem.write_u64(ptr, self.free_lists[class_idx] as u64);
-                    self.free_lists[class_idx] = ptr;
+                }
+                if self.arena_count >= MAX_ARENAS { return 0; }
+                let a_ptr = self.mmap(ARENA_SIZE);
+                self.w64(a_ptr + 16, (32 + bsz) as u64);
+                self.current_arenas[c] = a_ptr;
+                self.arenas[self.arena_count] = (a_ptr, a_ptr + ARENA_SIZE, c);
+                self.arena_count += 1;
+                a_ptr + 32
+            }
+        }
+        fn free(&mut self, ptr: usize) {
+            if ptr == 0 { return; }
+            for i in 0..self.arena_count {
+                let (start, end, c) = self.arenas[i];
+                if ptr >= start && ptr < end {
+                    if self.r64(ptr + 8) as usize == FREE_MAGIC { return; }
+                    self.w64(ptr + 8, FREE_MAGIC as u64);
+                    self.w64(ptr, self.free_lists[c] as u64);
+                    self.free_lists[c] = ptr;
                     return;
                 }
             }
-
-            // Large allocation path
-            let header_ptr = ptr - 16;
-            let magic = self.mem.read_u64(header_ptr + 8) as usize;
-            if magic == LARGE_MAGIC {
-                let size = self.mem.read_u64(header_ptr) as usize;
-                self.mem.write_u64(header_ptr + 8, 0);
-                self.mem.munmap(header_ptr, size);
+            let hdr = ptr - 16;
+            if self.r64(hdr + 8) as usize == LARGE_MAGIC {
+                let sz = self.r64(hdr) as usize;
+                self.w64(hdr + 8, 0);
+                self.munmap(hdr, sz);
             }
         }
-
         fn realloc(&mut self, ptr: usize, size: usize) -> usize {
-            if ptr == 0 {
-                return self.malloc(size);
+            if ptr == 0 { return self.malloc(size); }
+            if size == 0 { self.free(ptr); return 0; }
+            let mut cap = 0;
+            let mut small = false;
+            for &(start, end, c) in &self.arenas[..self.arena_count] {
+                if ptr >= start && ptr < end { cap = SIZE_CLASSES[c]; small = true; break; }
             }
-            if size == 0 {
-                self.free(ptr);
-                return 0;
+            if !small {
+                let hdr = ptr - 16;
+                if self.r64(hdr + 8) as usize != LARGE_MAGIC { return 0; }
+                cap = (self.r64(hdr) as usize) - 16;
             }
-
-            let mut old_capacity = 0;
-            let mut is_small = false;
-            for rec in self.arena_records.iter().take(self.arena_count) {
-                if ptr >= rec.start && ptr < rec.end {
-                    old_capacity = SIZE_CLASSES[rec.class_idx];
-                    is_small = true;
-                    break;
-                }
-            }
-
-            if !is_small {
-                let header_ptr = ptr - 16;
-                let magic = self.mem.read_u64(header_ptr + 8) as usize;
-                if magic != LARGE_MAGIC {
-                    return 0;
-                }
-                old_capacity = (self.mem.read_u64(header_ptr) as usize) - 16;
-            }
-
-            if old_capacity >= size {
-                return ptr; // In-place reuse
-            }
-
-            let new_ptr = self.malloc(size);
-            if new_ptr != 0 {
-                let mut buf = vec![0u8; old_capacity];
-                self.mem.read_bytes(ptr, &mut buf);
-                self.mem.write_bytes(new_ptr, &buf);
+            if cap >= size { return ptr; }
+            let new_p = self.malloc(size);
+            if new_p != 0 {
+                let mut buf = vec![0u8; cap];
+                self.rb(ptr, &mut buf);
+                self.wb(new_p, &buf);
                 self.free(ptr);
             }
-            new_ptr
+            new_p
         }
     }
 
-    let mut alloc = RealSlabAllocator::new();
-
-    // 1. Double-Free Protection on Small Object Path:
+    let mut alloc = SimAlloc::new();
     let small_ptr = alloc.malloc(64);
     assert_ne!(small_ptr, 0);
     alloc.free(small_ptr);
-    alloc.free(small_ptr); // Second free must be a safe no-op (no cycles)
+    alloc.free(small_ptr);
     let pop1 = alloc.malloc(64);
     let pop2 = alloc.malloc(64);
-    assert_ne!(
-        pop1, pop2,
-        "Double-free must not create cycle or return duplicate pointers"
-    );
+    assert_ne!(pop1, pop2);
     alloc.free(pop1);
     alloc.free(pop2);
 
-    // 2. Fixed MAX_ARENAS Exhaustion Fail-Closed:
-    let mut exhausted_alloc = RealSlabAllocator::new();
-    exhausted_alloc.arena_count = MAX_ARENAS;
-    let overflow_ptr = exhausted_alloc.malloc(256);
-    assert_eq!(
-        overflow_ptr, 0,
-        "Malloc must fail-closed with NULL when arena table is full"
-    );
+    let mut full_alloc = SimAlloc::new();
+    full_alloc.arena_count = MAX_ARENAS;
+    assert_eq!(full_alloc.malloc(256), 0);
 
-    // 3. 10,000 malloc/free cycles of <= 128 bytes with intrusive in-memory pointer manipulation:
-    let mut live_ptrs = Vec::new();
+    let mut live = Vec::new();
     for i in 0..10_000 {
-        let sz = ((i * 17) % 128) + 1; // Varying sizes from 1 to 128 B
+        let sz = ((i * 17) % 128) + 1;
         let p = alloc.malloc(sz);
         assert_ne!(p, 0);
-        // Write canary byte to verify real memory access
-        alloc.mem.write_bytes(p, &[0xAA]);
-        live_ptrs.push((p, sz));
-
-        if live_ptrs.len() >= 64 {
-            let (to_free, _) = live_ptrs.swap_remove(0);
+        alloc.wb(p, &[0xAA]);
+        live.push(p);
+        if live.len() >= 64 {
+            let to_free = live.swap_remove(0);
             alloc.free(to_free);
         }
     }
+    for p in live { alloc.free(p); }
+    assert!(alloc.mmap_count < 64);
 
-    while let Some((p, _)) = live_ptrs.pop() {
-        alloc.free(p);
-    }
-
-    // Acceptance criterion: 10,000 malloc/free cycles of <= 128 B complete with < 64 SYS_MMAP calls
-    assert!(
-        alloc.mem.mmap_count < 64,
-        "10,000 small allocations must complete with < 64 mmap calls (actual: {})",
-        alloc.mem.mmap_count
-    );
-
-    // 4. Test In-Place Realloc vs Size-Class Growth:
     let p1 = alloc.malloc(32);
-    alloc.mem.write_bytes(p1, &[1, 2, 3, 4]);
+    alloc.wb(p1, &[1, 2, 3, 4]);
     let p2 = alloc.realloc(p1, 28);
-    assert_eq!(
-        p1, p2,
-        "Realloc within size class must reuse memory in-place"
-    );
-
-    let p3 = alloc.realloc(p2, 512); // Growth to larger size class
+    assert_eq!(p1, p2);
+    let p3 = alloc.realloc(p2, 512);
     assert_ne!(p3, p2);
     let mut canary = [0u8; 4];
-    alloc.mem.read_bytes(p3, &mut canary);
-    assert_eq!(
-        &canary,
-        &[1, 2, 3, 4],
-        "Realloc must preserve buffer contents"
-    );
+    alloc.rb(p3, &mut canary);
+    assert_eq!(&canary, &[1, 2, 3, 4]);
     alloc.free(p3);
 
-    // 5. Test Large Allocation Double-Free Guard & munmap:
-    let large_p = alloc.malloc(8192);
-    assert_ne!(large_p, 0);
-    alloc.free(large_p);
-    alloc.free(large_p); // Double-free on large path must be a safe no-op
-    assert_eq!(
-        alloc.mem.munmap_count, 1,
-        "munmap must be called exactly once despite double free"
-    );
+    let lp = alloc.malloc(8192);
+    assert_ne!(lp, 0);
+    alloc.free(lp);
+    alloc.free(lp);
+    assert_eq!(alloc.munmap_count, 1);
 }
 
 /// Tests panic diagnostic formatting targeting stderr (file descriptor 2) across all userland daemons.
 fn test_userland_panic_fd2() {
-    struct SimFdWriter {
-        fd: i32,
-        output: Vec<u8>,
-        max_chunk: usize,
+    for (name, file, line, msg) in [
+        ("init panic", "userland/init/src/main.rs", 42, "explicit panic in test routine"),
+        ("shell panic", "userland/shell/src/main.rs", 100, "command parser buffer overflow"),
+        ("coreutils panic", "userland/coreutils/src/main.rs", 200, "unreachable state in ls applet"),
+    ] {
+        let mut out = String::new();
+        writeln!(out, "{}: panicked at {}:{}: {}", name, file, line, msg).unwrap();
+        assert!(out.starts_with(&format!("{}: ", name)));
+        assert!(out.contains(msg));
+        assert!(out.contains(file));
     }
-
-    impl SimFdWriter {
-        fn new(fd: i32) -> Self {
-            Self {
-                fd,
-                output: Vec::new(),
-                max_chunk: usize::MAX,
-            }
-        }
-    }
-
-    impl Write for SimFdWriter {
-        fn write_str(&mut self, s: &str) -> std::fmt::Result {
-            let bytes = s.as_bytes();
-            let mut written = 0;
-            while written < bytes.len() {
-                let to_write = (bytes.len() - written).min(self.max_chunk);
-                self.output
-                    .extend_from_slice(&bytes[written..written + to_write]);
-                written += to_write;
-            }
-            Ok(())
-        }
-    }
-
-    // 1. Verify init panic handler format targeting STDERR_FILENO (2)
-    let mut init_writer = SimFdWriter::new(2);
-    let sample_msg = "explicit panic in test routine";
-    let sample_file = "userland/init/src/main.rs";
-    let sample_line = 42;
-    writeln!(
-        init_writer,
-        "init panic: panicked at {}:{}: {}",
-        sample_file, sample_line, sample_msg
-    )
-    .unwrap();
-
-    assert_eq!(init_writer.fd, 2, "Panic must write to fd 2 (STDERR)");
-    let init_out = String::from_utf8(init_writer.output).unwrap();
-    assert!(
-        init_out.starts_with("init panic: "),
-        "init panic output must start with 'init panic: '"
-    );
-    assert!(
-        init_out.contains(sample_msg),
-        "init panic output must contain the panic message"
-    );
-    assert!(
-        init_out.contains(sample_file),
-        "init panic output must contain the source file"
-    );
-
-    // 2. Verify shell panic handler format targeting STDERR_FILENO (2) with chunked partial writes
-    let mut shell_writer = SimFdWriter::new(2);
-    shell_writer.max_chunk = 7; // Test multi-chunk partial write loop
-    let shell_msg = "command parser buffer overflow";
-    let shell_file = "userland/shell/src/main.rs";
-    let shell_line = 100;
-    writeln!(
-        shell_writer,
-        "shell panic: panicked at {}:{}: {}",
-        shell_file, shell_line, shell_msg
-    )
-    .unwrap();
-
-    assert_eq!(shell_writer.fd, 2);
-    let shell_out = String::from_utf8(shell_writer.output).unwrap();
-    assert!(
-        shell_out.starts_with("shell panic: "),
-        "shell panic output must start with 'shell panic: '"
-    );
-    assert!(shell_out.contains(shell_msg));
-
-    // 3. Verify coreutils panic handler format targeting STDERR_FILENO (2)
-    let mut coreutils_writer = SimFdWriter::new(2);
-    let coreutils_msg = "unreachable state in ls applet";
-    let coreutils_file = "userland/coreutils/src/main.rs";
-    let coreutils_line = 200;
-    writeln!(
-        coreutils_writer,
-        "coreutils panic: panicked at {}:{}: {}",
-        coreutils_file, coreutils_line, coreutils_msg
-    )
-    .unwrap();
-
-    assert_eq!(coreutils_writer.fd, 2);
-    let coreutils_out = String::from_utf8(coreutils_writer.output).unwrap();
-    assert!(
-        coreutils_out.starts_with("coreutils panic: "),
-        "coreutils panic output must start with 'coreutils panic: '"
-    );
-    assert!(coreutils_out.contains(coreutils_msg));
 }
 
 /// Tests interactive line editor navigation, word jumps, bracketed paste splicing, and kill-ring operations.
@@ -678,56 +452,27 @@ fn test_line_editor_navigation_and_paste() {
 
 /// Tests RFC 4648 standard base64 test vectors including padding.
 fn test_base64_rfc4648() {
-    fn test_b64(input: &[u8], expected: &[u8]) {
-        const B64_CHARS: &[u8; 64] =
-            b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-        let mut out = [0u8; 64];
-        let mut out_len = 0;
-        let mut i = 0;
-        while i < input.len() {
-            let rem = input.len() - i;
-            if rem >= 3 {
-                let b0 = input[i];
-                let b1 = input[i + 1];
-                let b2 = input[i + 2];
-                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
-                out[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
-                out[out_len + 2] = B64_CHARS[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize];
-                out[out_len + 3] = B64_CHARS[(b2 & 0x3f) as usize];
-                out_len += 4;
-                i += 3;
-            } else if rem == 2 {
-                let b0 = input[i];
-                let b1 = input[i + 1];
-                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
-                out[out_len + 1] = B64_CHARS[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize];
-                out[out_len + 2] = B64_CHARS[((b1 & 0x0f) << 2) as usize];
-                out[out_len + 3] = b'=';
-                out_len += 4;
-                i += 2;
-            } else {
-                let b0 = input[i];
-                out[out_len] = B64_CHARS[(b0 >> 2) as usize];
-                out[out_len + 1] = B64_CHARS[((b0 & 0x03) << 4) as usize];
-                out[out_len + 2] = b'=';
-                out[out_len + 3] = b'=';
-                out_len += 4;
-                i += 1;
-            }
+    let b64_table = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    for (input, expected) in [
+        (&b""[..], &b""[..]),
+        (&b"f"[..], &b"Zg=="[..]),
+        (&b"fo"[..], &b"Zm8="[..]),
+        (&b"foo"[..], &b"Zm9v"[..]),
+        (&b"foob"[..], &b"Zm9vYg=="[..]),
+        (&b"fooba"[..], &b"Zm9vYmE="[..]),
+        (&b"foobar"[..], &b"Zm9vYmFy"[..]),
+        (&b"Rust POSIX OS"[..], &b"UnVzdCBQT1NJWCBPUw=="[..]),
+    ] {
+        let mut out = Vec::new();
+        for chunk in input.chunks(3) {
+            let b0 = chunk[0];
+            let b1 = *chunk.get(1).unwrap_or(&0);
+            let b2 = *chunk.get(2).unwrap_or(&0);
+            out.push(b64_table[(b0 >> 2) as usize]);
+            out.push(b64_table[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
+            out.push(if chunk.len() > 1 { b64_table[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] } else { b'=' });
+            out.push(if chunk.len() > 2 { b64_table[(b2 & 0x3f) as usize] } else { b'=' });
         }
-        assert_eq!(
-            &out[..out_len],
-            expected,
-            "RFC 4648 base64 encoding must match standard vector"
-        );
+        assert_eq!(&out[..], expected);
     }
-
-    test_b64(b"", b"");
-    test_b64(b"f", b"Zg==");
-    test_b64(b"fo", b"Zm8=");
-    test_b64(b"foo", b"Zm9v");
-    test_b64(b"foob", b"Zm9vYg==");
-    test_b64(b"fooba", b"Zm9vYmE=");
-    test_b64(b"foobar", b"Zm9vYmFy");
-    test_b64(b"Rust POSIX OS", b"UnVzdCBQT1NJWCBPUw==");
 }

@@ -18,18 +18,29 @@ use posix_abi::*;
 /// kernel allocation.
 const MAX_RW_COUNT: usize = 1 << 20;
 
+/// Retrieves the open file handle and caller PID for `fd`.
+fn get_proc_handle(fd: i32) -> Result<(Arc<FileHandle>, i32), isize> {
+    let proc_lock = get_current_process().ok_or(-(ESRCH as isize))?;
+    let proc = proc_lock.lock();
+    proc.get_fd(fd).map(|h| (h, proc.pid)).ok_or(-(EBADF as isize))
+}
+
+/// Writes `Stat` structure to user pointer.
+fn write_stat(st: Stat, statbuf: *mut Stat) -> isize {
+    match UserPtr::<Stat>::from_raw(statbuf as usize) {
+        Ok(out) => match out.write(st) {
+            Ok(()) => 0,
+            Err(e) => -(map_user_error(e) as isize),
+        },
+        Err(e) => -(map_user_error(e) as isize),
+    }
+}
+
 /// Reads up to `count` bytes from open file descriptor `fd` into user buffer `buf`.
 pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let (handle, calling_pid) = {
-        let proc = proc_lock.lock();
-        match proc.get_fd(fd) {
-            Some(h) => (h, proc.pid),
-            None => return -(EBADF as isize),
-        }
+    let (handle, calling_pid) = match get_proc_handle(fd) {
+        Ok(res) => res,
+        Err(e) => return e,
     };
 
     let count = count.min(MAX_RW_COUNT);
@@ -59,16 +70,9 @@ pub fn sys_read(fd: i32, buf: *mut u8, count: usize) -> isize {
 
 /// Writes up to `count` bytes from user buffer `buf` to open file descriptor `fd`.
 pub fn sys_write(fd: i32, buf: *const u8, count: usize) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let (handle, calling_pid) = {
-        let proc = proc_lock.lock();
-        match proc.get_fd(fd) {
-            Some(h) => (h, proc.pid),
-            None => return -(EBADF as isize),
-        }
+    let (handle, calling_pid) = match get_proc_handle(fd) {
+        Ok(res) => res,
+        Err(e) => return e,
     };
 
     let count = count.min(MAX_RW_COUNT);
@@ -185,10 +189,7 @@ pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let cwd = {
-        let proc = proc_lock.lock();
-        proc.cwd.clone()
-    };
+    let cwd = proc_lock.lock().cwd.clone();
 
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -202,61 +203,29 @@ pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
     };
 
     match inode.stat() {
-        Ok(st) => {
-            let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
-                Ok(p) => p,
-                Err(e) => return -(map_user_error(e) as isize),
-            };
-            match out.write(st) {
-                Ok(()) => 0,
-                Err(e) => -(map_user_error(e) as isize),
-            }
-        }
+        Ok(st) => write_stat(st, statbuf),
         Err(err) => -(err as isize),
     }
 }
 
 /// Retrieves file status metadata for open file descriptor `fd` into user buffer `statbuf`.
 pub fn sys_fstat(fd: i32, statbuf: *mut Stat) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let handle = {
-        let proc = proc_lock.lock();
-        match proc.get_fd(fd) {
-            Some(h) => h,
-            None => return -(EBADF as isize),
-        }
+    let (handle, _) = match get_proc_handle(fd) {
+        Ok(res) => res,
+        Err(e) => return e,
     };
 
     match handle.inode.stat() {
-        Ok(st) => {
-            let out = match UserPtr::<Stat>::from_raw(statbuf as usize) {
-                Ok(p) => p,
-                Err(e) => return -(map_user_error(e) as isize),
-            };
-            match out.write(st) {
-                Ok(()) => 0,
-                Err(e) => -(map_user_error(e) as isize),
-            }
-        }
+        Ok(st) => write_stat(st, statbuf),
         Err(err) => -(err as isize),
     }
 }
 
 /// Repositions the read/write offset of open file descriptor `fd`.
 pub fn sys_lseek(fd: i32, offset: i64, whence: i32) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let handle = {
-        let proc = proc_lock.lock();
-        match proc.get_fd(fd) {
-            Some(h) => h,
-            None => return -(EBADF as isize),
-        }
+    let (handle, _) = match get_proc_handle(fd) {
+        Ok(res) => res,
+        Err(e) => return e,
     };
 
     match handle.lseek(offset, whence) {

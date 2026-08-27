@@ -136,308 +136,102 @@ fn test_preemptive_timer_round_robin() {
 
 /// Tests that processes can only wait on their own direct child processes and receive ECHILD otherwise.
 fn test_waitpid_parentage_isolation() {
-    #[derive(Clone, Copy, PartialEq, Debug)]
-    enum ProcState {
-        Running,
-        Zombie(i32), // exit code
-    }
+    let mut table: BTreeMap<i32, (i32, Option<i32>)> = BTreeMap::new(); // pid -> (ppid, exit_code)
+    table.insert(1, (0, None));
+    table.insert(2, (1, None));
+    table.insert(3, (2, Some(42)));
 
-    #[allow(dead_code)]
-    struct MockProcess {
-        pid: i32,
-        ppid: i32,
-        state: ProcState,
-    }
-
-    let mut table: BTreeMap<i32, MockProcess> = BTreeMap::new();
-    table.insert(
-        1,
-        MockProcess {
-            pid: 1,
-            ppid: 0,
-            state: ProcState::Running,
-        },
-    );
-    table.insert(
-        2,
-        MockProcess {
-            pid: 2,
-            ppid: 1,
-            state: ProcState::Running,
-        },
-    );
-    table.insert(
-        3,
-        MockProcess {
-            pid: 3,
-            ppid: 2,
-            state: ProcState::Zombie(42),
-        },
-    );
-
-    // Mock sys_wait4(calling_pid, target_pid)
-    let wait4 = |calling_pid: i32,
-                 target_pid: i32,
-                 table: &mut BTreeMap<i32, MockProcess>|
-     -> Result<(i32, i32), i32> {
+    let wait4 = |calling_pid: i32, target_pid: i32, tbl: &mut BTreeMap<i32, (i32, Option<i32>)>| -> Result<(i32, i32), i32> {
         let mut reaped = None;
-        let mut exit_code = 0;
         let mut has_child = false;
-
-        for (&p, proc) in table.iter() {
-            if (target_pid == -1 || target_pid == p) && proc.ppid == calling_pid {
+        for (&p, &(ppid, code)) in tbl.iter() {
+            if (target_pid == -1 || target_pid == p) && ppid == calling_pid {
                 has_child = true;
-                if let ProcState::Zombie(code) = proc.state {
-                    reaped = Some(p);
-                    exit_code = code;
-                    break;
-                }
+                if let Some(c) = code { reaped = Some((p, c)); break; }
             }
         }
-
-        if let Some(target) = reaped {
-            table.remove(&target);
-            Ok((target, exit_code))
-        } else if has_child {
-            // Child exists but is not zombie yet
-            Err(0) // Would block
-        } else {
-            // Not a child or target does not exist -> -ECHILD
-            Err(10) // ECHILD
-        }
+        if let Some((target, code)) = reaped { tbl.remove(&target); Ok((target, code)) }
+        else if has_child { Err(0) }
+        else { Err(10) }
     };
 
-    // 1. Process 1 attempts to wait for Process 3 (which is child of 2, not 1) -> ECHILD
-    let res = wait4(1, 3, &mut table);
-    assert_eq!(
-        res,
-        Err(10),
-        "Parentage isolation failed: PID 1 reaped non-child PID 3"
-    );
-
-    // 2. Process 2 waits for Process 3 -> Reaps PID 3 with exit code 42
-    let res = wait4(2, 3, &mut table);
-    assert_eq!(res, Ok((3, 42)), "PID 2 failed to reap child PID 3");
-
-    // 3. Process 2 waits again for Process 3 -> ECHILD (already reaped)
-    let res = wait4(2, 3, &mut table);
-    assert_eq!(res, Err(10), "PID 2 reaped already-reaped child");
+    assert_eq!(wait4(1, 3, &mut table), Err(10));
+    assert_eq!(wait4(2, 3, &mut table), Ok((3, 42)));
+    assert_eq!(wait4(2, 3, &mut table), Err(10));
 }
 
 /// Tests non-blocking WNOHANG waitpid semantics for running vs zombie child processes.
 fn test_waitpid_wnohang_semantics() {
-    #[derive(Clone, Copy, PartialEq, Debug)]
-    enum ProcState {
-        Running,
-        Zombie(i32),
-    }
+    let mut table: BTreeMap<i32, (i32, Option<i32>)> = BTreeMap::new();
+    table.insert(1, (0, None));
+    table.insert(2, (1, None));
 
-    #[allow(dead_code)]
-    struct MockProcess {
-        pid: i32,
-        ppid: i32,
-        state: ProcState,
-    }
-
-    let mut table: BTreeMap<i32, MockProcess> = BTreeMap::new();
-    table.insert(
-        1,
-        MockProcess {
-            pid: 1,
-            ppid: 0,
-            state: ProcState::Running,
-        },
-    );
-    table.insert(
-        2,
-        MockProcess {
-            pid: 2,
-            ppid: 1,
-            state: ProcState::Running,
-        },
-    );
-
-    let wait4_wnohang = |calling_pid: i32,
-                         target_pid: i32,
-                         table: &mut BTreeMap<i32, MockProcess>|
-     -> Result<(i32, i32), i32> {
+    let wait4_wnohang = |calling_pid: i32, target_pid: i32, tbl: &mut BTreeMap<i32, (i32, Option<i32>)>| -> Result<(i32, i32), i32> {
         let mut reaped = None;
-        let mut exit_code = 0;
         let mut has_child = false;
-
-        for (&p, proc) in table.iter() {
-            if (target_pid == -1 || target_pid == p) && proc.ppid == calling_pid {
+        for (&p, &(ppid, code)) in tbl.iter() {
+            if (target_pid == -1 || target_pid == p) && ppid == calling_pid {
                 has_child = true;
-                if let ProcState::Zombie(code) = proc.state {
-                    reaped = Some(p);
-                    exit_code = code;
-                    break;
-                }
+                if let Some(c) = code { reaped = Some((p, c)); break; }
             }
         }
-
-        if let Some(target) = reaped {
-            table.remove(&target);
-            Ok((target, exit_code))
-        } else if has_child {
-            // WNOHANG return 0 if children exist but none are zombies
-            Ok((0, 0))
-        } else {
-            Err(10) // ECHILD
-        }
+        if let Some((target, code)) = reaped { tbl.remove(&target); Ok((target, code)) }
+        else if has_child { Ok((0, 0)) }
+        else { Err(10) }
     };
 
-    // 1. Process 1 calls wait4(WNOHANG) while child PID 2 is Running -> returns 0 immediately
-    let res = wait4_wnohang(1, -1, &mut table);
-    assert_eq!(
-        res,
-        Ok((0, 0)),
-        "WNOHANG did not return 0 for running child"
-    );
-
-    // 2. Child PID 2 transitions to Zombie(127)
-    table.get_mut(&2).unwrap().state = ProcState::Zombie(127);
-
-    // 3. Process 1 calls wait4(WNOHANG) -> reaps PID 2 with code 127
-    let res = wait4_wnohang(1, -1, &mut table);
-    assert_eq!(res, Ok((2, 127)), "WNOHANG failed to reap zombie child");
-
-    // 4. Process 1 calls wait4(WNOHANG) again -> ECHILD (no remaining children)
-    let res = wait4_wnohang(1, -1, &mut table);
-    assert_eq!(
-        res,
-        Err(10),
-        "WNOHANG did not return ECHILD with no children"
-    );
+    assert_eq!(wait4_wnohang(1, -1, &mut table), Ok((0, 0)));
+    table.get_mut(&2).unwrap().1 = Some(127);
+    assert_eq!(wait4_wnohang(1, -1, &mut table), Ok((2, 127)));
+    assert_eq!(wait4_wnohang(1, -1, &mut table), Err(10));
 }
 
 /// Tests POSIX credentials model: saved-UID/saved-GID privilege drop and regain, setuid/seteuid/setresuid state transitions.
 fn test_saved_uid_credentials_model() {
     #[derive(Debug, Clone, PartialEq, Eq)]
-    struct Creds {
-        uid: u32,
-        euid: u32,
-        suid: u32,
-    }
+    struct Creds { uid: u32, euid: u32, suid: u32 }
 
     impl Creds {
-        fn new_root() -> Self {
-            Self {
-                uid: 0,
-                euid: 0,
-                suid: 0,
-            }
-        }
-
+        fn new_root() -> Self { Self { uid: 0, euid: 0, suid: 0 } }
         fn setuid(&mut self, new_uid: u32) -> Result<(), i32> {
             if self.euid == 0 {
-                self.uid = new_uid;
-                self.euid = new_uid;
-                self.suid = new_uid;
-                Ok(())
+                self.uid = new_uid; self.euid = new_uid; self.suid = new_uid; Ok(())
             } else if new_uid == self.uid || new_uid == self.suid {
-                self.euid = new_uid;
-                Ok(())
-            } else {
-                Err(1) // EPERM
-            }
+                self.euid = new_uid; Ok(())
+            } else { Err(1) }
         }
-
         fn seteuid(&mut self, new_euid: u32) -> Result<(), i32> {
-            if self.euid == 0
-                || new_euid == self.uid
-                || new_euid == self.euid
-                || new_euid == self.suid
-            {
-                self.euid = new_euid;
-                Ok(())
-            } else {
-                Err(1) // EPERM
-            }
+            if self.euid == 0 || new_euid == self.uid || new_euid == self.euid || new_euid == self.suid {
+                self.euid = new_euid; Ok(())
+            } else { Err(1) }
         }
-
         fn setresuid(&mut self, ruid: u32, euid: u32, suid: u32) -> Result<(), i32> {
             const UNCHANGED: u32 = u32::MAX;
-            if self.euid == 0 {
-                if ruid != UNCHANGED {
-                    self.uid = ruid;
-                }
-                if euid != UNCHANGED {
-                    self.euid = euid;
-                }
-                if suid != UNCHANGED {
-                    self.suid = suid;
-                }
+            let valid = |id: u32| id == UNCHANGED || id == self.uid || id == self.euid || id == self.suid;
+            if self.euid == 0 || (valid(ruid) && valid(euid) && valid(suid)) {
+                if ruid != UNCHANGED { self.uid = ruid; }
+                if euid != UNCHANGED { self.euid = euid; }
+                if suid != UNCHANGED { self.suid = suid; }
                 Ok(())
-            } else {
-                let valid = |id: u32| {
-                    id == UNCHANGED || id == self.uid || id == self.euid || id == self.suid
-                };
-                if valid(ruid) && valid(euid) && valid(suid) {
-                    if ruid != UNCHANGED {
-                        self.uid = ruid;
-                    }
-                    if euid != UNCHANGED {
-                        self.euid = euid;
-                    }
-                    if suid != UNCHANGED {
-                        self.suid = suid;
-                    }
-                    Ok(())
-                } else {
-                    Err(1) // EPERM
-                }
-            }
+            } else { Err(1) }
         }
     }
 
-    // 1. Process starts as root
     let mut creds = Creds::new_root();
-    assert_eq!(creds.uid, 0);
-    assert_eq!(creds.euid, 0);
-    assert_eq!(creds.suid, 0);
-
-    // 2. Temporarily drop privilege to UID 1000 via seteuid
+    assert_eq!(creds.uid, 0); assert_eq!(creds.euid, 0); assert_eq!(creds.suid, 0);
     assert_eq!(creds.seteuid(1000), Ok(()));
-    assert_eq!(creds.uid, 0, "Real UID must remain 0");
-    assert_eq!(creds.euid, 1000, "Effective UID must be 1000");
-    assert_eq!(creds.suid, 0, "Saved UID must remain 0");
-
-    // 3. Regain root privilege because saved UID is 0
+    assert_eq!(creds.uid, 0); assert_eq!(creds.euid, 1000); assert_eq!(creds.suid, 0);
     assert_eq!(creds.seteuid(0), Ok(()));
-    assert_eq!(creds.euid, 0, "Effective UID must regain root (0)");
-
-    // 4. Temporarily drop privilege to UID 1000 again, attempt unauthorized switch to UID 2000
+    assert_eq!(creds.euid, 0);
     assert_eq!(creds.seteuid(1000), Ok(()));
-    assert_eq!(
-        creds.seteuid(2000),
-        Err(1),
-        "Unauthorized seteuid must fail with EPERM"
-    );
+    assert_eq!(creds.seteuid(2000), Err(1));
+    assert_eq!(creds.setuid(0), Ok(()));
+    assert_eq!(creds.setuid(1000), Ok(()));
+    assert_eq!(creds.uid, 1000); assert_eq!(creds.euid, 1000); assert_eq!(creds.suid, 1000);
+    assert_eq!(creds.seteuid(0), Err(1));
+    assert_eq!(creds.setuid(0), Err(1));
 
-    // 5. Permanently drop root privilege via setuid(1000) while root
-    assert_eq!(creds.setuid(0), Ok(())); // regain root first
-    assert_eq!(creds.setuid(1000), Ok(())); // root drops all IDs
-    assert_eq!(creds.uid, 1000);
-    assert_eq!(creds.euid, 1000);
-    assert_eq!(creds.suid, 1000);
-
-    // 6. Attempt to regain root after permanent drop -> must fail with EPERM
-    assert_eq!(
-        creds.seteuid(0),
-        Err(1),
-        "seteuid(0) must fail after permanent drop"
-    );
-    assert_eq!(
-        creds.setuid(0),
-        Err(1),
-        "setuid(0) must fail after permanent drop"
-    );
-
-    // 7. Test setresuid modern interface
     let mut root_creds = Creds::new_root();
     assert_eq!(root_creds.setresuid(1000, 2000, 3000), Ok(()));
-    assert_eq!(root_creds.uid, 1000);
-    assert_eq!(root_creds.euid, 2000);
-    assert_eq!(root_creds.suid, 3000);
+    assert_eq!(root_creds.uid, 1000); assert_eq!(root_creds.euid, 2000); assert_eq!(root_creds.suid, 3000);
 }
