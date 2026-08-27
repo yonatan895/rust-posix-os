@@ -1,6 +1,6 @@
 //! POSIX Virtual Memory Management System Calls.
 
-use crate::ostd::mm::{PAGE_SIZE, alloc_frame, free_frame, zero_phys_frame};
+use crate::ostd::mm::{PAGE_SIZE, alloc_frame, free_frame, get_pmm_stats, zero_phys_frame};
 use crate::services::process::get_current_process;
 use posix_abi::*;
 
@@ -17,6 +17,11 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
         Some(len) => len,
         None => return -(ENOMEM as isize),
     };
+
+    let (_, free_frames) = get_pmm_stats();
+    if pages > free_frames {
+        return -(ENOMEM as isize);
+    }
 
     let proc_lock = match get_current_process() {
         Some(p) => p,

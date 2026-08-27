@@ -5,7 +5,7 @@
 
 use super::address_space::AddressSpace;
 use super::flags::PageFlags;
-use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
+use super::pmm::{PAGE_SIZE, alloc_frame, free_frame, get_pmm_stats};
 use crate::ostd::sync::SpinLock;
 use alloc::vec::Vec;
 
@@ -371,6 +371,11 @@ impl VmSpace {
         let aligned_start = start_virt & !0xFFF;
         let aligned_end = (start_virt + size + PAGE_SIZE - 1) & !0xFFF;
         let page_count = (aligned_end - aligned_start) / PAGE_SIZE;
+
+        let (_, free_frames) = get_pmm_stats();
+        if page_count > free_frames {
+            return Err("Out of physical frames");
+        }
 
         for (pages_mapped, i) in (0..page_count).enumerate() {
             let virt = match aligned_start.checked_add(i * PAGE_SIZE) {

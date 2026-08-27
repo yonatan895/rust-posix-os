@@ -394,6 +394,10 @@ fn test_mmap_rollback_on_partial_failure() {
             None => return Err(ENOMEM),
         };
 
+        if pages > pmm.free_frames {
+            return Err(ENOMEM);
+        }
+
         let rollback_vaddr = proc.mmap_next_vaddr;
         let is_anonymous_bump = addr == 0;
 
