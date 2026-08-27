@@ -485,4 +485,3 @@ fn test_mmap_rollback_on_partial_failure() {
     );
     assert_eq!(proc.vm.mapped_pages.len(), 4);
 }
-
