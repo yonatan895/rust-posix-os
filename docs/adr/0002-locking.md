@@ -29,7 +29,7 @@ A lock may never be acquired while holding a lock from a later tier. New locks a
 
 - L1. No user-memory access while holding any spinlock. Copy-in before acquiring, copy-out after releasing. Extends ADR-0001 R2.
 - L2. No blocking or sleeping while holding a spinlock. Critical sections are short and bounded.
-- L3. No calling into VFS while holding a `Process` lock. cwd/creds are passed as arguments (ADR-0001 forward list).
+- L3. No calling into VFS while holding a `Process` lock. `cwd`/`creds` (`VfsCreds`) are passed as arguments (enforced by construction and CI; VFS never acquires `Process` locks).
 - L4. Locks are acquired in D1 hierarchy order only.
 - L5. IRQ context may acquire only Scheduler-tier locks and below — never `PROCESS_TABLE`. Interrupt handlers learn the current task from a per-CPU current pointer (introduced with preemption, see ADR-0003), not from the process table.
 - L6. Multi-inode VFS operations (cross-directory `rename`): Parent directory locks are acquired in ascending pointer address order (`addr(A) < addr(B)`). Target directory emptiness is evaluated lock-free via an `AtomicUsize` entry counter (`RamFsDir.entry_count`) to avoid taking a 3rd lock and prevent AB-BA deadlock against concurrent operations on the target directory.

@@ -1,7 +1,7 @@
 //! Pseudo-Filesystem (/proc) Dynamic Inodes.
 
 use crate::services::audit::{get_audit_events, get_snapshots};
-use crate::services::monitor::{SYSTEM_MONITOR, update_system_metrics};
+use crate::services::monitor::{update_system_metrics, SYSTEM_MONITOR};
 use crate::services::vfs::{FileType, Inode};
 use alloc::string::String;
 use alloc::sync::Arc;

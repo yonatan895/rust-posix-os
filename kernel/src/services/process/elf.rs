@@ -1,6 +1,6 @@
 //! ELF64 Executable Loader & System V AMD64 ABI User Stack Setup.
 
-use crate::ostd::mm::{PageFlags, VmSpace, read_pod};
+use crate::ostd::mm::{read_pod, PageFlags, VmSpace};
 use posix_abi::*;
 
 /// Expected 4-byte ELF identification magic (`\x7fELF`).

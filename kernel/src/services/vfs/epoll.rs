@@ -1,7 +1,7 @@
 //! POSIX Epoll Asynchronous Event Multiplexing Inode.
 
 use crate::ostd::sync::SpinLock;
-use crate::services::vfs::{FileType, Inode};
+use crate::services::vfs::{FileHandle, FileType, Inode};
 use alloc::collections::BTreeMap;
 use alloc::sync::Arc;
 use alloc::vec::Vec;
@@ -50,7 +50,12 @@ impl EpollInstance {
     }
 
     /// Polls monitored descriptors and fills `events` with ready I/O events.
-    pub fn wait(&self, events: &mut [EpollEvent], maxevents: usize) -> Result<usize, i32> {
+    pub fn wait(
+        &self,
+        events: &mut [EpollEvent],
+        maxevents: usize,
+        fds: &[Option<Arc<FileHandle>>],
+    ) -> Result<usize, i32> {
         if maxevents == 0 || events.is_empty() {
             return Err(EINVAL);
         }
@@ -58,18 +63,14 @@ impl EpollInstance {
         let map = self.interests.lock();
         let mut ready_count = 0;
 
-        let proc_lock = match crate::services::process::get_current_process() {
-            Some(p) => p,
-            None => return Err(ESRCH),
-        };
-        let proc = proc_lock.lock();
-
         for (&fd, &interest) in map.iter() {
             if ready_count >= maxevents || ready_count >= events.len() {
                 break;
             }
 
-            if let Some(handle) = proc.get_fd(fd) {
+            if fd >= 0
+                && let Some(Some(handle)) = fds.get(fd as usize)
+            {
                 let poll_flags = handle.inode.poll();
                 let mut triggered_events = 0u32;
 

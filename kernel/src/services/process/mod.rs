@@ -143,7 +143,7 @@ impl Process {
 
     /// Loads and executes a new ELF binary in this process's address space.
     pub fn exec(&mut self, path: &str, argv: &[&str], envp: &[&str]) -> Result<(), i32> {
-        let inode = crate::services::vfs::resolve_path_with_cwd(&self.cwd, path)?;
+        let inode = crate::services::vfs::resolve_path(&self.cwd, path)?;
         let stat = inode.stat()?;
         let mut elf_data = alloc::vec![0u8; stat.st_size as usize];
         inode.read(0, &mut elf_data)?;

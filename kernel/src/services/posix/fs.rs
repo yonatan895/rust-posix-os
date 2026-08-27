@@ -5,12 +5,11 @@
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
 use super::{copy_user_path, map_user_error};
-use crate::ostd::mm::{USER_STR_MAX, UserPtr, UserSlice};
+use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
 use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::pipe::PipeBuffer;
 use crate::services::vfs::*;
-use alloc::string::ToString;
 use alloc::sync::Arc;
 use posix_abi::*;
 
@@ -97,9 +96,13 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let (pid, uid, euid, egid, umask) = {
+    let (pid, creds, cwd) = {
         let proc = proc_lock.lock();
-        (proc.pid, proc.uid, proc.euid, proc.egid, proc.umask)
+        (
+            proc.pid,
+            VfsCreds::new(proc.uid, proc.gid, proc.euid, proc.egid, proc.umask),
+            proc.cwd.clone(),
+        )
     };
 
     let mut kpath = [0u8; USER_STR_MAX];
@@ -109,7 +112,7 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
     };
 
     let mut is_created = false;
-    let inode = match resolve_path(path) {
+    let inode = match resolve_path(&cwd, path) {
         Ok(i) => {
             if (flags & O_CREAT != 0) && (flags & O_EXCL != 0) {
                 return -(EEXIST as isize);
@@ -117,12 +120,12 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
             i
         }
         Err(ENOENT) if (flags & O_CREAT != 0) => {
-            let (parent, basename) = match resolve_parent_and_basename(path) {
+            let (parent, basename) = match resolve_parent_and_basename(&cwd, path) {
                 Ok(res) => res,
                 Err(err) => return -(err as isize),
             };
-            let creation_mode = ((mode as u16) & 0o777) & !(umask as u16);
-            match parent.create_file(&basename, creation_mode, euid, egid) {
+            let creation_mode = creds.creation_mode(mode);
+            match parent.create_file(&basename, creation_mode, creds.euid, creds.egid) {
                 Ok(new_inode) => {
                     is_created = true;
                     new_inode
@@ -133,32 +136,14 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
         Err(err) => return -(err as isize),
     };
 
-    // Permission enforcement for existing files (root euid == 0 bypasses)
-    // Note: If inode.stat() fails (e.g. anonymous pipes, pseudodevices without stat support),
-    // standard filesystem permission checks do not apply.
-    if !is_created
-        && euid != 0
-        && let Ok(st) = inode.stat()
-    {
-        let imode = st.st_mode;
-        let req_write = (flags & O_WRONLY != 0) || (flags & O_RDWR != 0);
-        let req_read = flags & O_WRONLY == 0;
-
-        let (can_read, can_write) = if euid == st.st_uid {
-            (imode & S_IRUSR != 0, imode & S_IWUSR != 0)
-        } else if egid == st.st_gid {
-            (imode & S_IRGRP != 0, imode & S_IWGRP != 0)
-        } else {
-            (imode & S_IROTH != 0, imode & S_IWOTH != 0)
-        };
-
-        if (req_read && !can_read) || (req_write && !can_write) {
-            return -(EACCES as isize);
+    // Permission enforcement for existing files via VFS layer
+    if !is_created {
+        if let Err(err) = check_inode_permission(&*inode, &creds, flags) {
+            return -(err as isize);
         }
-    }
-
-    if !is_created && (flags & O_TRUNC != 0) && ((flags & O_WRONLY != 0) || (flags & O_RDWR != 0)) {
-        let _ = inode.truncate();
+        if (flags & O_TRUNC != 0) && ((flags & O_WRONLY != 0) || (flags & O_RDWR != 0)) {
+            let _ = inode.truncate();
+        }
     }
 
     let handle = Arc::new(FileHandle::new(inode, flags));
@@ -168,7 +153,7 @@ pub fn sys_open(path_ptr: *const u8, flags: i32, mode: u32) -> isize {
             if is_created {
                 log_audit_event(
                     pid,
-                    uid,
+                    creds.uid,
                     AUDIT_TYPE_FILE_CREATE,
                     0,
                     path,
@@ -196,13 +181,22 @@ pub fn sys_close(fd: i32) -> isize {
 
 /// Retrieves file status metadata for the file at `path_ptr` into user buffer `statbuf`.
 pub fn sys_stat(path_ptr: *const u8, statbuf: *mut Stat) -> isize {
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let cwd = {
+        let proc = proc_lock.lock();
+        proc.cwd.clone()
+    };
+
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
         Ok(p) => p,
         Err(e) => return -(e as isize),
     };
 
-    let inode = match resolve_path(path) {
+    let inode = match resolve_path(&cwd, path) {
         Ok(i) => i,
         Err(err) => return -(err as isize),
     };
@@ -361,12 +355,17 @@ pub fn sys_dup2(oldfd: i32, newfd: i32) -> isize {
 
 /// Creates a new directory at user path `path_ptr` with permissions `mode`.
 pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
-    let (pid, uid, euid, egid, umask) = match get_current_process() {
-        Some(p) => {
-            let proc = p.lock();
-            (proc.pid, proc.uid, proc.euid, proc.egid, proc.umask)
-        }
-        None => (0, 0, 0, 0, 0o022),
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let (pid, creds, cwd) = {
+        let proc = proc_lock.lock();
+        (
+            proc.pid,
+            VfsCreds::new(proc.uid, proc.gid, proc.euid, proc.egid, proc.umask),
+            proc.cwd.clone(),
+        )
     };
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -374,12 +373,12 @@ pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
         Err(e) => return -(e as isize),
     };
 
-    let (parent, basename) = match resolve_parent_and_basename(path) {
+    let (parent, basename) = match resolve_parent_and_basename(&cwd, path) {
         Ok(res) => res,
         Err(err) => {
             log_audit_event(
                 pid,
-                uid,
+                creds.uid,
                 AUDIT_TYPE_DIR_CREATE,
                 -err,
                 path,
@@ -389,12 +388,12 @@ pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
         }
     };
 
-    let effective_mode = ((mode as u16) & 0o777) & !(umask as u16);
-    match parent.create_dir(&basename, effective_mode, euid, egid) {
+    let effective_mode = creds.creation_mode(mode);
+    match parent.create_dir(&basename, effective_mode, creds.euid, creds.egid) {
         Ok(_) => {
             log_audit_event(
                 pid,
-                uid,
+                creds.uid,
                 AUDIT_TYPE_DIR_CREATE,
                 0,
                 path,
@@ -405,7 +404,7 @@ pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
         Err(err) => {
             log_audit_event(
                 pid,
-                uid,
+                creds.uid,
                 AUDIT_TYPE_DIR_CREATE,
                 -err,
                 path,
@@ -418,12 +417,13 @@ pub fn sys_mkdir(path_ptr: *const u8, mode: u32) -> isize {
 
 /// Removes a file or empty directory at user path `path_ptr`.
 pub fn sys_unlink(path_ptr: *const u8) -> isize {
-    let (pid, uid) = match get_current_process() {
-        Some(p) => {
-            let proc = p.lock();
-            (proc.pid, proc.uid)
-        }
-        None => (0, 0),
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let (pid, uid, cwd) = {
+        let proc = proc_lock.lock();
+        (proc.pid, proc.uid, proc.cwd.clone())
     };
     let mut kpath = [0u8; USER_STR_MAX];
     let path = match copy_user_path(path_ptr, &mut kpath) {
@@ -431,7 +431,7 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
         Err(e) => return -(e as isize),
     };
 
-    let (parent, basename) = match resolve_parent_and_basename(path) {
+    let (parent, basename) = match resolve_parent_and_basename(&cwd, path) {
         Ok(res) => res,
         Err(err) => {
             log_audit_event(
@@ -474,12 +474,13 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
 
 /// Renames or moves a filesystem object from `oldpath_ptr` to `newpath_ptr`.
 pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
-    let (pid, uid, cwd) = match get_current_process() {
-        Some(p) => {
-            let proc = p.lock();
-            (proc.pid, proc.uid, proc.cwd.clone())
-        }
-        None => (0, 0, "/".to_string()),
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let (pid, uid, cwd) = {
+        let proc = proc_lock.lock();
+        (proc.pid, proc.uid, proc.cwd.clone())
     };
     let mut kold = [0u8; USER_STR_MAX];
     let oldpath = match copy_user_path(oldpath_ptr, &mut kold) {
@@ -508,7 +509,7 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
     }
 
     // 1. Resolve source parent and basename first (guarantees ENOENT if source does not exist)
-    let (old_parent, old_basename) = match resolve_parent_and_basename_with_cwd(&cwd, oldpath) {
+    let (old_parent, old_basename) = match resolve_parent_and_basename(&cwd, oldpath) {
         Ok(res) => res,
         Err(err) => {
             log_audit_event(
@@ -560,7 +561,7 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
     }
 
     // 4. Resolve destination parent and basename
-    let (new_parent, new_basename) = match resolve_parent_and_basename_with_cwd(&cwd, newpath) {
+    let (new_parent, new_basename) = match resolve_parent_and_basename(&cwd, newpath) {
         Ok(res) => res,
         Err(err) => {
             log_audit_event(

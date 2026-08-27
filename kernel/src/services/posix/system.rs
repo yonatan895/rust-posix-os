@@ -5,7 +5,7 @@
 //! and `ostd::mm::{UserPtr, UserSlice}`.
 
 use super::{copy_user_path, map_user_error};
-use crate::ostd::mm::{USER_STR_MAX, UserPtr, UserSlice};
+use crate::ostd::mm::{UserPtr, UserSlice, USER_STR_MAX};
 use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::*;
@@ -65,7 +65,14 @@ pub fn sys_getcwd(buf: *mut u8, size: usize) -> isize {
     if buf.is_null() || size == 0 {
         return -(EINVAL as isize);
     }
-    let cwd = get_current_process_cwd();
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let cwd = {
+        let proc = proc_lock.lock();
+        proc.cwd.clone()
+    };
     let cwd_bytes = cwd.as_bytes();
     if cwd_bytes.len() + 1 > size {
         return -(ERANGE as isize);
@@ -100,12 +107,12 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
         None => return -(ESRCH as isize),
     };
 
-    let target_norm = {
+    let (target_norm, cwd) = {
         let proc = proc_lock.lock();
-        normalize_path(&proc.cwd, path)
+        (normalize_path(&proc.cwd, path), proc.cwd.clone())
     };
 
-    let inode = match resolve_path(&target_norm) {
+    let inode = match resolve_path(&cwd, path) {
         Ok(i) => i,
         Err(err) => return -(err as isize),
     };
@@ -114,11 +121,11 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
         return -(ENOTDIR as isize);
     }
 
-    let mut proc = proc_lock.lock();
-    proc.cwd = target_norm.clone();
-    let pid = proc.pid;
-    let uid = proc.uid;
-    drop(proc);
+    let (pid, uid) = {
+        let mut proc = proc_lock.lock();
+        proc.cwd = target_norm.clone();
+        (proc.pid, proc.uid)
+    };
 
     log_audit_event(
         pid,
