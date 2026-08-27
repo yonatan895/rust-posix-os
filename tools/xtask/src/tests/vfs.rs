@@ -324,41 +324,35 @@ fn test_vfs_atomic_rename() {
     // 1. Same-directory rename
     assert_eq!(fs.rename(dir_a, "file1.txt", dir_a, "file2.txt"), Ok(()));
     assert_eq!(fs.lock_order, vec![dir_a]);
-    assert!(!fs.nodes.get(&dir_a).unwrap().entries.contains_key("file1.txt"));
-    assert_eq!(
-        fs.nodes.get(&dir_a).unwrap().entries.get("file2.txt"),
-        Some(&file1)
-    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert!(!dir_a_entries.contains_key("file1.txt"));
+    assert_eq!(dir_a_entries.get("file2.txt"), Some(&file1));
 
     // 2. Same-directory no-op rename
     assert_eq!(fs.rename(dir_a, "file2.txt", dir_a, "file2.txt"), Ok(()));
-    assert_eq!(
-        fs.nodes.get(&dir_a).unwrap().entries.get("file2.txt"),
-        Some(&file1)
-    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(dir_a_entries.get("file2.txt"), Some(&file1));
 
     // 3. Cross-directory rename with lower address locked first (dir_a < dir_b)
     assert_eq!(fs.rename(dir_a, "file2.txt", dir_b, "file2.txt"), Ok(()));
     assert_eq!(fs.lock_order, vec![dir_a, dir_b]);
-    assert!(!fs.nodes.get(&dir_a).unwrap().entries.contains_key("file2.txt"));
-    assert_eq!(
-        fs.nodes.get(&dir_b).unwrap().entries.get("file2.txt"),
-        Some(&file1)
-    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    let dir_b_entries = &fs.nodes.get(&dir_b).unwrap().entries;
+    assert!(!dir_a_entries.contains_key("file2.txt"));
+    assert_eq!(dir_b_entries.get("file2.txt"), Some(&file1));
 
     // 4. Reverse cross-directory rename with lower address locked first (dir_b > dir_a)
     assert_eq!(fs.rename(dir_b, "file2.txt", dir_a, "file1.txt"), Ok(()));
     assert_eq!(fs.lock_order, vec![dir_a, dir_b]);
-    assert_eq!(
-        fs.nodes.get(&dir_a).unwrap().entries.get("file1.txt"),
-        Some(&file1)
-    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(dir_a_entries.get("file1.txt"), Some(&file1));
 
     // 5. Error atomicity: file to directory -> EISDIR (source remains intact)
     let nested_dir = fs.create_dir(dir_a, "nested");
     assert_eq!(fs.rename(dir_a, "file1.txt", dir_a, "nested"), Err(EISDIR));
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
     assert_eq!(
-        fs.nodes.get(&dir_a).unwrap().entries.get("file1.txt"),
+        dir_a_entries.get("file1.txt"),
         Some(&file1),
         "Source file must remain intact on EISDIR"
     );
@@ -366,9 +360,13 @@ fn test_vfs_atomic_rename() {
     // 6. Error atomicity: directory to non-empty directory -> ENOTEMPTY
     let _subfile = fs.create_file(nested_dir, "sub.txt");
     let other_dir = fs.create_dir(dir_a, "other_dir");
-    assert_eq!(fs.rename(dir_a, "other_dir", dir_a, "nested"), Err(ENOTEMPTY));
     assert_eq!(
-        fs.nodes.get(&dir_a).unwrap().entries.get("other_dir"),
+        fs.rename(dir_a, "other_dir", dir_a, "nested"),
+        Err(ENOTEMPTY)
+    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(
+        dir_a_entries.get("other_dir"),
         Some(&other_dir),
         "Source directory must remain intact on ENOTEMPTY"
     );
