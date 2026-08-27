@@ -89,8 +89,6 @@ pub fn dispatch_syscall(r: &mut SyscallRegisters) -> usize {
         SYS_GETEGID => sys_getegid(),
         SYS_SETUID => sys_setuid(a1 as u32),
         SYS_SETGID => sys_setgid(a1 as u32),
-        SYS_SETEUID => sys_seteuid(a1 as u32),
-        SYS_SETEGID => sys_setegid(a1 as u32),
         SYS_SETRESUID => sys_setresuid(a1 as u32, a2 as u32, a3 as u32),
         SYS_GETRESUID => sys_getresuid(a1 as *mut u32, a2 as *mut u32, a3 as *mut u32),
         SYS_SETRESGID => sys_setresgid(a1 as u32, a2 as u32, a3 as u32),

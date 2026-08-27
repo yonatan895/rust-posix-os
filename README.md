@@ -121,11 +121,9 @@ All syscall numbers follow the Linux x86-64 ABI for compatibility with musl/glib
 | 107 | `geteuid` | ✅ |
 | 108 | `getegid` | ✅ |
 | 110 | `getppid` | ✅ |
-| 115 | `seteuid` | ✅ |
-| 116 | `setegid` | ✅ |
-| 117 | `setresuid` | ✅ |
+| 117 | `setresuid` | ✅ (used for `seteuid`) |
 | 118 | `getresuid` | ✅ |
-| 119 | `setresgid` | ✅ |
+| 119 | `setresgid` | ✅ (used for `setegid`) |
 | 120 | `getresgid` | ✅ |
 | 213 | `epoll_create` | ✅ |
 | 217 | `getdents64` | ✅ |

@@ -771,36 +771,6 @@ pub fn sys_setgid(gid: u32) -> isize {
     }
 }
 
-/// Sets the effective user ID of the calling process.
-pub fn sys_seteuid(euid: u32) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 || euid == proc.uid || euid == proc.euid || euid == proc.suid {
-        proc.euid = euid;
-        0
-    } else {
-        -(EPERM as isize)
-    }
-}
-
-/// Sets the effective group ID of the calling process.
-pub fn sys_setegid(egid: u32) -> isize {
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 || egid == proc.gid || egid == proc.egid || egid == proc.sgid {
-        proc.egid = egid;
-        0
-    } else {
-        -(EPERM as isize)
-    }
-}
-
 /// Sets the real, effective, and saved user IDs of the calling process.
 pub fn sys_setresuid(ruid: u32, euid: u32, suid: u32) -> isize {
     const UNCHANGED: u32 = u32::MAX;
@@ -888,6 +858,8 @@ pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> isize {
 }
 
 /// Retrieves the real, effective, and saved user IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
 pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32) -> isize {
     let (uid, euid, suid) = match get_current_process() {
         Some(p) => {
@@ -928,6 +900,8 @@ pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32)
 }
 
 /// Retrieves the real, effective, and saved group IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
 pub fn sys_getresgid(rgid_ptr: *mut u32, egid_ptr: *mut u32, sgid_ptr: *mut u32) -> isize {
     let (gid, egid, sgid) = match get_current_process() {
         Some(p) => {

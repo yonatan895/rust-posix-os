@@ -97,10 +97,10 @@ pub const SYS_GETEUID: usize = 107;
 pub const SYS_GETEGID: usize = 108;
 /// `getppid()`: Get parent process identification number (syscall 110).
 pub const SYS_GETPPID: usize = 110;
-/// `seteuid(euid)`: Set effective user identity of calling process (syscall 115).
-pub const SYS_SETEUID: usize = 115;
-/// `setegid(egid)`: Set effective group identity of calling process (syscall 116).
-pub const SYS_SETEGID: usize = 116;
+/// `getgroups(size, list)`: Get list of supplementary group IDs (syscall 115).
+pub const SYS_GETGROUPS: usize = 115;
+/// `setgroups(size, list)`: Set list of supplementary group IDs (syscall 116).
+pub const SYS_SETGROUPS: usize = 116;
 /// `setresuid(ruid, euid, suid)`: Set real, effective, and saved user IDs (syscall 117).
 pub const SYS_SETRESUID: usize = 117;
 /// `getresuid(ruid, euid, suid)`: Get real, effective, and saved user IDs (syscall 118).

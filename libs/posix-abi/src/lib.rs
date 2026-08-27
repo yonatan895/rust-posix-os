@@ -91,8 +91,8 @@ mod tests {
         assert_eq!(SYS_SETGID, 106);
         assert_eq!(SYS_GETEUID, 107);
         assert_eq!(SYS_GETEGID, 108);
-        assert_eq!(SYS_SETEUID, 115);
-        assert_eq!(SYS_SETEGID, 116);
+        assert_eq!(SYS_GETGROUPS, 115);
+        assert_eq!(SYS_SETGROUPS, 116);
         assert_eq!(SYS_SETRESUID, 117);
         assert_eq!(SYS_GETRESUID, 118);
         assert_eq!(SYS_SETRESGID, 119);
