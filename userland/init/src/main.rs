@@ -59,6 +59,12 @@ pub unsafe extern "C" fn _start() -> ! {
         run_efault_hammer_tests();
     }
 
+    // Run VFS Atomic Rename & Directory Cycle Tests
+    // SAFETY: Executing in-guest atomic rename and directory cycle tests in PID 1 user mode.
+    unsafe {
+        run_vfs_rename_tests();
+    }
+
     // Run Syscall Microbenchmark (100,000 getpid fast syscalls in-guest)
     // SAFETY: Executing in-guest hardware fast-syscall benchmark to measure real hardware cycles.
     unsafe {
@@ -392,6 +398,175 @@ unsafe fn run_efault_hammer_tests() {
     // SAFETY: Announcing success to stdout.
     unsafe {
         puts(b"[init] User Pointer Validation (EFAULT) Hammer Tests PASSED!\n\0".as_ptr());
+    }
+}
+
+/// Runs in-guest VFS atomic rename, address-ordered cross-directory locking, and error atomicity tests.
+///
+/// # Safety
+///
+/// Must be executed in user mode with standard filesystem syscalls operational.
+unsafe fn run_vfs_rename_tests() {
+    let src = b"/tmp/rename_src.txt\0".as_ptr();
+    let dst = b"/tmp/rename_dst.txt\0".as_ptr();
+    let cycle_parent = b"/tmp/rdir\0".as_ptr();
+    let cycle_child = b"/tmp/rdir/sub\0".as_ptr();
+    let cycle_target = b"/tmp/rdir/sub/cycle\0".as_ptr();
+
+    // 1. Same-directory rename
+    // SAFETY: Creating test file via open.
+    let fd = unsafe { open(src, O_CREAT | O_WRONLY | O_TRUNC, 0o644) };
+    if fd >= 0 {
+        // SAFETY: Closing open file descriptor.
+        unsafe { close(fd) };
+    }
+
+    // SAFETY: Invoking rename syscall to move src to dst.
+    let r1 = unsafe { rename(src, dst) };
+    let mut st = Stat::default();
+    // SAFETY: Checking that src is gone and dst exists.
+    let (s_src, s_dst) = unsafe { (stat(src, &mut st), stat(dst, &mut st)) };
+
+    if r1 != 0 || s_src == 0 || s_dst != 0 {
+        // SAFETY: Reporting rename failure.
+        unsafe {
+            printf(
+                b"[FAIL] Same-dir rename failed: ret=%d, s_src=%d, s_dst=%d\n\0".as_ptr(),
+                r1,
+                s_src,
+                s_dst,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+    // SAFETY: Unlinking test destination file.
+    unsafe { unlink(dst) };
+
+    // 2. Cross-directory rename (exercising ADR-0002 L4 address-ordered locking)
+    let dir_a = b"/tmp/rdir_a\0".as_ptr();
+    let dir_b = b"/tmp/rdir_b\0".as_ptr();
+    let file_a = b"/tmp/rdir_a/file.txt\0".as_ptr();
+    let file_b = b"/tmp/rdir_b/file.txt\0".as_ptr();
+
+    // SAFETY: Creating test directories.
+    unsafe {
+        mkdir(dir_a, 0o755);
+        mkdir(dir_b, 0o755);
+        let fd = open(file_a, O_CREAT | O_WRONLY | O_TRUNC, 0o644);
+        if fd >= 0 {
+            close(fd);
+        }
+    }
+
+    // SAFETY: Moving file from dir_a to dir_b across directories.
+    let r_cross = unsafe { rename(file_a, file_b) };
+    let (s_fa, s_fb) = unsafe { (stat(file_a, &mut st), stat(file_b, &mut st)) };
+    if r_cross != 0 || s_fa == 0 || s_fb != 0 {
+        // SAFETY: Reporting cross-directory rename failure.
+        unsafe {
+            printf(
+                b"[FAIL] Cross-dir rename failed: ret=%d, s_fa=%d, s_fb=%d\n\0".as_ptr(),
+                r_cross,
+                s_fa,
+                s_fb,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 3. Error atomicity: File onto Directory -> EISDIR (file_b must remain intact)
+    // SAFETY: Attempting to rename file onto existing directory dir_a.
+    let r_eisdir = unsafe { rename(file_b, dir_a) };
+    if r_eisdir != -(EISDIR as i32) {
+        // SAFETY: Reporting EISDIR failure.
+        unsafe {
+            printf(
+                b"[FAIL] Rename file onto directory expected %d, got %d\n\0".as_ptr(),
+                -(EISDIR as i32),
+                r_eisdir,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 4. Error atomicity: Directory onto File -> ENOTDIR (dir_a must remain intact)
+    // SAFETY: Attempting to rename directory onto existing file file_b.
+    let r_enotdir = unsafe { rename(dir_a, file_b) };
+    if r_enotdir != -(ENOTDIR as i32) {
+        // SAFETY: Reporting ENOTDIR failure.
+        unsafe {
+            printf(
+                b"[FAIL] Rename directory onto file expected %d, got %d\n\0".as_ptr(),
+                -(ENOTDIR as i32),
+                r_enotdir,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 5. Error atomicity: Directory onto non-empty directory -> ENOTEMPTY
+    // SAFETY: Attempting to rename dir_a onto dir_b which contains file_b.
+    let r_enotempty = unsafe { rename(dir_a, dir_b) };
+    if r_enotempty != -(ENOTEMPTY as i32) {
+        // SAFETY: Reporting ENOTEMPTY failure.
+        unsafe {
+            printf(
+                b"[FAIL] Rename onto non-empty directory expected %d, got %d\n\0".as_ptr(),
+                -(ENOTEMPTY as i32),
+                r_enotempty,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 6. Directory cycle prevention: rename parent into its own child subdirectory
+    // SAFETY: Creating parent and child test directories.
+    unsafe {
+        mkdir(cycle_parent, 0o755);
+        mkdir(cycle_child, 0o755);
+    }
+    // SAFETY: Attempting directory cycle rename (parent into child).
+    let r_cycle = unsafe { rename(cycle_parent, cycle_target) };
+    if r_cycle != -(EINVAL as i32) {
+        // SAFETY: Reporting directory cycle failure.
+        unsafe {
+            printf(
+                b"[FAIL] Directory cycle prevention test failed: expected %d, got %d\n\0".as_ptr(),
+                -(EINVAL as i32),
+                r_cycle,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 7. Rename child directory onto own parent alias -> ENOTEMPTY (must not deadlock / hang!)
+    // SAFETY: Attempting to rename cycle_child onto cycle_parent.
+    let r_alias = unsafe { rename(cycle_child, cycle_parent) };
+    if r_alias != -(ENOTEMPTY as i32) {
+        // SAFETY: Reporting alias rename failure.
+        unsafe {
+            printf(
+                b"[FAIL] Rename child onto parent alias expected %d, got %d\n\0".as_ptr(),
+                -(ENOTEMPTY as i32),
+                r_alias,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Clean up test directories and files
+    // SAFETY: Cleaning up all test directories and files.
+    unsafe {
+        unlink(file_b);
+        rmdir(dir_b);
+        rmdir(dir_a);
+        rmdir(cycle_child);
+        rmdir(cycle_parent);
+    }
+
+    // SAFETY: Announcing success to stdout.
+    unsafe {
+        puts(b"[init] VFS Atomic Rename & Lock Ordering Tests PASSED!\n\0".as_ptr());
     }
 }
 

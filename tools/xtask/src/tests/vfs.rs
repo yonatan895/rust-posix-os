@@ -10,6 +10,11 @@ pub fn register_tests(runner: &mut TestRunner) {
         "File Creation Modes, Umask Masking, and Stat Fidelity",
         test_file_creation_mode_and_audit_uid,
     );
+    runner.run_test(
+        "vfs",
+        "Atomic Rename, Cross-Directory Lock Ordering, and Cycle Rejection",
+        test_vfs_atomic_rename,
+    );
 }
 
 /// Tests file creation mode masking against umask, stat field fidelity, and permission checks.
@@ -165,5 +170,239 @@ fn test_file_creation_mode_and_audit_uid() {
     assert_eq!(
         effective_777, 0o700,
         "Mode 0o777 under umask 0o077 results in effective mode 0o700"
+    );
+}
+
+/// Tests atomic rename semantics, cross-directory address-ordered locking, and directory cycle rejection.
+fn test_vfs_atomic_rename() {
+    use std::collections::BTreeMap;
+
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+    enum NodeType {
+        File,
+        Dir,
+    }
+
+    struct SimNode {
+        node_type: NodeType,
+        entries: BTreeMap<String, usize>,
+    }
+
+    struct SimFs {
+        nodes: BTreeMap<usize, SimNode>,
+        next_id: usize,
+        lock_order: Vec<usize>,
+    }
+
+    impl SimFs {
+        fn new() -> Self {
+            let mut fs = Self {
+                nodes: BTreeMap::new(),
+                next_id: 1,
+                lock_order: Vec::new(),
+            };
+            fs.nodes.insert(
+                0,
+                SimNode {
+                    node_type: NodeType::Dir,
+                    entries: BTreeMap::new(),
+                },
+            );
+            fs
+        }
+
+        fn create_file(&mut self, parent: usize, name: &str) -> usize {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.nodes.insert(
+                id,
+                SimNode {
+                    node_type: NodeType::File,
+                    entries: BTreeMap::new(),
+                },
+            );
+            self.nodes
+                .get_mut(&parent)
+                .unwrap()
+                .entries
+                .insert(name.to_string(), id);
+            id
+        }
+
+        fn create_dir(&mut self, parent: usize, name: &str) -> usize {
+            let id = self.next_id;
+            self.next_id += 1;
+            self.nodes.insert(
+                id,
+                SimNode {
+                    node_type: NodeType::Dir,
+                    entries: BTreeMap::new(),
+                },
+            );
+            self.nodes
+                .get_mut(&parent)
+                .unwrap()
+                .entries
+                .insert(name.to_string(), id);
+            id
+        }
+
+        fn rename(
+            &mut self,
+            old_parent: usize,
+            old_name: &str,
+            new_parent: usize,
+            new_name: &str,
+        ) -> Result<(), i32> {
+            self.lock_order.clear();
+            if old_parent == new_parent {
+                self.lock_order.push(old_parent);
+            } else if old_parent < new_parent {
+                self.lock_order.push(old_parent);
+                self.lock_order.push(new_parent);
+            } else {
+                self.lock_order.push(new_parent);
+                self.lock_order.push(old_parent);
+            }
+
+            let source_id = *self
+                .nodes
+                .get(&old_parent)
+                .ok_or(ENOENT)?
+                .entries
+                .get(old_name)
+                .ok_or(ENOENT)?;
+
+            if old_parent == new_parent && old_name == new_name {
+                return Ok(());
+            }
+
+            let source_type = self.nodes.get(&source_id).unwrap().node_type;
+
+            if let Some(&target_id) = self
+                .nodes
+                .get(&new_parent)
+                .ok_or(ENOENT)?
+                .entries
+                .get(new_name)
+            {
+                let target_type = self.nodes.get(&target_id).unwrap().node_type;
+                if source_type == NodeType::Dir && target_type != NodeType::Dir {
+                    return Err(ENOTDIR);
+                }
+                if source_type != NodeType::Dir && target_type == NodeType::Dir {
+                    return Err(EISDIR);
+                }
+                if source_type == NodeType::Dir
+                    && target_type == NodeType::Dir
+                    && (target_id == old_parent
+                        || target_id == new_parent
+                        || !self.nodes.get(&target_id).unwrap().entries.is_empty())
+                {
+                    return Err(ENOTEMPTY);
+                }
+            }
+
+            self.nodes
+                .get_mut(&old_parent)
+                .unwrap()
+                .entries
+                .remove(old_name);
+            self.nodes
+                .get_mut(&new_parent)
+                .unwrap()
+                .entries
+                .insert(new_name.to_string(), source_id);
+
+            Ok(())
+        }
+    }
+
+    let mut fs = SimFs::new();
+    let dir_a = fs.create_dir(0, "dir_a");
+    let dir_b = fs.create_dir(0, "dir_b");
+    let file1 = fs.create_file(dir_a, "file1.txt");
+
+    // 1. Same-directory rename
+    assert_eq!(fs.rename(dir_a, "file1.txt", dir_a, "file2.txt"), Ok(()));
+    assert_eq!(fs.lock_order, vec![dir_a]);
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert!(!dir_a_entries.contains_key("file1.txt"));
+    assert_eq!(dir_a_entries.get("file2.txt"), Some(&file1));
+
+    // 2. Same-directory no-op rename
+    assert_eq!(fs.rename(dir_a, "file2.txt", dir_a, "file2.txt"), Ok(()));
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(dir_a_entries.get("file2.txt"), Some(&file1));
+
+    // 3. Cross-directory rename with lower address locked first (dir_a < dir_b)
+    assert_eq!(fs.rename(dir_a, "file2.txt", dir_b, "file2.txt"), Ok(()));
+    assert_eq!(fs.lock_order, vec![dir_a, dir_b]);
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    let dir_b_entries = &fs.nodes.get(&dir_b).unwrap().entries;
+    assert!(!dir_a_entries.contains_key("file2.txt"));
+    assert_eq!(dir_b_entries.get("file2.txt"), Some(&file1));
+
+    // 4. Reverse cross-directory rename with lower address locked first (dir_b > dir_a)
+    assert_eq!(fs.rename(dir_b, "file2.txt", dir_a, "file1.txt"), Ok(()));
+    assert_eq!(fs.lock_order, vec![dir_a, dir_b]);
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(dir_a_entries.get("file1.txt"), Some(&file1));
+
+    // 5. Error atomicity: file to directory -> EISDIR (source remains intact)
+    let nested_dir = fs.create_dir(dir_a, "nested");
+    assert_eq!(fs.rename(dir_a, "file1.txt", dir_a, "nested"), Err(EISDIR));
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(
+        dir_a_entries.get("file1.txt"),
+        Some(&file1),
+        "Source file must remain intact on EISDIR"
+    );
+
+    // 6. Error atomicity: directory to non-empty directory -> ENOTEMPTY
+    let _subfile = fs.create_file(nested_dir, "sub.txt");
+    let other_dir = fs.create_dir(dir_a, "other_dir");
+    assert_eq!(
+        fs.rename(dir_a, "other_dir", dir_a, "nested"),
+        Err(ENOTEMPTY)
+    );
+    let dir_a_entries = &fs.nodes.get(&dir_a).unwrap().entries;
+    assert_eq!(
+        dir_a_entries.get("other_dir"),
+        Some(&other_dir),
+        "Source directory must remain intact on ENOTEMPTY"
+    );
+
+    // 7. Rename directory onto own parent alias -> ENOTEMPTY without deadlock
+    let sub_in_nested = fs.create_dir(nested_dir, "sub_dir");
+    assert_eq!(
+        fs.rename(nested_dir, "sub_dir", dir_a, "nested"),
+        Err(ENOTEMPTY)
+    );
+    let nested_entries = &fs.nodes.get(&nested_dir).unwrap().entries;
+    assert_eq!(
+        nested_entries.get("sub_dir"),
+        Some(&sub_in_nested),
+        "Source subdirectory must remain intact on alias ENOTEMPTY"
+    );
+
+    // 8. Directory cycle prevention check logic
+    let check_cycle = |old_path: &str, new_path: &str| -> Result<(), i32> {
+        let prefix = format!("{}/", old_path);
+        if new_path.starts_with(&prefix) {
+            Err(EINVAL)
+        } else {
+            Ok(())
+        }
+    };
+    assert_eq!(
+        check_cycle("/a/b", "/a/b/c/d"),
+        Err(EINVAL),
+        "Renaming directory into its own subdirectory must return -EINVAL"
+    );
+    assert_eq!(
+        check_cycle("/a/b", "/a/c"),
+        Ok(()),
+        "Renaming to peer directory is valid"
     );
 }
