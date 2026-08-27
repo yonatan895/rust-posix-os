@@ -41,6 +41,7 @@ mod tests {
         assert_eq!(EINTR, 4);
         assert_eq!(EIO, 5);
         assert_eq!(ENOSYS, 38);
+        assert_eq!(ENOTEMPTY, 39);
     }
 
     #[test]

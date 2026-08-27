@@ -46,15 +46,14 @@ impl RamFsDir {
 
     /// Retrieves an existing subdirectory or creates and inserts a new one if absent.
     pub fn get_or_create_subdir(&self, name: &str) -> Arc<RamFsDir> {
+        let mut entries = self.entries.lock();
         let mut subdirs = self.subdirs.lock();
         if let Some(dir) = subdirs.get(name) {
             return dir.clone();
         }
         let new_dir = RamFsDir::new();
         subdirs.insert(name.to_string(), new_dir.clone());
-        self.entries
-            .lock()
-            .insert(name.to_string(), new_dir.clone());
+        entries.insert(name.to_string(), new_dir.clone());
         new_dir
     }
 }
@@ -147,6 +146,130 @@ impl Inode for RamFsDir {
         }
         entries.insert(name.to_string(), inode);
         Ok(())
+    }
+
+    fn as_ramfs_dir(&self) -> Option<&RamFsDir> {
+        Some(self)
+    }
+
+    fn rename(
+        &self,
+        old_name: &str,
+        new_parent: &Arc<dyn Inode>,
+        new_name: &str,
+    ) -> Result<(), i32> {
+        let new_ramfs_dir = new_parent.as_ramfs_dir().ok_or(EXDEV)?;
+
+        if core::ptr::eq(self, new_ramfs_dir) {
+            // Same directory rename: hold a single lock on entries and subdirs throughout
+            let mut entries = self.entries.lock();
+            let mut subdirs = self.subdirs.lock();
+
+            let source = entries.get(old_name).cloned().ok_or(ENOENT)?;
+            if old_name == new_name {
+                return Ok(());
+            }
+
+            if let Some(target) = entries.get(new_name) {
+                if source.file_type() == FileType::Directory
+                    && target.file_type() != FileType::Directory
+                {
+                    return Err(ENOTDIR);
+                }
+                if source.file_type() != FileType::Directory
+                    && target.file_type() == FileType::Directory
+                {
+                    return Err(EISDIR);
+                }
+                if source.file_type() == FileType::Directory
+                    && target.file_type() == FileType::Directory
+                {
+                    let is_non_empty = if let Some(target_dir) = target.as_ramfs_dir() {
+                        !target_dir.entries.lock().is_empty()
+                    } else {
+                        !target.readdir()?.is_empty()
+                    };
+                    if is_non_empty {
+                        return Err(ENOTEMPTY);
+                    }
+                }
+            }
+
+            let inode = entries.remove(old_name).unwrap();
+            let subdir = subdirs.remove(old_name);
+
+            entries.remove(new_name);
+            subdirs.remove(new_name);
+
+            entries.insert(new_name.to_string(), inode);
+            if let Some(sd) = subdir {
+                subdirs.insert(new_name.to_string(), sd);
+            }
+            Ok(())
+        } else {
+            // Cross directory rename: acquire locks in pointer address order to eliminate AB-BA deadlock (ADR-0002 L4)
+            let self_addr = self as *const _ as usize;
+            let new_addr = new_ramfs_dir as *const _ as usize;
+
+            let (mut old_entries, mut new_entries) = if self_addr < new_addr {
+                let g1 = self.entries.lock();
+                let g2 = new_ramfs_dir.entries.lock();
+                (g1, g2)
+            } else {
+                let g2 = new_ramfs_dir.entries.lock();
+                let g1 = self.entries.lock();
+                (g1, g2)
+            };
+
+            let (mut old_subdirs, mut new_subdirs) = if self_addr < new_addr {
+                let g1 = self.subdirs.lock();
+                let g2 = new_ramfs_dir.subdirs.lock();
+                (g1, g2)
+            } else {
+                let g2 = new_ramfs_dir.subdirs.lock();
+                let g1 = self.subdirs.lock();
+                (g1, g2)
+            };
+
+            let source = old_entries.get(old_name).cloned().ok_or(ENOENT)?;
+
+            if let Some(target) = new_entries.get(new_name) {
+                if source.file_type() == FileType::Directory
+                    && target.file_type() != FileType::Directory
+                {
+                    return Err(ENOTDIR);
+                }
+                if source.file_type() != FileType::Directory
+                    && target.file_type() == FileType::Directory
+                {
+                    return Err(EISDIR);
+                }
+                if source.file_type() == FileType::Directory
+                    && target.file_type() == FileType::Directory
+                {
+                    let is_non_empty = if let Some(target_dir) = target.as_ramfs_dir() {
+                        !target_dir.entries.lock().is_empty()
+                    } else {
+                        !target.readdir()?.is_empty()
+                    };
+                    if is_non_empty {
+                        return Err(ENOTEMPTY);
+                    }
+                }
+            }
+
+            let inode = old_entries.remove(old_name).unwrap();
+            let subdir = old_subdirs.remove(old_name);
+
+            new_entries.remove(new_name);
+            new_subdirs.remove(new_name);
+
+            new_entries.insert(new_name.to_string(), inode);
+            if let Some(sd) = subdir {
+                new_subdirs.insert(new_name.to_string(), sd);
+            }
+            Ok(())
+        }
     }
 }
 

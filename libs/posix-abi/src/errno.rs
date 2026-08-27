@@ -68,3 +68,5 @@ pub const ERANGE: i32 = 34;
 pub const ENAMETOOLONG: i32 = 36;
 /// Invalid system call / function not implemented (ENOSYS = 38).
 pub const ENOSYS: i32 = 38;
+/// Directory not empty (ENOTEMPTY = 39).
+pub const ENOTEMPTY: i32 = 39;

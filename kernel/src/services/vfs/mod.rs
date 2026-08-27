@@ -135,6 +135,16 @@ pub trait Inode: Send + Sync {
         Err(ENOTDIR)
     }
 
+    /// Renames a child entry `old_name` within this directory into `new_name` in `new_parent`.
+    fn rename(
+        &self,
+        _old_name: &str,
+        _new_parent: &Arc<dyn Inode>,
+        _new_name: &str,
+    ) -> Result<(), i32> {
+        Err(ENOTDIR)
+    }
+
     /// Polls the inode for readiness flags without blocking.
     fn poll(&self) -> InodePollFlags {
         InodePollFlags {
@@ -147,6 +157,11 @@ pub trait Inode: Send + Sync {
 
     /// Downcasts the inode to an epoll monitor instance if applicable.
     fn as_epoll(&self) -> Option<&crate::services::vfs::epoll::EpollInstance> {
+        None
+    }
+
+    /// Downcasts the inode to a RAM filesystem directory if applicable.
+    fn as_ramfs_dir(&self) -> Option<&crate::services::vfs::ramfs::RamFsDir> {
         None
     }
 }

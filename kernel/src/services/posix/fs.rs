@@ -10,6 +10,7 @@ use crate::services::audit::log_audit_event;
 use crate::services::process::get_current_process;
 use crate::services::vfs::pipe::PipeBuffer;
 use crate::services::vfs::*;
+use alloc::string::ToString;
 use alloc::sync::Arc;
 use posix_abi::*;
 
@@ -473,12 +474,12 @@ pub fn sys_unlink(path_ptr: *const u8) -> isize {
 
 /// Renames or moves a filesystem object from `oldpath_ptr` to `newpath_ptr`.
 pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
-    let (pid, uid) = match get_current_process() {
+    let (pid, uid, cwd) = match get_current_process() {
         Some(p) => {
             let proc = p.lock();
-            (proc.pid, proc.uid)
+            (proc.pid, proc.uid, proc.cwd.clone())
         }
-        None => (0, 0),
+        None => (0, 0, "/".to_string()),
     };
     let mut kold = [0u8; USER_STR_MAX];
     let oldpath = match copy_user_path(oldpath_ptr, &mut kold) {
@@ -491,49 +492,96 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
         Err(e) => return -(e as isize),
     };
 
-    let (old_parent, old_basename) = match resolve_parent_and_basename(oldpath) {
+    let norm_old = normalize_path(&cwd, oldpath);
+    let norm_new = normalize_path(&cwd, newpath);
+
+    if norm_old == "/" || norm_new == "/" {
+        log_audit_event(
+            pid,
+            uid,
+            AUDIT_TYPE_FILE_MODIFY,
+            -EBUSY,
+            newpath,
+            "Rename failed (root directory target)",
+        );
+        return -(EBUSY as isize);
+    }
+
+    if norm_old == norm_new {
+        // POSIX specification: rename to same path is a no-op if source exists
+        return match resolve_path_with_cwd(&cwd, oldpath) {
+            Ok(_) => 0,
+            Err(err) => -(err as isize),
+        };
+    }
+
+    // POSIX directory cycle prevention: new_path cannot have old_path as prefix
+    let prefix = alloc::format!("{}/", norm_old);
+    if norm_new.starts_with(&prefix) {
+        log_audit_event(
+            pid,
+            uid,
+            AUDIT_TYPE_FILE_MODIFY,
+            -EINVAL,
+            newpath,
+            "Rename failed (directory cycle detected)",
+        );
+        return -(EINVAL as isize);
+    }
+
+    let (old_parent, old_basename) = match resolve_parent_and_basename_with_cwd(&cwd, oldpath) {
         Ok(res) => res,
-        Err(err) => return -(err as isize),
+        Err(err) => {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                -err,
+                newpath,
+                "Rename failed (old parent unresolved)",
+            );
+            return -(err as isize);
+        }
     };
-    let (new_parent, new_basename) = match resolve_parent_and_basename(newpath) {
+    let (new_parent, new_basename) = match resolve_parent_and_basename_with_cwd(&cwd, newpath) {
         Ok(res) => res,
-        Err(err) => return -(err as isize),
+        Err(err) => {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                -err,
+                newpath,
+                "Rename failed (new parent unresolved)",
+            );
+            return -(err as isize);
+        }
     };
 
-    let source_inode = match old_parent.lookup(&old_basename) {
-        Ok(i) => i,
-        Err(err) => return -(err as isize),
-    };
-
-    if let Ok(target_inode) = new_parent.lookup(&new_basename) {
-        if source_inode.file_type() == FileType::Directory
-            && target_inode.file_type() != FileType::Directory
-        {
-            return -(ENOTDIR as isize);
+    match old_parent.rename(&old_basename, &new_parent, &new_basename) {
+        Ok(()) => {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                0,
+                newpath,
+                "File or directory renamed/moved",
+            );
+            0
         }
-        if source_inode.file_type() != FileType::Directory
-            && target_inode.file_type() == FileType::Directory
-        {
-            return -(EISDIR as isize);
+        Err(err) => {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                -err,
+                newpath,
+                "Rename failed",
+            );
+            -(err as isize)
         }
     }
-
-    if let Err(err) = new_parent.link_entry(&new_basename, source_inode) {
-        return -(err as isize);
-    }
-    if let Err(err) = old_parent.unlink(&old_basename) {
-        return -(err as isize);
-    }
-
-    log_audit_event(
-        pid,
-        uid,
-        AUDIT_TYPE_FILE_MODIFY,
-        0,
-        newpath,
-        "File or directory renamed/moved",
-    );
-    0
 }
 
 /// Reads directory entries from open directory descriptor `fd` into user buffer `dirp`.

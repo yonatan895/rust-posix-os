@@ -59,6 +59,12 @@ pub unsafe extern "C" fn _start() -> ! {
         run_efault_hammer_tests();
     }
 
+    // Run VFS Atomic Rename & Directory Cycle Tests
+    // SAFETY: Executing in-guest atomic rename and directory cycle tests in PID 1 user mode.
+    unsafe {
+        run_vfs_rename_tests();
+    }
+
     // Run Syscall Microbenchmark (100,000 getpid fast syscalls in-guest)
     // SAFETY: Executing in-guest hardware fast-syscall benchmark to measure real hardware cycles.
     unsafe {
@@ -392,6 +398,83 @@ unsafe fn run_efault_hammer_tests() {
     // SAFETY: Announcing success to stdout.
     unsafe {
         puts(b"[init] User Pointer Validation (EFAULT) Hammer Tests PASSED!\n\0".as_ptr());
+    }
+}
+
+/// Runs in-guest VFS atomic rename and directory cycle tests.
+///
+/// # Safety
+///
+/// Must be executed in user mode with standard filesystem syscalls operational.
+unsafe fn run_vfs_rename_tests() {
+    let src = b"/tmp/rename_src.txt\0".as_ptr();
+    let dst = b"/tmp/rename_dst.txt\0".as_ptr();
+    let cycle_parent = b"/tmp/rdir\0".as_ptr();
+    let cycle_child = b"/tmp/rdir/sub\0".as_ptr();
+    let cycle_target = b"/tmp/rdir/sub/cycle\0".as_ptr();
+
+    // 1. Create source file
+    // SAFETY: Creating test file via open.
+    let fd = unsafe { open(src, O_CREAT | O_WRONLY | O_TRUNC, 0o644) };
+    if fd >= 0 {
+        // SAFETY: Closing open file descriptor.
+        unsafe { close(fd) };
+    }
+
+    // 2. Perform atomic rename
+    // SAFETY: Invoking rename syscall to move src to dst.
+    let r1 = unsafe { rename(src, dst) };
+    let mut st = Stat::default();
+    // SAFETY: Checking that src is gone and dst exists.
+    let (s_src, s_dst) = unsafe { (stat(src, &mut st), stat(dst, &mut st)) };
+
+    if r1 != 0 || s_src == 0 || s_dst != 0 {
+        // SAFETY: Reporting rename failure.
+        unsafe {
+            printf(
+                b"[FAIL] Atomic rename test failed: ret=%d, s_src=%d, s_dst=%d\n\0".as_ptr(),
+                r1,
+                s_src,
+                s_dst,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 3. Clean up renamed file
+    // SAFETY: Unlinking test destination file.
+    unsafe { unlink(dst) };
+
+    // 4. Test directory cycle prevention: rename parent into its own child subdirectory
+    // SAFETY: Creating parent and child test directories.
+    unsafe {
+        mkdir(cycle_parent, 0o755);
+        mkdir(cycle_child, 0o755);
+    }
+    // SAFETY: Attempting directory cycle rename (parent into child).
+    let r_cycle = unsafe { rename(cycle_parent, cycle_target) };
+    if r_cycle != -(EINVAL as i32) {
+        // SAFETY: Reporting directory cycle failure.
+        unsafe {
+            printf(
+                b"[FAIL] Directory cycle prevention test failed: expected %d, got %d\n\0".as_ptr(),
+                -(EINVAL as i32),
+                r_cycle,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Clean up test directories
+    // SAFETY: Cleaning up test directories.
+    unsafe {
+        rmdir(cycle_child);
+        rmdir(cycle_parent);
+    }
+
+    // SAFETY: Announcing success to stdout.
+    unsafe {
+        puts(b"[init] VFS Atomic Rename & Cycle Prevention Tests PASSED!\n\0".as_ptr());
     }
 }
 
