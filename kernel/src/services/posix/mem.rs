@@ -74,7 +74,8 @@ pub fn sys_mmap(addr: usize, length: usize, prot: i32, flags: i32) -> isize {
                 .checked_mul(PAGE_SIZE)
                 .and_then(|byte_len| vaddr.checked_add(byte_len))
             {
-                mapper.0.insert_vma(vaddr, end_vaddr, prot as u32, flags as u32);
+                let vm_space = mapper.0;
+                vm_space.insert_vma(vaddr, end_vaddr, prot as u32, flags as u32);
             }
             vaddr as isize
         }
