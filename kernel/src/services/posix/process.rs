@@ -4,6 +4,7 @@ use super::{copy_user_path, map_user_error};
 use crate::ostd::mm::{USER_STR_MAX, UserPtr};
 use crate::ostd::task::{SyscallRegisters, TrapFrame};
 use crate::services::ipc::SIGNALS;
+use crate::services::process::elf::load_elf;
 use crate::services::process::*;
 use core::sync::atomic::Ordering;
 use posix_abi::*;
@@ -146,12 +147,36 @@ pub fn sys_execve(
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let mut proc = proc_lock.lock();
+    let cwd = {
+        let proc = proc_lock.lock();
+        proc.cwd.clone()
+    };
 
-    match proc.exec(path, &argv_refs, &envp_refs) {
-        Ok(()) => 0,
-        Err(err) => -(err as isize),
+    let inode = match crate::services::vfs::resolve_path(&cwd, path) {
+        Ok(i) => i,
+        Err(err) => return -(err as isize),
+    };
+    let stat = match inode.stat() {
+        Ok(s) => s,
+        Err(err) => return -(err as isize),
+    };
+    let mut elf_data = alloc::vec![0u8; stat.st_size as usize];
+    if let Err(err) = inode.read(0, &mut elf_data) {
+        return -(err as isize);
     }
+
+    let mut new_vm = match crate::ostd::mm::VmSpace::new() {
+        Some(vm) => vm,
+        None => return -(ENOMEM as isize),
+    };
+    let loaded = match load_elf(&elf_data, &mut new_vm, &argv_refs, &envp_refs) {
+        Ok(l) => l,
+        Err(_) => return -(ENOEXEC as isize),
+    };
+
+    let mut proc = proc_lock.lock();
+    proc.apply_exec(loaded, new_vm, stat.st_mode, stat.st_uid, stat.st_gid);
+    0
 }
 
 /// Encodes an exit status integer conforming to POSIX waitpid macros (WIFEXITED / WIFSIGNALED).

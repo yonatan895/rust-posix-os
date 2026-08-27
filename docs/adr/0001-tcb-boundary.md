@@ -56,10 +56,10 @@ in `services/`.
 - SysV AMD64 user stack on execve (argc, argv, envp, auxv).
 - Eradication of `static mut` globals in favor of `SyncUnsafeCell` and `AtomicU64` with CI grep enforcement.
 - Per-operation `unsafe` scoping with required `// SAFETY:` rationale comments.
+- VFS takes `cwd`/`creds` as arguments (no `Process` lock from VFS; enforced by CI).
 
 ## Still open
 
-- VFS must take cwd/creds as arguments (no `Process` lock from VFS).
 - `VmSpace`: `Vec<Vma>`; then real `fork`.
 - One task model documented in `ostd/task`.
 

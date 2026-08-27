@@ -240,6 +240,77 @@ impl FileHandle {
     }
 }
 
+/// Process credentials snapshot passed into VFS operations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VfsCreds {
+    /// Real user identifier.
+    pub uid: u32,
+    /// Real group identifier.
+    pub gid: u32,
+    /// Effective user identifier.
+    pub euid: u32,
+    /// Effective group identifier.
+    pub egid: u32,
+    /// File mode creation mask.
+    pub umask: u32,
+}
+
+impl VfsCreds {
+    /// Creates a new credentials snapshot.
+    pub const fn new(uid: u32, gid: u32, euid: u32, egid: u32, umask: u32) -> Self {
+        Self {
+            uid,
+            gid,
+            euid,
+            egid,
+            umask,
+        }
+    }
+
+    /// Computes the effective file creation mode by masking requested `mode` with `!umask`.
+    #[inline(always)]
+    pub fn creation_mode(&self, mode: u32) -> u16 {
+        ((mode as u16) & 0o777) & !(self.umask as u16)
+    }
+
+    /// Returns `true` if the caller has root/superuser privileges (`euid == 0`).
+    #[inline(always)]
+    pub fn is_root(&self) -> bool {
+        self.euid == 0
+    }
+}
+
+/// Checks access permission on `inode` according to open `flags` and caller `creds`.
+pub fn check_inode_permission(inode: &dyn Inode, creds: &VfsCreds, flags: i32) -> Result<(), i32> {
+    // Root (euid == 0) bypasses standard read/write permission checks
+    if creds.is_root() {
+        return Ok(());
+    }
+
+    let st = match inode.stat() {
+        Ok(s) => s,
+        Err(_) => return Ok(()), // Pseudodevices/anonymous nodes without stat support bypass permission checks
+    };
+
+    let imode = st.st_mode;
+    let req_write = (flags & O_WRONLY != 0) || (flags & O_RDWR != 0);
+    let req_read = flags & O_WRONLY == 0;
+
+    let (can_read, can_write) = if creds.euid == st.st_uid {
+        (imode & S_IRUSR != 0, imode & S_IWUSR != 0)
+    } else if creds.egid == st.st_gid {
+        (imode & S_IRGRP != 0, imode & S_IWGRP != 0)
+    } else {
+        (imode & S_IROTH != 0, imode & S_IWOTH != 0)
+    };
+
+    if (req_read && !can_read) || (req_write && !can_write) {
+        Err(EACCES)
+    } else {
+        Ok(())
+    }
+}
+
 /// Global Virtual File System representation holding the root directory node.
 pub struct Vfs {
     /// Root directory inode (`/`).
@@ -252,15 +323,6 @@ pub static ROOT_VFS: SpinLock<Option<Vfs>> = SpinLock::new(None);
 /// Initializes the global VFS root instance.
 pub fn vfs_init(root: Arc<dyn Inode>) {
     *ROOT_VFS.lock() = Some(Vfs { root });
-}
-
-/// Retrieves the current working directory of the executing process, or `"/"` if none.
-pub fn get_current_process_cwd() -> String {
-    if let Some(p) = crate::services::process::get_current_process() {
-        p.lock().cwd.clone()
-    } else {
-        "/".to_string()
-    }
 }
 
 /// Normalizes a relative or absolute path against a base working directory, resolving `.` and `..`.
@@ -298,7 +360,7 @@ pub fn normalize_path(cwd: &str, path: &str) -> String {
 }
 
 /// Resolves a path relative to `cwd` to its target VFS `Inode`.
-pub fn resolve_path_with_cwd(cwd: &str, path: &str) -> Result<Arc<dyn Inode>, i32> {
+pub fn resolve_path(cwd: &str, path: &str) -> Result<Arc<dyn Inode>, i32> {
     let norm = normalize_path(cwd, path);
 
     let vfs_guard = ROOT_VFS.lock();
@@ -319,10 +381,7 @@ pub fn resolve_path_with_cwd(cwd: &str, path: &str) -> Result<Arc<dyn Inode>, i3
 }
 
 /// Resolves a path relative to `cwd` into its parent directory `Inode` and final basename string.
-pub fn resolve_parent_and_basename_with_cwd(
-    cwd: &str,
-    path: &str,
-) -> Result<(Arc<dyn Inode>, String), i32> {
+pub fn resolve_parent_and_basename(cwd: &str, path: &str) -> Result<(Arc<dyn Inode>, String), i32> {
     let norm = normalize_path(cwd, path);
 
     if norm == "/" {
@@ -341,16 +400,4 @@ pub fn resolve_parent_and_basename_with_cwd(
     }
 
     Ok((current, basename))
-}
-
-/// Resolves a path relative to the current process's working directory to its `Inode`.
-pub fn resolve_path(path: &str) -> Result<Arc<dyn Inode>, i32> {
-    let cwd = get_current_process_cwd();
-    resolve_path_with_cwd(&cwd, path)
-}
-
-/// Resolves a path relative to the current process's working directory into parent `Inode` and basename.
-pub fn resolve_parent_and_basename(path: &str) -> Result<(Arc<dyn Inode>, String), i32> {
-    let cwd = get_current_process_cwd();
-    resolve_parent_and_basename_with_cwd(&cwd, path)
 }

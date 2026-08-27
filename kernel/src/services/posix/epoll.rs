@@ -72,10 +72,17 @@ pub fn sys_epoll_wait(
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let proc = proc_lock.lock();
-    let ep_handle = match proc.get_fd(epfd) {
-        Some(h) => h,
-        None => return -(EBADF as isize),
+    // Snapshot epoll handle and fd table under a single short Process lock acquisition.
+    // This strictly enforces ADR-0002 Rule L3 (no Process locks held during VFS operations).
+    // Note: Per-interest fd snapshotting will optimize this table clone once lightweight
+    // task/fd snapshots are introduced (#85).
+    let (ep_handle, fds) = {
+        let proc = proc_lock.lock();
+        let ep_handle = match proc.get_fd(epfd) {
+            Some(h) => h,
+            None => return -(EBADF as isize),
+        };
+        (ep_handle, proc.fds.clone())
     };
 
     let epoll = match ep_handle.inode.as_epoll() {
@@ -84,9 +91,8 @@ pub fn sys_epoll_wait(
     };
 
     let mut kbuf = alloc::vec![EpollEvent::default(); maxevents as usize];
-    drop(proc);
 
-    match epoll.wait(&mut kbuf, maxevents as usize) {
+    match epoll.wait(&mut kbuf, maxevents as usize, &fds) {
         Ok(count) => {
             let size = core::mem::size_of::<EpollEvent>();
             for (i, &event) in kbuf.iter().enumerate().take(count) {
