@@ -101,8 +101,10 @@ static FAILED_TESTS: core::sync::atomic::AtomicUsize = core::sync::atomic::Atomi
 
 macro_rules! check_efault {
     ($expr:expr, $name:expr) => {
+        // SAFETY: Executing test syscall with intentional adversarial pointer to verify kernel EFAULT handling.
         let res = unsafe { $expr } as isize;
         if res != -(EFAULT as isize) {
+            // SAFETY: Printing failure diagnostic to standard error.
             unsafe {
                 printf(
                     b"[FAIL] %s: expected errno %d, got %d\n\0".as_ptr(),
@@ -123,7 +125,9 @@ macro_rules! check_efault {
 /// Must be executed in userspace context with functional standard I/O and syscall dispatch.
 unsafe fn run_efault_hammer_tests() {
     // SAFETY: Outputting start banner to stdout.
-    unsafe { puts(b"[init] Running User Pointer Validation (EFAULT) Hammer Tests...\n\0".as_ptr()) };
+    unsafe {
+        puts(b"[init] Running User Pointer Validation (EFAULT) Hammer Tests...\n\0".as_ptr())
+    };
     let null = core::ptr::null_mut::<u8>();
     let kern = 0xFFFF_8000_0000_0000usize as *mut u8;
     let unmap = 0x0000_7000_1234_0000usize as *mut u8;
@@ -142,39 +146,97 @@ unsafe fn run_efault_hammer_tests() {
         check_efault!(stat(b"/dev/null\0".as_ptr(), p as *mut Stat), name);
     }
 
-    check_efault!(mmap(kern, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0), b"mmap(kern)\0".as_ptr());
-    check_efault!(mmap(null, usize::MAX, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0), b"mmap(len=MAX)\0".as_ptr());
+    check_efault!(
+        mmap(
+            kern,
+            4096,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0
+        ),
+        b"mmap(kern)\0".as_ptr()
+    );
+    check_efault!(
+        mmap(
+            null,
+            usize::MAX,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0
+        ),
+        b"mmap(len=MAX)\0".as_ptr()
+    );
 
     let mut si_before = Sysinfo::default();
+    // SAFETY: Querying system metrics to valid local buffer.
     if unsafe { sysinfo(&mut si_before) } == 0 && si_before.totalram > 0 {
         let excessive_len = (si_before.totalram as usize).saturating_add(1024 * 1024 * 1024);
-        check_efault!(mmap(null, excessive_len, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0), b"mmap(excessive)\0".as_ptr());
+        check_efault!(
+            mmap(
+                null,
+                excessive_len,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0
+            ),
+            b"mmap(excessive)\0".as_ptr()
+        );
         let mut si_after = Sysinfo::default();
+        // SAFETY: Querying system metrics after failed mmap to ensure no leaked frames.
         if unsafe { sysinfo(&mut si_after) } == 0 && si_after.freeram != si_before.freeram {
+            // SAFETY: Printing failure diagnostic.
             unsafe { printf(b"[FAIL] mmap failure leaked frames\n\0".as_ptr()) };
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
     }
 
-    let page = unsafe { mmap(null, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0) };
+    // SAFETY: Allocating test user page for straddle tests.
+    let page = unsafe {
+        mmap(
+            null,
+            4096,
+            PROT_READ | PROT_WRITE,
+            MAP_PRIVATE | MAP_ANONYMOUS,
+            -1,
+            0,
+        )
+    };
     if (page as isize) > 0 {
         let straddle_buf = (page as usize + 4090) as *mut u8;
         check_efault!(read(0, straddle_buf, 16), b"read(straddle)\0".as_ptr());
         check_efault!(write(1, straddle_buf, 16), b"write(straddle)\0".as_ptr());
-        for i in 0..6 { unsafe { *straddle_buf.add(i) = b'A' }; }
-        check_efault!(open(straddle_buf, O_RDONLY, 0), b"open(straddle)\0".as_ptr());
+        // SAFETY: Writing 6 bytes within mapped page boundary before page edge.
+        for i in 0..6 {
+            unsafe { *straddle_buf.add(i) = b'A' };
+        }
+        check_efault!(
+            open(straddle_buf, O_RDONLY, 0),
+            b"open(straddle)\0".as_ptr()
+        );
         check_efault!(stat(straddle_buf, &mut st), b"stat(straddle)\0".as_ptr());
-        check_efault!(stat(b"/dev/null\0".as_ptr(), straddle_buf as *mut Stat), b"stat(straddle_buf)\0".as_ptr());
+        check_efault!(
+            stat(b"/dev/null\0".as_ptr(), straddle_buf as *mut Stat),
+            b"stat(straddle_buf)\0".as_ptr()
+        );
+        // SAFETY: Unmapping temporary test page.
         unsafe { munmap(page, 4096) };
     }
 
     let failures = FAILED_TESTS.load(core::sync::atomic::Ordering::Relaxed);
     if failures > 0 {
+        // SAFETY: Outputting failure summary and terminating test harness.
         unsafe {
-            printf(b"[FAIL] User Pointer Validation (EFAULT) Hammer had %d failures!\n\0".as_ptr(), failures as i32);
+            printf(
+                b"[FAIL] User Pointer Validation (EFAULT) Hammer had %d failures!\n\0".as_ptr(),
+                failures as i32,
+            );
             exit(1);
         }
     }
+    // SAFETY: Outputting success banner to stdout.
     unsafe { puts(b"[init] User Pointer Validation (EFAULT) Hammer Tests PASSED!\n\0".as_ptr()) };
 }
 
@@ -188,9 +250,12 @@ unsafe fn run_vfs_rename_tests() {
     let dst = b"/tmp/rename_dst.txt\0".as_ptr();
     let mut st = Stat::default();
 
+    // SAFETY: Exercising VFS file creation, rename, and directory cycle rejection syscalls.
     unsafe {
         let fd = open(src, O_CREAT | O_WRONLY | O_TRUNC, 0o644);
-        if fd >= 0 { close(fd); }
+        if fd >= 0 {
+            close(fd);
+        }
         let r1 = rename(src, dst);
         let (s_src, s_dst) = (stat(src, &mut st), stat(dst, &mut st));
         if r1 != 0 || s_src == 0 || s_dst != 0 {
@@ -200,28 +265,50 @@ unsafe fn run_vfs_rename_tests() {
         unlink(dst);
 
         let (dir_a, dir_b) = (b"/tmp/rdir_a\0".as_ptr(), b"/tmp/rdir_b\0".as_ptr());
-        let (file_a, file_b) = (b"/tmp/rdir_a/file.txt\0".as_ptr(), b"/tmp/rdir_b/file.txt\0".as_ptr());
+        let (file_a, file_b) = (
+            b"/tmp/rdir_a/file.txt\0".as_ptr(),
+            b"/tmp/rdir_b/file.txt\0".as_ptr(),
+        );
         mkdir(dir_a, 0o755);
         mkdir(dir_b, 0o755);
         let fd = open(file_a, O_CREAT | O_WRONLY | O_TRUNC, 0o644);
-        if fd >= 0 { close(fd); }
+        if fd >= 0 {
+            close(fd);
+        }
 
         let r_cross = rename(file_a, file_b);
         let (s_fa, s_fb) = (stat(file_a, &mut st), stat(file_b, &mut st));
         if r_cross != 0 || s_fa == 0 || s_fb != 0 {
-            printf(b"[FAIL] Cross-dir rename failed: ret=%d\n\0".as_ptr(), r_cross);
+            printf(
+                b"[FAIL] Cross-dir rename failed: ret=%d\n\0".as_ptr(),
+                r_cross,
+            );
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
 
-        if rename(file_b, dir_a) != -(EISDIR as i32) { FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
-        if rename(dir_a, file_b) != -(ENOTDIR as i32) { FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
-        if rename(dir_a, dir_b) != -(ENOTEMPTY as i32) { FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+        if rename(file_b, dir_a) != -(EISDIR as i32) {
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        if rename(dir_a, file_b) != -(ENOTDIR as i32) {
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        if rename(dir_a, dir_b) != -(ENOTEMPTY as i32) {
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
 
-        let (cycle_parent, cycle_child, cycle_target) = (b"/tmp/rdir\0".as_ptr(), b"/tmp/rdir/sub\0".as_ptr(), b"/tmp/rdir/sub/cycle\0".as_ptr());
+        let (cycle_parent, cycle_child, cycle_target) = (
+            b"/tmp/rdir\0".as_ptr(),
+            b"/tmp/rdir/sub\0".as_ptr(),
+            b"/tmp/rdir/sub/cycle\0".as_ptr(),
+        );
         mkdir(cycle_parent, 0o755);
         mkdir(cycle_child, 0o755);
-        if rename(cycle_parent, cycle_target) != -(EINVAL as i32) { FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
-        if rename(cycle_child, cycle_parent) != -(ENOTEMPTY as i32) { FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed); }
+        if rename(cycle_parent, cycle_target) != -(EINVAL as i32) {
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+        if rename(cycle_child, cycle_parent) != -(ENOTEMPTY as i32) {
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
 
         unlink(file_b);
         rmdir(dir_b);
@@ -239,11 +326,22 @@ unsafe fn run_vfs_rename_tests() {
 /// Must be executed in user mode with standard credentials syscalls operational.
 unsafe fn run_saved_uid_credentials_tests() {
     let (mut r, mut e, mut s) = (0u32, 0u32, 0u32);
+    // SAFETY: Exercising process credential syscalls from root process.
     unsafe {
-        if getuid() != 0 || geteuid() != 0 || getresuid(&mut r, &mut e, &mut s) != 0 || r != 0 || e != 0 || s != 0 {
+        if getuid() != 0
+            || geteuid() != 0
+            || getresuid(&mut r, &mut e, &mut s) != 0
+            || r != 0
+            || e != 0
+            || s != 0
+        {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        if seteuid(1000) != 0 || geteuid() != 1000 || getresuid(&mut r, &mut e, &mut s) != 0 || e != 1000 {
+        if seteuid(1000) != 0
+            || geteuid() != 1000
+            || getresuid(&mut r, &mut e, &mut s) != 0
+            || e != 1000
+        {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         if seteuid(2000) != -(EPERM as i32) {
@@ -253,7 +351,11 @@ unsafe fn run_saved_uid_credentials_tests() {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         let (mut rg, mut eg, mut sg) = (0u32, 0u32, 0u32);
-        if setresgid(0, 500, 0) != 0 || getegid() != 500 || getresgid(&mut rg, &mut eg, &mut sg) != 0 || eg != 500 {
+        if setresgid(0, 500, 0) != 0
+            || getegid() != 500
+            || getresgid(&mut rg, &mut eg, &mut sg) != 0
+            || eg != 500
+        {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         let _ = setresgid(0, 0, 0);

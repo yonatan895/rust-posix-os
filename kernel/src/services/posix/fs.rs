@@ -22,7 +22,9 @@ const MAX_RW_COUNT: usize = 1 << 20;
 fn get_proc_handle(fd: i32) -> Result<(Arc<FileHandle>, i32), isize> {
     let proc_lock = get_current_process().ok_or(-(ESRCH as isize))?;
     let proc = proc_lock.lock();
-    proc.get_fd(fd).map(|h| (h, proc.pid)).ok_or(-(EBADF as isize))
+    proc.get_fd(fd)
+        .map(|h| (h, proc.pid))
+        .ok_or(-(EBADF as isize))
 }
 
 /// Writes `Stat` structure to user pointer.

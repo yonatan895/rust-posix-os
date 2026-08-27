@@ -29,36 +29,67 @@ struct SpecPipe {
 
 impl SpecPipe {
     fn new(cap: usize) -> Self {
-        Self { buf: Vec::new(), cap, readers: 1, writers: 1, read_waiters: Vec::new(), write_waiters: Vec::new() }
+        Self {
+            buf: Vec::new(),
+            cap,
+            readers: 1,
+            writers: 1,
+            read_waiters: Vec::new(),
+            write_waiters: Vec::new(),
+        }
     }
     fn read(&mut self, out: &mut [u8], nonblock: bool, caller: i32) -> Result<usize, &'static str> {
         if self.buf.is_empty() {
-            if self.writers == 0 { return Ok(0); }
-            if nonblock { return Err("EAGAIN"); }
+            if self.writers == 0 {
+                return Ok(0);
+            }
+            if nonblock {
+                return Err("EAGAIN");
+            }
             self.read_waiters.push(caller);
             return Err("BLOCKED");
         }
         let n = out.len().min(self.buf.len());
-        for item in out.iter_mut().take(n) { *item = self.buf.remove(0); }
-        if !self.write_waiters.is_empty() { self.write_waiters.remove(0); }
+        for item in out.iter_mut().take(n) {
+            *item = self.buf.remove(0);
+        }
+        if !self.write_waiters.is_empty() {
+            self.write_waiters.remove(0);
+        }
         Ok(n)
     }
     fn write(&mut self, data: &[u8], nonblock: bool, caller: i32) -> Result<usize, &'static str> {
-        if self.readers == 0 { return Err("EPIPE"); }
+        if self.readers == 0 {
+            return Err("EPIPE");
+        }
         let space = self.cap - self.buf.len();
         if space == 0 {
-            if nonblock { return Err("EAGAIN"); }
+            if nonblock {
+                return Err("EAGAIN");
+            }
             self.write_waiters.push(caller);
             return Err("BLOCKED");
         }
         let to_write = data.len().min(space);
         let was_empty = self.buf.is_empty();
         self.buf.extend_from_slice(&data[..to_write]);
-        if was_empty { self.read_waiters.clear(); }
+        if was_empty {
+            self.read_waiters.clear();
+        }
         Ok(to_write)
     }
-    fn close_writer(&mut self) { self.writers = self.writers.saturating_sub(1); if self.writers == 0 { self.read_waiters.clear(); } }
-    fn close_reader(&mut self) { self.readers = self.readers.saturating_sub(1); if self.readers == 0 { self.write_waiters.clear(); } }
+    fn close_writer(&mut self) {
+        self.writers = self.writers.saturating_sub(1);
+        if self.writers == 0 {
+            self.read_waiters.clear();
+        }
+    }
+    fn close_reader(&mut self) {
+        self.readers = self.readers.saturating_sub(1);
+        if self.readers == 0 {
+            self.write_waiters.clear();
+        }
+    }
 }
 
 /// Tests pipe blocking, non-blocking EAGAIN, and EOF/EPIPE semantics.
@@ -92,7 +123,11 @@ fn test_pipe_blocking_and_eof_semantics() {
 /// Tests two-process reader/writer interaction, voluntary blocking, and scheduler wakeups.
 fn test_two_process_pipe_voluntary_context_switch() {
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-    enum TaskState { Running, Ready, Blocked }
+    enum TaskState {
+        Running,
+        Ready,
+        Blocked,
+    }
 
     struct Simulation {
         tasks: BTreeMap<i32, TaskState>,
@@ -109,7 +144,13 @@ fn test_two_process_pipe_voluntary_context_switch() {
             tasks.insert(2, TaskState::Ready);
             let mut ready_queue = VecDeque::new();
             ready_queue.push_back(2);
-            Self { tasks, ready_queue, current_pid: 1, pipe_buf: Vec::new(), pipe_read_waiters: Vec::new() }
+            Self {
+                tasks,
+                ready_queue,
+                current_pid: 1,
+                pipe_buf: Vec::new(),
+                pipe_read_waiters: Vec::new(),
+            }
         }
         fn reader_read(&mut self, _buf: &mut [u8]) -> Option<usize> {
             self.tasks.insert(1, TaskState::Blocked);
@@ -136,7 +177,9 @@ fn test_two_process_pipe_voluntary_context_switch() {
         }
         fn reader_resume_read(&mut self, buf: &mut [u8]) -> usize {
             let n = buf.len().min(self.pipe_buf.len());
-            for item in buf.iter_mut().take(n) { *item = self.pipe_buf.remove(0); }
+            for item in buf.iter_mut().take(n) {
+                *item = self.pipe_buf.remove(0);
+            }
             n
         }
     }

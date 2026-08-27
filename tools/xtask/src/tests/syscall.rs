@@ -32,29 +32,49 @@ fn test_user_pointer_validation_efault_hammer() {
     }
 
     impl SimAddressSpace {
-        fn new() -> Self { Self { pages: BTreeMap::new() } }
-        fn map(&mut self, addr: usize, w: bool) { self.pages.insert(addr & !PAGE_MASK, (w, [0u8; PAGE_SIZE])); }
+        fn new() -> Self {
+            Self {
+                pages: BTreeMap::new(),
+            }
+        }
+        fn map(&mut self, addr: usize, w: bool) {
+            self.pages.insert(addr & !PAGE_MASK, (w, [0u8; PAGE_SIZE]));
+        }
         fn val_range(&self, addr: usize, len: usize, write: bool) -> Result<(), i32> {
-            if len == 0 { return Ok(()); }
-            if addr == 0 { return Err(EFAULT); }
+            if len == 0 {
+                return Ok(());
+            }
+            if addr == 0 {
+                return Err(EFAULT);
+            }
             let end = addr.checked_add(len).ok_or(EFAULT)?;
-            if end > USER_SPACE_END { return Err(EFAULT); }
+            if end > USER_SPACE_END {
+                return Err(EFAULT);
+            }
             let mut p = addr & !PAGE_MASK;
             while p < end {
                 let info = self.pages.get(&p).ok_or(EFAULT)?;
-                if write && !info.0 { return Err(EFAULT); }
+                if write && !info.0 {
+                    return Err(EFAULT);
+                }
                 p = p.checked_add(PAGE_SIZE).ok_or(EFAULT)?;
             }
             Ok(())
         }
         fn copy_cstr(&self, addr: usize, buf: &mut [u8]) -> Result<usize, i32> {
-            if addr == 0 || addr >= USER_SPACE_END { return Err(EFAULT); }
+            if addr == 0 || addr >= USER_SPACE_END {
+                return Err(EFAULT);
+            }
             for (i, b) in buf.iter_mut().enumerate() {
                 let cur = addr.checked_add(i).ok_or(EFAULT)?;
-                if cur >= USER_SPACE_END { return Err(EFAULT); }
+                if cur >= USER_SPACE_END {
+                    return Err(EFAULT);
+                }
                 let info = self.pages.get(&(cur & !PAGE_MASK)).ok_or(EFAULT)?;
                 *b = info.1[cur & PAGE_MASK];
-                if *b == 0 { return Ok(i); }
+                if *b == 0 {
+                    return Ok(i);
+                }
             }
             Err(ENAMETOOLONG)
         }
@@ -66,9 +86,13 @@ fn test_user_pointer_validation_efault_hammer() {
 
     // 1. Pointer checks
     let val_ptr = |addr: usize, len: usize, w: bool| -> Result<(), i32> {
-        if addr == 0 { return Err(EFAULT); }
+        if addr == 0 {
+            return Err(EFAULT);
+        }
         let end = addr.checked_add(len).ok_or(EFAULT)?;
-        if end > USER_SPACE_END { return Err(EFAULT); }
+        if end > USER_SPACE_END {
+            return Err(EFAULT);
+        }
         aspace.val_range(addr, len, w)
     };
 
@@ -95,10 +119,18 @@ fn test_user_pointer_validation_efault_hammer() {
     assert_eq!(aspace.copy_cstr(kernel_addr, &mut str_buf), Err(EFAULT));
     assert_eq!(aspace.copy_cstr(0x0040_2000, &mut str_buf), Err(EFAULT));
 
-    for b in &mut aspace.pages.get_mut(&0x0040_1000).unwrap().1[4090..4096] { *b = b'X'; }
-    assert_eq!(aspace.copy_cstr(0x0040_1000 + 4090, &mut str_buf), Err(EFAULT));
+    for b in &mut aspace.pages.get_mut(&0x0040_1000).unwrap().1[4090..4096] {
+        *b = b'X';
+    }
+    assert_eq!(
+        aspace.copy_cstr(0x0040_1000 + 4090, &mut str_buf),
+        Err(EFAULT)
+    );
     let mut tiny_buf = [0u8; 4];
-    assert_eq!(aspace.copy_cstr(0x0040_1000 + 4090, &mut tiny_buf), Err(ENAMETOOLONG));
+    assert_eq!(
+        aspace.copy_cstr(0x0040_1000 + 4090, &mut tiny_buf),
+        Err(ENAMETOOLONG)
+    );
 }
 
 /// Tests syscall dispatcher fast-path routing and multi-process state retrieval.

@@ -64,7 +64,13 @@ fn test_signal_frame_layout_and_sigreturn() {
         restorer: 0x401500,
         signum: SIGUSR1 as u64,
         old_mask: 0,
-        rdx: 3, rsi: 2, rdi: 1, rax: 123, rcx: old_rip as u64, r11: old_rflags as u64, rsp: old_rsp as u64,
+        rdx: 3,
+        rsi: 2,
+        rdi: 1,
+        rax: 123,
+        rcx: old_rip as u64,
+        r11: old_rflags as u64,
+        rsp: old_rsp as u64,
         ..Default::default()
     };
 

@@ -67,34 +67,48 @@ fn test_libc_small_object_allocator() {
             let addr = self.next_addr;
             self.next_addr += aligned;
             self.mmap_count += 1;
-            for off in (0..aligned).step_by(4096) { self.pages.insert(addr + off, vec![0u8; 4096]); }
+            for off in (0..aligned).step_by(4096) {
+                self.pages.insert(addr + off, vec![0u8; 4096]);
+            }
             addr
         }
         fn munmap(&mut self, addr: usize, size: usize) {
             let aligned = (size + 4095) & !4095;
             self.munmap_count += 1;
-            for off in (0..aligned).step_by(4096) { self.pages.remove(&(addr + off)); }
+            for off in (0..aligned).step_by(4096) {
+                self.pages.remove(&(addr + off));
+            }
         }
         fn r64(&self, a: usize) -> u64 {
             let mut b = [0u8; 8];
             self.rb(a, &mut b);
             u64::from_ne_bytes(b)
         }
-        fn w64(&mut self, a: usize, v: u64) { self.wb(a, &v.to_ne_bytes()); }
+        fn w64(&mut self, a: usize, v: u64) {
+            self.wb(a, &v.to_ne_bytes());
+        }
         fn rb(&self, a: usize, dst: &mut [u8]) {
             for (i, b) in dst.iter_mut().enumerate() {
                 let curr = a + i;
-                *b = self.pages.get(&(curr & !4095)).map(|p| p[curr & 4095]).unwrap_or(0);
+                *b = self
+                    .pages
+                    .get(&(curr & !4095))
+                    .map(|p| p[curr & 4095])
+                    .unwrap_or(0);
             }
         }
         fn wb(&mut self, a: usize, src: &[u8]) {
             for (i, &b) in src.iter().enumerate() {
                 let curr = a + i;
-                if let Some(p) = self.pages.get_mut(&(curr & !4095)) { p[curr & 4095] = b; }
+                if let Some(p) = self.pages.get_mut(&(curr & !4095)) {
+                    p[curr & 4095] = b;
+                }
             }
         }
         fn malloc(&mut self, size: usize) -> usize {
-            if size == 0 { return 0; }
+            if size == 0 {
+                return 0;
+            }
             if size > SMALL_THRESHOLD {
                 let aligned = (size + 16 + 4095) & !4095;
                 let ptr = self.mmap(aligned);
@@ -103,7 +117,9 @@ fn test_libc_small_object_allocator() {
                 ptr + 16
             } else {
                 let mut c = 0;
-                while c < NUM_CLASSES && SIZE_CLASSES[c] < size { c += 1; }
+                while c < NUM_CLASSES && SIZE_CLASSES[c] < size {
+                    c += 1;
+                }
                 let bsz = SIZE_CLASSES[c];
                 let node = self.free_lists[c];
                 if node != 0 {
@@ -119,7 +135,9 @@ fn test_libc_small_object_allocator() {
                         return cur + off;
                     }
                 }
-                if self.arena_count >= MAX_ARENAS { return 0; }
+                if self.arena_count >= MAX_ARENAS {
+                    return 0;
+                }
                 let a_ptr = self.mmap(ARENA_SIZE);
                 self.w64(a_ptr + 16, (32 + bsz) as u64);
                 self.current_arenas[c] = a_ptr;
@@ -129,11 +147,15 @@ fn test_libc_small_object_allocator() {
             }
         }
         fn free(&mut self, ptr: usize) {
-            if ptr == 0 { return; }
+            if ptr == 0 {
+                return;
+            }
             for i in 0..self.arena_count {
                 let (start, end, c) = self.arenas[i];
                 if ptr >= start && ptr < end {
-                    if self.r64(ptr + 8) as usize == FREE_MAGIC { return; }
+                    if self.r64(ptr + 8) as usize == FREE_MAGIC {
+                        return;
+                    }
                     self.w64(ptr + 8, FREE_MAGIC as u64);
                     self.w64(ptr, self.free_lists[c] as u64);
                     self.free_lists[c] = ptr;
@@ -148,19 +170,32 @@ fn test_libc_small_object_allocator() {
             }
         }
         fn realloc(&mut self, ptr: usize, size: usize) -> usize {
-            if ptr == 0 { return self.malloc(size); }
-            if size == 0 { self.free(ptr); return 0; }
+            if ptr == 0 {
+                return self.malloc(size);
+            }
+            if size == 0 {
+                self.free(ptr);
+                return 0;
+            }
             let mut cap = 0;
             let mut small = false;
             for &(start, end, c) in &self.arenas[..self.arena_count] {
-                if ptr >= start && ptr < end { cap = SIZE_CLASSES[c]; small = true; break; }
+                if ptr >= start && ptr < end {
+                    cap = SIZE_CLASSES[c];
+                    small = true;
+                    break;
+                }
             }
             if !small {
                 let hdr = ptr - 16;
-                if self.r64(hdr + 8) as usize != LARGE_MAGIC { return 0; }
+                if self.r64(hdr + 8) as usize != LARGE_MAGIC {
+                    return 0;
+                }
                 cap = (self.r64(hdr) as usize) - 16;
             }
-            if cap >= size { return ptr; }
+            if cap >= size {
+                return ptr;
+            }
             let new_p = self.malloc(size);
             if new_p != 0 {
                 let mut buf = vec![0u8; cap];
@@ -199,7 +234,9 @@ fn test_libc_small_object_allocator() {
             alloc.free(to_free);
         }
     }
-    for p in live { alloc.free(p); }
+    for p in live {
+        alloc.free(p);
+    }
     assert!(alloc.mmap_count < 64);
 
     let p1 = alloc.malloc(32);
@@ -223,9 +260,24 @@ fn test_libc_small_object_allocator() {
 /// Tests panic diagnostic formatting targeting stderr (file descriptor 2) across all userland daemons.
 fn test_userland_panic_fd2() {
     for (name, file, line, msg) in [
-        ("init panic", "userland/init/src/main.rs", 42, "explicit panic in test routine"),
-        ("shell panic", "userland/shell/src/main.rs", 100, "command parser buffer overflow"),
-        ("coreutils panic", "userland/coreutils/src/main.rs", 200, "unreachable state in ls applet"),
+        (
+            "init panic",
+            "userland/init/src/main.rs",
+            42,
+            "explicit panic in test routine",
+        ),
+        (
+            "shell panic",
+            "userland/shell/src/main.rs",
+            100,
+            "command parser buffer overflow",
+        ),
+        (
+            "coreutils panic",
+            "userland/coreutils/src/main.rs",
+            200,
+            "unreachable state in ls applet",
+        ),
     ] {
         let mut out = String::new();
         writeln!(out, "{}: panicked at {}:{}: {}", name, file, line, msg).unwrap();
@@ -470,8 +522,16 @@ fn test_base64_rfc4648() {
             let b2 = *chunk.get(2).unwrap_or(&0);
             out.push(b64_table[(b0 >> 2) as usize]);
             out.push(b64_table[(((b0 & 0x03) << 4) | (b1 >> 4)) as usize]);
-            out.push(if chunk.len() > 1 { b64_table[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize] } else { b'=' });
-            out.push(if chunk.len() > 2 { b64_table[(b2 & 0x3f) as usize] } else { b'=' });
+            out.push(if chunk.len() > 1 {
+                b64_table[(((b1 & 0x0f) << 2) | (b2 >> 6)) as usize]
+            } else {
+                b'='
+            });
+            out.push(if chunk.len() > 2 {
+                b64_table[(b2 & 0x3f) as usize]
+            } else {
+                b'='
+            });
         }
         assert_eq!(&out[..], expected);
     }
