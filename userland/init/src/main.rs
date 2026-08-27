@@ -693,12 +693,9 @@ unsafe fn run_saved_uid_credentials_tests() {
         let _ = unsafe { getresuid(&mut r, &mut e, &mut s) };
         // SAFETY: Attempting unauthorized regain of root.
         let r_fail_regain = unsafe { seteuid(0) };
-        let ok = r_perm == 0
-            && r == 1000
-            && e == 1000
-            && s == 1000
-            && r_fail_regain == -(EPERM as i32);
-        if ok {
+        let creds_dropped = r == 1000 && e == 1000 && s == 1000;
+        let regain_blocked = r_fail_regain == -(EPERM as i32);
+        if r_perm == 0 && creds_dropped && regain_blocked {
             // SAFETY: Exiting child on success.
             unsafe { exit(0) };
         } else {

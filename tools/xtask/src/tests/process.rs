@@ -370,19 +370,10 @@ fn test_saved_uid_credentials_model() {
                 }
                 Ok(())
             } else {
-                let r_ok = ruid == UNCHANGED
-                    || ruid == self.uid
-                    || ruid == self.euid
-                    || ruid == self.suid;
-                let e_ok = euid == UNCHANGED
-                    || euid == self.uid
-                    || euid == self.euid
-                    || euid == self.suid;
-                let s_ok = suid == UNCHANGED
-                    || suid == self.uid
-                    || suid == self.euid
-                    || suid == self.suid;
-                if r_ok && e_ok && s_ok {
+                let valid = |id: u32| {
+                    id == UNCHANGED || id == self.uid || id == self.euid || id == self.suid
+                };
+                if valid(ruid) && valid(euid) && valid(suid) {
                     if ruid != UNCHANGED {
                         self.uid = ruid;
                     }
