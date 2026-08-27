@@ -34,6 +34,8 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
         parent_gid,
         parent_euid,
         parent_egid,
+        parent_suid,
+        parent_sgid,
         parent_umask,
         parent_cwd,
         parent_vm,
@@ -57,6 +59,8 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
             parent.gid,
             parent.euid,
             parent.egid,
+            parent.suid,
+            parent.sgid,
             parent.umask,
             parent.cwd.clone(),
             vm_clone,
@@ -73,6 +77,8 @@ pub fn sys_fork(parent_regs: &SyscallRegisters) -> isize {
     child.gid = parent_gid;
     child.euid = parent_euid;
     child.egid = parent_egid;
+    child.suid = parent_suid;
+    child.sgid = parent_sgid;
     child.umask = parent_umask;
     child.vm_space = parent_vm;
     child.entry_point = entry_point;
@@ -725,19 +731,19 @@ pub fn sys_getegid() -> isize {
     }
 }
 
-// TODO: saved-uid for seteuid — the setuid privilege-drop-and-regain pattern
-// requires a saved set-user-ID field on Process. The current implementation handles
-// the two main cases (root setuid drops everything, non-root no-op), but the model
-// is incomplete without saved-uid/saved-gid.
-/// Sets the real and effective user ID of the calling process.
+/// Sets the real, effective, and saved user ID of the calling process per POSIX.1-2017.
 pub fn sys_setuid(uid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
     let mut proc = proc_lock.lock();
-    if proc.euid == 0 || proc.uid == uid {
+    if proc.euid == 0 {
         proc.uid = uid;
+        proc.euid = uid;
+        proc.suid = uid;
+        0
+    } else if uid == proc.uid || uid == proc.suid {
         proc.euid = uid;
         0
     } else {
@@ -745,21 +751,194 @@ pub fn sys_setuid(uid: u32) -> isize {
     }
 }
 
-// TODO: saved-gid for setegid (see sys_setuid TODO above).
-/// Sets the real and effective group ID of the calling process.
+/// Sets the real, effective, and saved group ID of the calling process per POSIX.1-2017.
 pub fn sys_setgid(gid: u32) -> isize {
     let proc_lock = match get_current_process() {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
     let mut proc = proc_lock.lock();
-    if proc.euid == 0 || proc.gid == gid {
+    if proc.euid == 0 {
         proc.gid = gid;
+        proc.egid = gid;
+        proc.sgid = gid;
+        0
+    } else if gid == proc.gid || gid == proc.sgid {
         proc.egid = gid;
         0
     } else {
         -(EPERM as isize)
     }
+}
+
+/// Sets the real, effective, and saved user IDs of the calling process.
+pub fn sys_setresuid(ruid: u32, euid: u32, suid: u32) -> isize {
+    const UNCHANGED: u32 = u32::MAX;
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let mut proc = proc_lock.lock();
+    if proc.euid == 0 {
+        if ruid != UNCHANGED {
+            proc.uid = ruid;
+        }
+        if euid != UNCHANGED {
+            proc.euid = euid;
+        }
+        if suid != UNCHANGED {
+            proc.suid = suid;
+        }
+        0
+    } else {
+        let ruid_valid =
+            ruid == UNCHANGED || ruid == proc.uid || ruid == proc.euid || ruid == proc.suid;
+        let euid_valid =
+            euid == UNCHANGED || euid == proc.uid || euid == proc.euid || euid == proc.suid;
+        let suid_valid =
+            suid == UNCHANGED || suid == proc.uid || suid == proc.euid || suid == proc.suid;
+        if ruid_valid && euid_valid && suid_valid {
+            if ruid != UNCHANGED {
+                proc.uid = ruid;
+            }
+            if euid != UNCHANGED {
+                proc.euid = euid;
+            }
+            if suid != UNCHANGED {
+                proc.suid = suid;
+            }
+            0
+        } else {
+            -(EPERM as isize)
+        }
+    }
+}
+
+/// Sets the real, effective, and saved group IDs of the calling process.
+pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> isize {
+    const UNCHANGED: u32 = u32::MAX;
+    let proc_lock = match get_current_process() {
+        Some(p) => p,
+        None => return -(ESRCH as isize),
+    };
+    let mut proc = proc_lock.lock();
+    if proc.euid == 0 {
+        if rgid != UNCHANGED {
+            proc.gid = rgid;
+        }
+        if egid != UNCHANGED {
+            proc.egid = egid;
+        }
+        if sgid != UNCHANGED {
+            proc.sgid = sgid;
+        }
+        0
+    } else {
+        let rgid_valid =
+            rgid == UNCHANGED || rgid == proc.gid || rgid == proc.egid || rgid == proc.sgid;
+        let egid_valid =
+            egid == UNCHANGED || egid == proc.gid || egid == proc.egid || egid == proc.sgid;
+        let sgid_valid =
+            sgid == UNCHANGED || sgid == proc.gid || sgid == proc.egid || sgid == proc.sgid;
+        if rgid_valid && egid_valid && sgid_valid {
+            if rgid != UNCHANGED {
+                proc.gid = rgid;
+            }
+            if egid != UNCHANGED {
+                proc.egid = egid;
+            }
+            if sgid != UNCHANGED {
+                proc.sgid = sgid;
+            }
+            0
+        } else {
+            -(EPERM as isize)
+        }
+    }
+}
+
+/// Retrieves the real, effective, and saved user IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
+pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32) -> isize {
+    let (uid, euid, suid) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.uid, proc.euid, proc.suid)
+        }
+        None => return -(ESRCH as isize),
+    };
+
+    if !ruid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(ruid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(uid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    if !euid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(euid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(euid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    if !suid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(suid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(suid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    0
+}
+
+/// Retrieves the real, effective, and saved group IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
+pub fn sys_getresgid(rgid_ptr: *mut u32, egid_ptr: *mut u32, sgid_ptr: *mut u32) -> isize {
+    let (gid, egid, sgid) = match get_current_process() {
+        Some(p) => {
+            let proc = p.lock();
+            (proc.gid, proc.egid, proc.sgid)
+        }
+        None => return -(ESRCH as isize),
+    };
+
+    if !rgid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(rgid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(gid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    if !egid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(egid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(egid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    if !sgid_ptr.is_null() {
+        let out = match UserPtr::<u32>::from_raw(sgid_ptr as usize) {
+            Ok(p) => p,
+            Err(e) => return -(map_user_error(e) as isize),
+        };
+        if let Err(e) = out.write(sgid) {
+            return -(map_user_error(e) as isize);
+        }
+    }
+    0
 }
 
 /// Sets the calling process's file mode creation mask (umask).

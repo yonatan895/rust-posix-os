@@ -39,6 +39,10 @@ pub struct Process {
     pub euid: u32,
     /// Effective group identifier.
     pub egid: u32,
+    /// Saved set-user-identifier.
+    pub suid: u32,
+    /// Saved set-group-identifier.
+    pub sgid: u32,
     /// File mode creation mask.
     pub umask: u32,
     /// Current scheduling/execution state.
@@ -82,6 +86,8 @@ impl Process {
             gid: 0,
             euid: 0,
             egid: 0,
+            suid: 0,
+            sgid: 0,
             umask: 0o022,
             state: ProcessState::Ready,
             cwd,
@@ -145,6 +151,16 @@ impl Process {
         let mut new_vm = VmSpace::new().ok_or(posix_abi::ENOMEM)?;
         let loaded =
             load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
+
+        // Update effective and saved credentials on exec (setuid/setgid binary support)
+        if (stat.st_mode & posix_abi::S_ISUID) != 0 {
+            self.euid = stat.st_uid;
+        }
+        if (stat.st_mode & posix_abi::S_ISGID) != 0 {
+            self.egid = stat.st_gid;
+        }
+        self.suid = self.euid;
+        self.sgid = self.egid;
 
         let old_vm = self.vm_space.replace(new_vm);
         self.entry_point = loaded.entry_point;

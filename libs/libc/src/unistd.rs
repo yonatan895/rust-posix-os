@@ -229,6 +229,90 @@ pub unsafe extern "C" fn setgid(gid: u32) -> i32 {
     unsafe { syscall1(SYS_SETGID, gid as usize) as i32 }
 }
 
+/// Sets the effective user ID of the calling process.
+///
+/// Implemented via `setresuid(-1, euid, -1)` matching the Linux x86-64 C library convention.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation via `setresuid`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn seteuid(euid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETRESUID syscall with ruid and suid set to -1 (u32::MAX).
+    unsafe { setresuid(u32::MAX, euid, u32::MAX) }
+}
+
+/// Sets the effective group ID of the calling process.
+///
+/// Implemented via `setresgid(-1, egid, -1)` matching the Linux x86-64 C library convention.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation via `setresgid`.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setegid(egid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETRESGID syscall with rgid and sgid set to -1 (u32::MAX).
+    unsafe { setresgid(u32::MAX, egid, u32::MAX) }
+}
+
+/// Sets the real, effective, and saved user IDs of the calling process.
+///
+/// An argument value of `u32::MAX` (`-1`) indicates that the corresponding ID should remain unchanged.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setresuid(ruid: u32, euid: u32, suid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETRESUID syscall.
+    unsafe { syscall3(SYS_SETRESUID, ruid as usize, euid as usize, suid as usize) as i32 }
+}
+
+/// Retrieves the real, effective, and saved user IDs of the calling process.
+///
+/// Non-null pointers will receive the respective ID values. NULL pointers are permitted and skipped.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Non-null destination pointers must refer to valid writable user memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getresuid(ruid: *mut u32, euid: *mut u32, suid: *mut u32) -> i32 {
+    // SAFETY: Issues SYS_GETRESUID syscall.
+    unsafe { syscall3(SYS_GETRESUID, ruid as usize, euid as usize, suid as usize) as i32 }
+}
+
+/// Sets the real, effective, and saved group IDs of the calling process.
+///
+/// An argument value of `u32::MAX` (`-1`) indicates that the corresponding ID should remain unchanged.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Direct system call invocation.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn setresgid(rgid: u32, egid: u32, sgid: u32) -> i32 {
+    // SAFETY: Issues SYS_SETRESGID syscall.
+    unsafe { syscall3(SYS_SETRESGID, rgid as usize, egid as usize, sgid as usize) as i32 }
+}
+
+/// Retrieves the real, effective, and saved group IDs of the calling process.
+///
+/// Non-null pointers will receive the respective ID values. NULL pointers are permitted and skipped.
+/// Returns 0 on success, or a negative error code.
+///
+/// # Safety
+///
+/// Non-null destination pointers must refer to valid writable user memory.
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn getresgid(rgid: *mut u32, egid: *mut u32, sgid: *mut u32) -> i32 {
+    // SAFETY: Issues SYS_GETRESGID syscall.
+    unsafe { syscall3(SYS_GETRESGID, rgid as usize, egid as usize, sgid as usize) as i32 }
+}
+
 /// Tests whether a file descriptor refers to a terminal.
 ///
 /// Returns 1 if `fd` refers to a terminal, 0 otherwise.
