@@ -35,7 +35,7 @@ jobs:
         if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'ci:full')
         run: cargo fmt --all -- --check
       - name: clippy host crates
-        run: cargo clippy -p posix-abi -p xtask --all-targets -- -D warnings
+        run: cargo clippy -p posix-abi -p mm-core -p xtask --all-targets -- -D warnings
       - name: clippy kernel
         env:
           RUSTFLAGS: "-C relocation-model=static -C code-model=kernel"
@@ -57,7 +57,7 @@ jobs:
       - name: doc coverage host crates
         env:
           RUSTDOCFLAGS: "-D missing-docs -D warnings"
-        run: cargo doc --no-deps -p posix-abi -p xtask
+        run: cargo doc --no-deps -p posix-abi -p mm-core -p xtask
       - name: doc coverage kernel
         env:
           RUSTDOCFLAGS: "-D missing-docs -D warnings"

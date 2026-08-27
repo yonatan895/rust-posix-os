@@ -1,11 +1,9 @@
 [package]
-name = "kernel"
+name = "mm-core"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
 [dependencies]
-posix-abi = { path = "../libs/posix-abi" }
-mm-core = { path = "../libs/mm-core" }
-log = "0.4"
+posix-abi = { path = "../posix-abi" }

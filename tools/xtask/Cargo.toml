@@ -7,3 +7,4 @@ license.workspace = true
 
 [dependencies]
 posix-abi = { path = "../../libs/posix-abi" }
+mm-core = { path = "../../libs/mm-core" }

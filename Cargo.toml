@@ -2,6 +2,7 @@
 members = [
     "kernel",
     "libs/posix-abi",
+    "libs/mm-core",
     "libs/libc",
     "userland/init",
     "userland/shell",
