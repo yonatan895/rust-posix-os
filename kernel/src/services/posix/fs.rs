@@ -507,28 +507,7 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
         return -(EBUSY as isize);
     }
 
-    if norm_old == norm_new {
-        // POSIX specification: rename to same path is a no-op if source exists
-        return match resolve_path_with_cwd(&cwd, oldpath) {
-            Ok(_) => 0,
-            Err(err) => -(err as isize),
-        };
-    }
-
-    // POSIX directory cycle prevention: new_path cannot have old_path as prefix
-    let prefix = alloc::format!("{}/", norm_old);
-    if norm_new.starts_with(&prefix) {
-        log_audit_event(
-            pid,
-            uid,
-            AUDIT_TYPE_FILE_MODIFY,
-            -EINVAL,
-            newpath,
-            "Rename failed (directory cycle detected)",
-        );
-        return -(EINVAL as isize);
-    }
-
+    // 1. Resolve source parent and basename first (guarantees ENOENT if source does not exist)
     let (old_parent, old_basename) = match resolve_parent_and_basename_with_cwd(&cwd, oldpath) {
         Ok(res) => res,
         Err(err) => {
@@ -543,6 +522,44 @@ pub fn sys_rename(oldpath_ptr: *const u8, newpath_ptr: *const u8) -> isize {
             return -(err as isize);
         }
     };
+
+    let source_inode = match old_parent.lookup(&old_basename) {
+        Ok(inode) => inode,
+        Err(err) => {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                -err,
+                newpath,
+                "Rename failed (source lookup)",
+            );
+            return -(err as isize);
+        }
+    };
+
+    // 2. Same-path no-op according to POSIX.1-2024 (source verified to exist)
+    if norm_old == norm_new {
+        return 0;
+    }
+
+    // 3. Directory cycle prevention: only evaluated when source is a directory
+    if source_inode.file_type() == FileType::Directory {
+        let prefix = alloc::format!("{}/", norm_old);
+        if norm_new.starts_with(&prefix) {
+            log_audit_event(
+                pid,
+                uid,
+                AUDIT_TYPE_FILE_MODIFY,
+                -EINVAL,
+                newpath,
+                "Rename failed (directory cycle detected)",
+            );
+            return -(EINVAL as isize);
+        }
+    }
+
+    // 4. Resolve destination parent and basename
     let (new_parent, new_basename) = match resolve_parent_and_basename_with_cwd(&cwd, newpath) {
         Ok(res) => res,
         Err(err) => {

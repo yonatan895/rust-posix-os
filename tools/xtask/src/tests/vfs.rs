@@ -295,7 +295,9 @@ fn test_vfs_atomic_rename() {
                 }
                 if source_type == NodeType::Dir
                     && target_type == NodeType::Dir
-                    && !self.nodes.get(&target_id).unwrap().entries.is_empty()
+                    && (target_id == old_parent
+                        || target_id == new_parent
+                        || !self.nodes.get(&target_id).unwrap().entries.is_empty())
                 {
                     return Err(ENOTEMPTY);
                 }
@@ -371,7 +373,20 @@ fn test_vfs_atomic_rename() {
         "Source directory must remain intact on ENOTEMPTY"
     );
 
-    // 7. Directory cycle prevention check logic
+    // 7. Rename directory onto own parent alias -> ENOTEMPTY without deadlock
+    let sub_in_nested = fs.create_dir(nested_dir, "sub_dir");
+    assert_eq!(
+        fs.rename(nested_dir, "sub_dir", dir_a, "nested"),
+        Err(ENOTEMPTY)
+    );
+    let nested_entries = &fs.nodes.get(&nested_dir).unwrap().entries;
+    assert_eq!(
+        nested_entries.get("sub_dir"),
+        Some(&sub_in_nested),
+        "Source subdirectory must remain intact on alias ENOTEMPTY"
+    );
+
+    // 8. Directory cycle prevention check logic
     let check_cycle = |old_path: &str, new_path: &str| -> Result<(), i32> {
         let prefix = format!("{}/", old_path);
         if new_path.starts_with(&prefix) {

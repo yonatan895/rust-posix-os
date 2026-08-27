@@ -6,6 +6,7 @@ use alloc::collections::BTreeMap;
 use alloc::string::{String, ToString};
 use alloc::sync::Arc;
 use alloc::vec::Vec;
+use core::sync::atomic::{AtomicUsize, Ordering};
 use posix_abi::*;
 
 /// In-memory directory inode storing entries and subdirectories in memory maps.
@@ -14,6 +15,8 @@ pub struct RamFsDir {
     pub entries: SpinLock<BTreeMap<String, Arc<dyn Inode>>>,
     /// Mapping of entry names to strongly-typed child directory inodes.
     pub subdirs: SpinLock<BTreeMap<String, Arc<RamFsDir>>>,
+    /// Atomic count of directory entries for lock-free emptiness checks (ADR-0002 L6).
+    pub entry_count: AtomicUsize,
     /// POSIX file permission mode bits.
     pub mode: SpinLock<u16>,
     /// Owner user ID.
@@ -33,6 +36,7 @@ impl RamFsDir {
         Arc::new(Self {
             entries: SpinLock::new(BTreeMap::new()),
             subdirs: SpinLock::new(BTreeMap::new()),
+            entry_count: AtomicUsize::new(0),
             mode: SpinLock::new(mode),
             uid: SpinLock::new(uid),
             gid: SpinLock::new(gid),
@@ -41,7 +45,9 @@ impl RamFsDir {
 
     /// Adds a child inode under `name` to this directory.
     pub fn add_child(&self, name: &str, inode: Arc<dyn Inode>) {
-        self.entries.lock().insert(name.to_string(), inode);
+        if self.entries.lock().insert(name.to_string(), inode).is_none() {
+            self.entry_count.fetch_add(1, Ordering::Release);
+        }
     }
 
     /// Retrieves an existing subdirectory or creates and inserts a new one if absent.
@@ -53,7 +59,9 @@ impl RamFsDir {
         }
         let new_dir = RamFsDir::new();
         subdirs.insert(name.to_string(), new_dir.clone());
-        entries.insert(name.to_string(), new_dir.clone());
+        if entries.insert(name.to_string(), new_dir.clone()).is_none() {
+            self.entry_count.fetch_add(1, Ordering::Release);
+        }
         new_dir
     }
 }
@@ -112,6 +120,7 @@ impl Inode for RamFsDir {
         }
         let file = RamFsFile::new_with_creds(Vec::new(), mode, uid, gid);
         entries.insert(name.to_string(), file.clone());
+        self.entry_count.fetch_add(1, Ordering::Release);
         Ok(file)
     }
 
@@ -125,6 +134,7 @@ impl Inode for RamFsDir {
             .lock()
             .insert(name.to_string(), new_dir.clone());
         entries.insert(name.to_string(), new_dir.clone());
+        self.entry_count.fetch_add(1, Ordering::Release);
         Ok(new_dir)
     }
 
@@ -132,6 +142,7 @@ impl Inode for RamFsDir {
         let mut entries = self.entries.lock();
         if entries.remove(name).is_some() {
             self.subdirs.lock().remove(name);
+            self.entry_count.fetch_sub(1, Ordering::Release);
             Ok(())
         } else {
             Err(ENOENT)
@@ -140,11 +151,12 @@ impl Inode for RamFsDir {
 
     fn link_entry(&self, name: &str, inode: Arc<dyn Inode>) -> Result<(), i32> {
         let mut entries = self.entries.lock();
-        if entries.contains_key(name) {
-            entries.remove(name);
+        let was_absent = entries.insert(name.to_string(), inode).is_none();
+        if was_absent {
+            self.entry_count.fetch_add(1, Ordering::Release);
+        } else {
             self.subdirs.lock().remove(name);
         }
-        entries.insert(name.to_string(), inode);
         Ok(())
     }
 
@@ -184,12 +196,14 @@ impl Inode for RamFsDir {
                 if source.file_type() == FileType::Directory
                     && target.file_type() == FileType::Directory
                 {
-                    let is_non_empty = if let Some(target_dir) = target.as_ramfs_dir() {
-                        !target_dir.entries.lock().is_empty()
-                    } else {
-                        !target.readdir()?.is_empty()
-                    };
-                    if is_non_empty {
+                    if let Some(target_dir) = target.as_ramfs_dir() {
+                        // Check for alias (self) or non-empty directory via atomic count lock-free
+                        if core::ptr::eq(self, target_dir)
+                            || target_dir.entry_count.load(Ordering::Acquire) > 0
+                        {
+                            return Err(ENOTEMPTY);
+                        }
+                    } else if !target.readdir()?.is_empty() {
                         return Err(ENOTEMPTY);
                     }
                 }
@@ -198,12 +212,15 @@ impl Inode for RamFsDir {
             let inode = entries.remove(old_name).unwrap();
             let subdir = subdirs.remove(old_name);
 
-            entries.remove(new_name);
+            let replaced = entries.remove(new_name).is_some();
             subdirs.remove(new_name);
 
             entries.insert(new_name.to_string(), inode);
             if let Some(sd) = subdir {
                 subdirs.insert(new_name.to_string(), sd);
+            }
+            if replaced {
+                self.entry_count.fetch_sub(1, Ordering::Release);
             }
             Ok(())
         } else {
@@ -247,12 +264,15 @@ impl Inode for RamFsDir {
                 if source.file_type() == FileType::Directory
                     && target.file_type() == FileType::Directory
                 {
-                    let is_non_empty = if let Some(target_dir) = target.as_ramfs_dir() {
-                        !target_dir.entries.lock().is_empty()
-                    } else {
-                        !target.readdir()?.is_empty()
-                    };
-                    if is_non_empty {
+                    if let Some(target_dir) = target.as_ramfs_dir() {
+                        // Check for aliases (self or new_parent) or non-empty directory via atomic count lock-free
+                        if core::ptr::eq(self, target_dir)
+                            || core::ptr::eq(new_ramfs_dir, target_dir)
+                            || target_dir.entry_count.load(Ordering::Acquire) > 0
+                        {
+                            return Err(ENOTEMPTY);
+                        }
+                    } else if !target.readdir()?.is_empty() {
                         return Err(ENOTEMPTY);
                     }
                 }
@@ -260,13 +280,17 @@ impl Inode for RamFsDir {
 
             let inode = old_entries.remove(old_name).unwrap();
             let subdir = old_subdirs.remove(old_name);
+            self.entry_count.fetch_sub(1, Ordering::Release);
 
-            new_entries.remove(new_name);
+            let replaced = new_entries.remove(new_name).is_some();
             new_subdirs.remove(new_name);
 
             new_entries.insert(new_name.to_string(), inode);
             if let Some(sd) = subdir {
                 new_subdirs.insert(new_name.to_string(), sd);
+            }
+            if !replaced {
+                new_ramfs_dir.entry_count.fetch_add(1, Ordering::Release);
             }
             Ok(())
         }

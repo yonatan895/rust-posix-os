@@ -136,13 +136,16 @@ pub trait Inode: Send + Sync {
     }
 
     /// Renames a child entry `old_name` within this directory into `new_name` in `new_parent`.
+    ///
+    /// Defaults to returning `-EROFS` (read-only filesystem) for filesystems or pseudo-nodes
+    /// that do not support directory mutation (e.g. devfs, procfs).
     fn rename(
         &self,
         _old_name: &str,
         _new_parent: &Arc<dyn Inode>,
         _new_name: &str,
     ) -> Result<(), i32> {
-        Err(ENOTDIR)
+        Err(EROFS)
     }
 
     /// Polls the inode for readiness flags without blocking.
@@ -161,6 +164,10 @@ pub trait Inode: Send + Sync {
     }
 
     /// Downcasts the inode to a RAM filesystem directory if applicable.
+    ///
+    /// This RTTI-style downcast is a pragmatic mechanism for the single-mount
+    /// ramfs writable filesystem and will be superseded when generic multi-filesystem
+    /// writable abstraction (#73) is introduced.
     fn as_ramfs_dir(&self) -> Option<&crate::services::vfs::ramfs::RamFsDir> {
         None
     }
