@@ -261,6 +261,54 @@ unsafe fn run_efault_hammer_tests() {
         );
     }
 
+    // 5b. mmap partial failure rollback test:
+    // Query initial free memory, attempt an mmap exceeding total system memory,
+    // verify -ENOMEM is returned, verify freeram is completely unchanged (no frame leak),
+    // and verify subsequent mmap succeeds cleanly (bump pointer valid).
+    let mut si_before = Sysinfo::default();
+    // SAFETY: sysinfo call with valid pointer to local stack struct.
+    let s_ret1 = unsafe { sysinfo(&mut si_before) };
+    if s_ret1 == 0 && si_before.totalram > 0 {
+        // Request more memory than total system RAM (totalram + 1 GiB)
+        let excessive_len = (si_before.totalram as usize).saturating_add(1024 * 1024 * 1024);
+        // SAFETY: Calling mmap with length exceeding physical RAM capacity.
+        let failed_mmap = unsafe {
+            mmap(
+                core::ptr::null_mut(),
+                excessive_len,
+                PROT_READ | PROT_WRITE,
+                MAP_PRIVATE | MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        // SAFETY: Validating mmap return code against expected ENOMEM error.
+        unsafe {
+            assert_eq_errno(
+                failed_mmap as isize,
+                -(ENOMEM as isize),
+                b"mmap(excessive_len)\0".as_ptr(),
+            );
+        }
+
+        let mut si_after = Sysinfo::default();
+        // SAFETY: sysinfo call with valid pointer to local stack struct.
+        let s_ret2 = unsafe { sysinfo(&mut si_after) };
+        if s_ret2 == 0 {
+            if si_after.freeram != si_before.freeram {
+                // SAFETY: Diagnostic output on physical frame leak.
+                unsafe {
+                    printf(
+                        b"[FAIL] mmap failure leaked frames: before=%d, after=%d\n\0".as_ptr(),
+                        si_before.freeram as i32,
+                        si_after.freeram as i32,
+                    );
+                }
+                FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    }
+
     // 6. Page boundary straddling test
     // Note: Relies on bump allocation in mmap_next_vaddr ensuring page+4096 is unmapped.
     // SAFETY: Allocating a single page and referencing the boundary at page + 4090.
