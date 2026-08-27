@@ -432,9 +432,19 @@ fn test_mmap_rollback_on_partial_failure() {
         &mut vm_fault,
         |_| {},
     );
-    assert_eq!(res_fault, Err(ENOMEM), "Mid-loop frame exhaustion must return -ENOMEM");
-    assert_eq!(mmap_next_fault, DEFAULT_MMAP_BASE, "mmap_next_vaddr rolled back");
-    assert!(vm_fault.mapped_pages.is_empty(), "Partially mapped pages unmapped");
+    assert_eq!(
+        res_fault,
+        Err(ENOMEM),
+        "Mid-loop frame exhaustion must return -ENOMEM"
+    );
+    assert_eq!(
+        mmap_next_fault, DEFAULT_MMAP_BASE,
+        "mmap_next_vaddr rolled back"
+    );
+    assert!(
+        vm_fault.mapped_pages.is_empty(),
+        "Partially mapped pages unmapped"
+    );
 
     // 4. Mid-loop Page Table Allocation (map_page) Failure Test:
     // Simulates map_page failing at page 3 of 5 due to intermediate page-table exhaustion
@@ -460,9 +470,18 @@ fn test_mmap_rollback_on_partial_failure() {
         |_| {},
     );
     assert_eq!(res_pt, Err(ENOMEM), "map_page failure must return -ENOMEM");
-    assert_eq!(mmap_next_pt, DEFAULT_MMAP_BASE, "mmap_next_vaddr rolled back on map_page failure");
-    assert_eq!(pmm_pt_fault.free_frames, 8, "Frames 1 and 2 unmapped, frame 3 freed on error");
-    assert!(vm_pt_fault.mapped_pages.is_empty(), "Partially mapped pages unmapped");
+    assert_eq!(
+        mmap_next_pt, DEFAULT_MMAP_BASE,
+        "mmap_next_vaddr rolled back on map_page failure"
+    );
+    assert_eq!(
+        pmm_pt_fault.free_frames, 8,
+        "Frames 1 and 2 unmapped, frame 3 freed on error"
+    );
+    assert!(
+        vm_pt_fault.mapped_pages.is_empty(),
+        "Partially mapped pages unmapped"
+    );
 
     // 5. Successful Allocation after Rollback:
     // Performs a successful 4-page mmap starting at the rolled-back base
