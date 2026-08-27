@@ -72,6 +72,10 @@ pub fn sys_epoll_wait(
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
+    // Snapshot epoll handle and fd table under a single short Process lock acquisition.
+    // This strictly enforces ADR-0002 Rule L3 (no Process locks held during VFS operations).
+    // Note: Per-interest fd snapshotting will optimize this table clone once lightweight
+    // task/fd snapshots are introduced (#85).
     let (ep_handle, fds) = {
         let proc = proc_lock.lock();
         let ep_handle = match proc.get_fd(epfd) {

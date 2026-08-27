@@ -107,12 +107,14 @@ pub fn sys_chdir(path_ptr: *const u8) -> isize {
         None => return -(ESRCH as isize),
     };
 
-    let (target_norm, cwd) = {
+    let cwd = {
         let proc = proc_lock.lock();
-        (normalize_path(&proc.cwd, path), proc.cwd.clone())
+        proc.cwd.clone()
     };
 
-    let inode = match resolve_path(&cwd, path) {
+    let target_norm = normalize_path(&cwd, path);
+
+    let inode = match resolve_path("/", &target_norm) {
         Ok(i) => i,
         Err(err) => return -(err as isize),
     };

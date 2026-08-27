@@ -95,7 +95,7 @@ jobs:
       - name: Enforce ADR-0002 L3 (No Process lock in VFS)
         run: |
           set -euo pipefail
-          if grep -RnE --include='*.rs' 'get_current_process' kernel/src/services/vfs/; then
+          if grep -RnE --include='*.rs' 'get_current_process|PROCESS_TABLE|services::process' kernel/src/services/vfs/; then
             echo "::error::VFS calling into Process/PROCESS_TABLE violates ADR-0002 L3."
             echo "::error::Pass cwd and creds (VfsCreds) as arguments instead."
             exit 1

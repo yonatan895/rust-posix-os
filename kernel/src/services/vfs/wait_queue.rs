@@ -13,11 +13,11 @@ use alloc::vec::Vec;
 /// Callers collect woken PIDs under their local lock (e.g. Inode SpinLock),
 /// drop that lock, and pass the PIDs to the scheduler-tier wake function
 /// (`crate::services::scheduler::wake_tasks`), preserving the
-/// `PROCESS_TABLE -> Scheduler -> VFS -> Inode` acquisition hierarchy.
+/// `Process Table -> Scheduler -> VFS -> Inode` acquisition hierarchy.
 ///
 /// # IRQ Safety (ADR-0002 L5)
 ///
-/// Waking tasks acquires `PROCESS_TABLE` at the scheduler tier and must never
+/// Waking tasks acquires process table locks at the scheduler tier and must never
 /// be called from IRQ context.
 #[derive(Debug, Default)]
 pub struct WaitQueue {

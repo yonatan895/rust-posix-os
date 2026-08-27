@@ -141,23 +141,22 @@ impl Process {
         }
     }
 
-    /// Loads and executes a new ELF binary in this process's address space.
-    pub fn exec(&mut self, path: &str, argv: &[&str], envp: &[&str]) -> Result<(), i32> {
-        let inode = crate::services::vfs::resolve_path(&self.cwd, path)?;
-        let stat = inode.stat()?;
-        let mut elf_data = alloc::vec![0u8; stat.st_size as usize];
-        inode.read(0, &mut elf_data)?;
-
-        let mut new_vm = VmSpace::new().ok_or(posix_abi::ENOMEM)?;
-        let loaded =
-            load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
-
+    /// Commits a loaded ELF execution image, updating address space, entry point, user stack,
+    /// and credentials according to setuid/setgid binary mode bits.
+    pub fn apply_exec(
+        &mut self,
+        loaded: crate::services::process::elf::LoadedElf,
+        new_vm: VmSpace,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) {
         // Update effective and saved credentials on exec (setuid/setgid binary support)
-        if (stat.st_mode & posix_abi::S_ISUID) != 0 {
-            self.euid = stat.st_uid;
+        if (mode & posix_abi::S_ISUID) != 0 {
+            self.euid = uid;
         }
-        if (stat.st_mode & posix_abi::S_ISGID) != 0 {
-            self.egid = stat.st_gid;
+        if (mode & posix_abi::S_ISGID) != 0 {
+            self.egid = gid;
         }
         self.suid = self.euid;
         self.sgid = self.egid;
@@ -180,7 +179,20 @@ impl Process {
         );
         self.saved_kernel_rsp.store(initial_rsp, Ordering::Release);
         self.has_started = true;
+    }
 
+    /// Loads and executes a new ELF binary in this process's address space.
+    pub fn exec(&mut self, path: &str, argv: &[&str], envp: &[&str]) -> Result<(), i32> {
+        let inode = crate::services::vfs::resolve_path(&self.cwd, path)?;
+        let stat = inode.stat()?;
+        let mut elf_data = alloc::vec![0u8; stat.st_size as usize];
+        inode.read(0, &mut elf_data)?;
+
+        let mut new_vm = VmSpace::new().ok_or(posix_abi::ENOMEM)?;
+        let loaded =
+            load_elf(&elf_data, &mut new_vm, argv, envp).map_err(|_| posix_abi::ENOEXEC)?;
+
+        self.apply_exec(loaded, new_vm, stat.st_mode, stat.st_uid, stat.st_gid);
         Ok(())
     }
 }

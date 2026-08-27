@@ -71,8 +71,7 @@ impl Inode for PipeReadEnd {
     }
 
     fn read(&self, offset: usize, buf: &mut [u8]) -> Result<usize, i32> {
-        let pid = crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
-        self.read_with_flags(offset, buf, 0, pid)
+        self.read_with_flags(offset, buf, 0, 0)
     }
 
     fn read_with_flags(
@@ -187,8 +186,7 @@ impl Inode for PipeWriteEnd {
     }
 
     fn write(&self, offset: usize, buf: &[u8]) -> Result<usize, i32> {
-        let pid = crate::services::process::CURRENT_PID.load(core::sync::atomic::Ordering::Relaxed);
-        self.write_with_flags(offset, buf, 0, pid)
+        self.write_with_flags(offset, buf, 0, 0)
     }
 
     fn write_with_flags(
