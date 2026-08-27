@@ -23,6 +23,7 @@ name = "kernel"
 version = "0.1.0"
 dependencies = [
  "log",
+ "mm-core",
  "posix-abi",
 ]
 
@@ -40,6 +41,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
+name = "mm-core"
+version = "0.1.0"
+dependencies = [
+ "posix-abi",
+]
+
+[[package]]
 name = "posix-abi"
 version = "0.1.0"
 
@@ -55,5 +63,6 @@ dependencies = [
 name = "xtask"
 version = "0.1.0"
 dependencies = [
+ "mm-core",
  "posix-abi",
 ]

@@ -343,7 +343,10 @@ impl VmSpace {
     pub fn unmap_range(&mut self, start_virt: usize, count: usize) {
         let aligned_start = start_virt & !0xFFF;
         for i in 0..count {
-            if let Some(page_vaddr) = aligned_start.checked_add(i * PAGE_SIZE) {
+            if let Some(page_vaddr) = i
+                .checked_mul(PAGE_SIZE)
+                .and_then(|offset| aligned_start.checked_add(offset))
+            {
                 self.unmap_page(page_vaddr);
             }
         }
@@ -378,7 +381,14 @@ impl VmSpace {
         }
 
         for (pages_mapped, i) in (0..page_count).enumerate() {
-            let virt = match aligned_start.checked_add(i * PAGE_SIZE) {
+            let offset = match i.checked_mul(PAGE_SIZE) {
+                Some(off) => off,
+                None => {
+                    self.unmap_range(aligned_start, pages_mapped);
+                    return Err("Virtual address overflow");
+                }
+            };
+            let virt = match aligned_start.checked_add(offset) {
                 Some(v) => v,
                 None => {
                     self.unmap_range(aligned_start, pages_mapped);

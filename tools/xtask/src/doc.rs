@@ -13,9 +13,9 @@ use std::process::Command;
 pub fn run_doc(open: bool) {
     println!("[xtask] Verifying documentation coverage (-D missing-docs -D warnings)...");
 
-    // 1. Target Crates: posix-abi, libc, kernel, init, shell, coreutils
+    // 1. Target Crates: posix-abi, mm-core, libc, kernel, init, shell, coreutils
     println!(
-        "[xtask] Building unified docs for target crates (posix-abi, libc, kernel, init, shell, coreutils)..."
+        "[xtask] Building unified docs for target crates (posix-abi, mm-core, libc, kernel, init, shell, coreutils)..."
     );
     let status = Command::new("cargo")
         .args([
@@ -23,6 +23,8 @@ pub fn run_doc(open: bool) {
             "--no-deps",
             "-p",
             "posix-abi",
+            "-p",
+            "mm-core",
             "-p",
             "libc",
             "-p",
@@ -273,6 +275,17 @@ fn generate_doc_portal() {
                     <p class="card-desc">Portable POSIX ABI definitions, system call numbers, standard structures (Stat, Timespec, Sysinfo, Termios, Dirent64), bitflags, and errno error codes.</p>
                 </div>
                 <div class="card-footer">View posix-abi docs &rarr;</div>
+            </a>
+
+            <a href="mm_core/index.html" class="card">
+                <div>
+                    <div class="card-header">
+                        <span class="card-title">mm-core</span>
+                        <span class="badge badge-abi">Memory Core</span>
+                    </div>
+                    <p class="card-desc">Pure, host-testable memory allocation and virtual memory mapping state machine with FrameAllocator/PageMapper abstractions and atomic rollback.</p>
+                </div>
+                <div class="card-footer">View mm-core docs &rarr;</div>
             </a>
 
             <a href="libc/index.html" class="card">

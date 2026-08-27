@@ -299,9 +299,10 @@ unsafe fn run_efault_hammer_tests() {
                 // SAFETY: Diagnostic output on physical frame leak.
                 unsafe {
                     printf(
-                        b"[FAIL] mmap failure leaked frames: before=%d, after=%d\n\0".as_ptr(),
-                        si_before.freeram as i32,
-                        si_after.freeram as i32,
+                        b"[FAIL] mmap failure leaked frames: before=%u kB, after=%u kB\n\0"
+                            .as_ptr(),
+                        (si_before.freeram / 1024) as u32,
+                        (si_after.freeram / 1024) as u32,
                     );
                 }
                 FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
