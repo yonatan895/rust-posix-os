@@ -408,7 +408,10 @@ fn test_mmap_rollback_on_partial_failure() {
     );
     assert_eq!(res, Err(ENOMEM), "Oversized mmap must fail with -ENOMEM");
     assert_eq!(pmm.free_frames, 5, "PMM free frames unchanged");
-    assert_eq!(mmap_next_vaddr, DEFAULT_MMAP_BASE, "mmap_next_vaddr unchanged");
+    assert_eq!(
+        mmap_next_vaddr, DEFAULT_MMAP_BASE,
+        "mmap_next_vaddr unchanged"
+    );
     assert!(vm.mapped_pages.is_empty());
 
     // 3. Mid-loop Frame Exhaustion Test: Pre-check passes (10 frames reported), but allocator fails at page 3 of 6

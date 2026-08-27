@@ -312,8 +312,14 @@ mod tests {
         );
 
         assert_eq!(res, Err(ENOMEM));
-        assert_eq!(mmap_next, DEFAULT_MMAP_BASE, "mmap_next_vaddr must be rolled back");
-        assert!(mapper.mapped.is_empty(), "All partially mapped pages must be unmapped");
+        assert_eq!(
+            mmap_next, DEFAULT_MMAP_BASE,
+            "mmap_next_vaddr must be rolled back"
+        );
+        assert!(
+            mapper.mapped.is_empty(),
+            "All partially mapped pages must be unmapped"
+        );
     }
 
     #[test]
@@ -342,9 +348,18 @@ mod tests {
         );
 
         assert_eq!(res, Err(ENOMEM));
-        assert_eq!(mmap_next, DEFAULT_MMAP_BASE, "mmap_next_vaddr must be rolled back on map_page failure");
-        assert_eq!(pmm.free_frames, 8, "Frames 1 and 2 unmapped, frame 3 freed on map_page error");
-        assert!(mapper.mapped.is_empty(), "All partially mapped pages must be unmapped");
+        assert_eq!(
+            mmap_next, DEFAULT_MMAP_BASE,
+            "mmap_next_vaddr must be rolled back on map_page failure"
+        );
+        assert_eq!(
+            pmm.free_frames, 8,
+            "Frames 1 and 2 unmapped, frame 3 freed on map_page error"
+        );
+        assert!(
+            mapper.mapped.is_empty(),
+            "All partially mapped pages must be unmapped"
+        );
     }
 
     #[test]
