@@ -1,7 +1,7 @@
 //! POSIX Process Lifecycle, Signals, and Credentials System Calls.
 
 use super::{copy_user_path, map_user_error};
-use crate::ostd::mm::{UserPtr, USER_STR_MAX};
+use crate::ostd::mm::{USER_STR_MAX, UserPtr};
 use crate::ostd::task::{SyscallRegisters, TrapFrame};
 use crate::services::ipc::SIGNALS;
 use crate::services::process::*;

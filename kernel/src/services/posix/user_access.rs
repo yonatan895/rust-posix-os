@@ -6,7 +6,7 @@
 //! the only place that copies a NUL-terminated user path into a kernel
 //! buffer.
 
-use crate::ostd::mm::{copy_cstr_from_user, UserAccessError, USER_STR_MAX};
+use crate::ostd::mm::{USER_STR_MAX, UserAccessError, copy_cstr_from_user};
 use posix_abi::*;
 
 /// Translates low-level OSTD `UserAccessError` codes to standard POSIX errno values.
