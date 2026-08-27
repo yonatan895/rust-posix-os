@@ -45,7 +45,8 @@ impl RamFsDir {
 
     /// Adds a child inode under `name` to this directory.
     pub fn add_child(&self, name: &str, inode: Arc<dyn Inode>) {
-        if self.entries.lock().insert(name.to_string(), inode).is_none() {
+        let mut entries = self.entries.lock();
+        if entries.insert(name.to_string(), inode).is_none() {
             self.entry_count.fetch_add(1, Ordering::Release);
         }
     }
