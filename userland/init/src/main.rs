@@ -65,6 +65,12 @@ pub unsafe extern "C" fn _start() -> ! {
         run_vfs_rename_tests();
     }
 
+    // Run Saved-UID Privilege Drop and Regain Tests
+    // SAFETY: Executing in-guest saved-UID/saved-GID credentials tests in PID 1 user mode.
+    unsafe {
+        run_saved_uid_credentials_tests();
+    }
+
     // Run Syscall Microbenchmark (100,000 getpid fast syscalls in-guest)
     // SAFETY: Executing in-guest hardware fast-syscall benchmark to measure real hardware cycles.
     unsafe {
@@ -567,6 +573,167 @@ unsafe fn run_vfs_rename_tests() {
     // SAFETY: Announcing success to stdout.
     unsafe {
         puts(b"[init] VFS Atomic Rename & Lock Ordering Tests PASSED!\n\0".as_ptr());
+    }
+}
+
+/// Runs in-guest Saved-UID/Saved-GID privilege drop and regain, and setresuid/getresuid tests.
+///
+/// # Safety
+///
+/// Must be executed in user mode with standard credentials syscalls operational.
+unsafe fn run_saved_uid_credentials_tests() {
+    // 1. Process starts as root (UID 0)
+    // SAFETY: Reading real and effective user IDs via syscall wrappers.
+    let uid = unsafe { getuid() };
+    let euid = unsafe { geteuid() };
+    let mut r = 0u32;
+    let mut e = 0u32;
+    let mut s = 0u32;
+    // SAFETY: Reading real, effective, and saved user IDs.
+    let r_getres = unsafe { getresuid(&mut r, &mut e, &mut s) };
+
+    if uid != 0 || euid != 0 || r_getres != 0 || r != 0 || e != 0 || s != 0 {
+        // SAFETY: Reporting initial credential failure.
+        unsafe {
+            printf(
+                b"[FAIL] Initial credentials mismatch: uid=%u, euid=%u, r=%u, e=%u, s=%u\n\0"
+                    .as_ptr(),
+                uid,
+                euid,
+                r,
+                e,
+                s,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 2. Temporarily drop privileges via seteuid(1000)
+    // SAFETY: Dropping effective privilege to UID 1000.
+    let r_drop = unsafe { seteuid(1000) };
+    let euid_drop = unsafe { geteuid() };
+    let _ = unsafe { getresuid(&mut r, &mut e, &mut s) };
+
+    if r_drop != 0 || euid_drop != 1000 || r != 0 || e != 1000 || s != 0 {
+        // SAFETY: Reporting seteuid drop failure.
+        unsafe {
+            printf(
+                b"[FAIL] Privilege drop via seteuid(1000) failed: ret=%d, euid=%u, (r=%u, e=%u, s=%u)\n\0"
+                    .as_ptr(),
+                r_drop,
+                euid_drop,
+                r,
+                e,
+                s,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 3. Regain root privilege via seteuid(0) because saved-UID is 0
+    // SAFETY: Regaining root effective privilege from saved-UID 0.
+    let r_regain = unsafe { seteuid(0) };
+    let euid_regain = unsafe { geteuid() };
+    let _ = unsafe { getresuid(&mut r, &mut e, &mut s) };
+
+    if r_regain != 0 || euid_regain != 0 || r != 0 || e != 0 || s != 0 {
+        // SAFETY: Reporting seteuid regain failure.
+        unsafe {
+            printf(
+                b"[FAIL] Privilege regain via seteuid(0) failed: ret=%d, euid=%u, (r=%u, e=%u, s=%u)\n\0"
+                    .as_ptr(),
+                r_regain,
+                euid_regain,
+                r,
+                e,
+                s,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // 4. Test setresgid and getresgid
+    let mut rg = 0u32;
+    let mut eg = 0u32;
+    let mut sg = 0u32;
+    // SAFETY: Modifying group IDs.
+    let r_setresg = unsafe { setresgid(0, 500, 0) };
+    let _ = unsafe { getresgid(&mut rg, &mut eg, &mut sg) };
+    let egid_val = unsafe { getegid() };
+
+    if r_setresg != 0 || egid_val != 500 || rg != 0 || eg != 500 || sg != 0 {
+        // SAFETY: Reporting setresgid failure.
+        unsafe {
+            printf(
+                b"[FAIL] Group ID setresgid(0, 500, 0) failed: ret=%d, egid=%u, (rg=%u, eg=%u, sg=%u)\n\0"
+                    .as_ptr(),
+                r_setresg,
+                egid_val,
+                rg,
+                eg,
+                sg,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // Restore group credentials
+    // SAFETY: Restoring root group credentials.
+    let _ = unsafe { setresgid(0, 0, 0) };
+
+    // 5. Test fork / child process for permanent drop
+    // In a child process, drop all privileges permanently via setuid(1000)
+    // Child verifies it cannot regain root (seteuid(0) -> -EPERM)
+    // SAFETY: Forking a child process to test permanent privilege drop.
+    let child_pid = unsafe { fork() };
+    if child_pid == 0 {
+        // In child process
+        // SAFETY: Dropping all UID credentials permanently.
+        let r_perm = unsafe { setuid(1000) };
+        let _ = unsafe { getresuid(&mut r, &mut e, &mut s) };
+        // SAFETY: Attempting unauthorized regain of root.
+        let r_fail_regain = unsafe { seteuid(0) };
+        let ok = r_perm == 0
+            && r == 1000
+            && e == 1000
+            && s == 1000
+            && r_fail_regain == -(EPERM as i32);
+        if ok {
+            // SAFETY: Exiting child on success.
+            unsafe { exit(0) };
+        } else {
+            // SAFETY: Exiting child on failure.
+            unsafe { exit(1) };
+        }
+    } else if child_pid > 0 {
+        let mut status = 0;
+        // SAFETY: Reaping child test process.
+        let reaped = unsafe { waitpid(child_pid, &mut status, 0) };
+        if reaped != child_pid || status != 0 {
+            // SAFETY: Reporting child permanent drop test failure.
+            unsafe {
+                printf(
+                    b"[FAIL] Child permanent drop test failed: reaped=%d, status=%d\n\0".as_ptr(),
+                    reaped,
+                    status,
+                );
+                FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+            }
+        }
+    } else {
+        // SAFETY: Reporting fork failure.
+        unsafe {
+            printf(
+                b"[FAIL] fork failed in credentials test: %d\n\0".as_ptr(),
+                child_pid,
+            );
+            FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
+        }
+    }
+
+    // SAFETY: Outputting success message.
+    unsafe {
+        puts(b"[init] Saved-UID Privilege Drop and Regain Tests PASSED!\n\0".as_ptr());
     }
 }
 

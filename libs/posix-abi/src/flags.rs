@@ -225,6 +225,15 @@ pub const S_IFCHR: u32 = 0o020000;
 /// FIFO / named pipe special file type.
 pub const S_IFIFO: u32 = 0o010000;
 
+// Special Mode Bits (Set-UID, Set-GID, Sticky)
+
+/// Set user ID on execution (`0o4000`).
+pub const S_ISUID: u32 = 0o4000;
+/// Set group ID on execution (`0o2000`).
+pub const S_ISGID: u32 = 0o2000;
+/// Sticky bit (`0o1000`).
+pub const S_ISVTX: u32 = 0o1000;
+
 // Permission Bits
 
 /// Read, write, and execute permissions for file owner (`0o700`).

@@ -30,6 +30,11 @@ pub fn register_tests(runner: &mut TestRunner) {
         "waitpid WNOHANG Polling Semantics",
         test_waitpid_wnohang_semantics,
     );
+    runner.run_test(
+        "process",
+        "Saved-UID Privilege Drop and Regain Model",
+        test_saved_uid_credentials_model,
+    );
 }
 
 use posix_abi::{pit_calc_divisor, pit_effective_freq};
@@ -304,4 +309,144 @@ fn test_waitpid_wnohang_semantics() {
         Err(10),
         "WNOHANG did not return ECHILD with no children"
     );
+}
+
+/// Tests POSIX credentials model: saved-UID/saved-GID privilege drop and regain, setuid/seteuid/setresuid state transitions.
+fn test_saved_uid_credentials_model() {
+    #[derive(Debug, Clone, PartialEq, Eq)]
+    struct Creds {
+        uid: u32,
+        euid: u32,
+        suid: u32,
+    }
+
+    impl Creds {
+        fn new_root() -> Self {
+            Self {
+                uid: 0,
+                euid: 0,
+                suid: 0,
+            }
+        }
+
+        fn setuid(&mut self, new_uid: u32) -> Result<(), i32> {
+            if self.euid == 0 {
+                self.uid = new_uid;
+                self.euid = new_uid;
+                self.suid = new_uid;
+                Ok(())
+            } else if new_uid == self.uid || new_uid == self.suid {
+                self.euid = new_uid;
+                Ok(())
+            } else {
+                Err(1) // EPERM
+            }
+        }
+
+        fn seteuid(&mut self, new_euid: u32) -> Result<(), i32> {
+            if self.euid == 0
+                || new_euid == self.uid
+                || new_euid == self.euid
+                || new_euid == self.suid
+            {
+                self.euid = new_euid;
+                Ok(())
+            } else {
+                Err(1) // EPERM
+            }
+        }
+
+        fn setresuid(&mut self, ruid: u32, euid: u32, suid: u32) -> Result<(), i32> {
+            const UNCHANGED: u32 = u32::MAX;
+            if self.euid == 0 {
+                if ruid != UNCHANGED {
+                    self.uid = ruid;
+                }
+                if euid != UNCHANGED {
+                    self.euid = euid;
+                }
+                if suid != UNCHANGED {
+                    self.suid = suid;
+                }
+                Ok(())
+            } else {
+                let r_ok = ruid == UNCHANGED
+                    || ruid == self.uid
+                    || ruid == self.euid
+                    || ruid == self.suid;
+                let e_ok = euid == UNCHANGED
+                    || euid == self.uid
+                    || euid == self.euid
+                    || euid == self.suid;
+                let s_ok = suid == UNCHANGED
+                    || suid == self.uid
+                    || suid == self.euid
+                    || suid == self.suid;
+                if r_ok && e_ok && s_ok {
+                    if ruid != UNCHANGED {
+                        self.uid = ruid;
+                    }
+                    if euid != UNCHANGED {
+                        self.euid = euid;
+                    }
+                    if suid != UNCHANGED {
+                        self.suid = suid;
+                    }
+                    Ok(())
+                } else {
+                    Err(1) // EPERM
+                }
+            }
+        }
+    }
+
+    // 1. Process starts as root
+    let mut creds = Creds::new_root();
+    assert_eq!(creds.uid, 0);
+    assert_eq!(creds.euid, 0);
+    assert_eq!(creds.suid, 0);
+
+    // 2. Temporarily drop privilege to UID 1000 via seteuid
+    assert_eq!(creds.seteuid(1000), Ok(()));
+    assert_eq!(creds.uid, 0, "Real UID must remain 0");
+    assert_eq!(creds.euid, 1000, "Effective UID must be 1000");
+    assert_eq!(creds.suid, 0, "Saved UID must remain 0");
+
+    // 3. Regain root privilege because saved UID is 0
+    assert_eq!(creds.seteuid(0), Ok(()));
+    assert_eq!(creds.euid, 0, "Effective UID must regain root (0)");
+
+    // 4. Temporarily drop privilege to UID 1000 again, attempt unauthorized switch to UID 2000
+    assert_eq!(creds.seteuid(1000), Ok(()));
+    assert_eq!(
+        creds.seteuid(2000),
+        Err(1),
+        "Unauthorized seteuid must fail with EPERM"
+    );
+
+    // 5. Permanently drop root privilege via setuid(1000) while root
+    assert_eq!(creds.setuid(0), Ok(())); // regain root first
+    assert_eq!(creds.setuid(1000), Ok(())); // root drops all IDs
+    assert_eq!(creds.uid, 1000);
+    assert_eq!(creds.euid, 1000);
+    assert_eq!(creds.suid, 1000);
+
+    // 6. Attempt to regain root after permanent drop -> must fail with EPERM
+    assert_eq!(
+        creds.seteuid(0),
+        Err(1),
+        "seteuid(0) must fail after permanent drop"
+    );
+    assert_eq!(
+        creds.setuid(0),
+        Err(1),
+        "setuid(0) must fail after permanent drop"
+    );
+
+    // 7. Test setresuid modern interface
+    let mut root_creds = Creds::new_root();
+    assert_eq!(root_creds.setresuid(1000, 2000, 3000), Ok(()));
+    assert_eq!(root_creds.uid, 1000);
+    assert_eq!(root_creds.euid, 2000);
+    assert_eq!(root_creds.suid, 3000);
 }

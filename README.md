@@ -108,7 +108,7 @@ All syscall numbers follow the Linux x86-64 ABI for compatibility with musl/glib
 | 63 | `uname` | ✅ |
 | 79 | `getcwd` | ✅ |
 | 80 | `chdir` | ✅ |
-| 82 | `rename` | ✅ non-atomic (see [#88](https://github.com/yonatan895/rust-posix-os/issues/88)) |
+| 82 | `rename` | ✅ atomic with cycle prevention |
 | 83 | `mkdir` | ✅ |
 | 84 | `rmdir` | ✅ |
 | 87 | `unlink` | ✅ |
@@ -116,11 +116,17 @@ All syscall numbers follow the Linux x86-64 ABI for compatibility with musl/glib
 | 99 | `sysinfo` | ✅ |
 | 102 | `getuid` | ✅ |
 | 104 | `getgid` | ✅ |
-| 105 | `setuid` | ⚠️ saved-uid incomplete (see [#89](https://github.com/yonatan895/rust-posix-os/issues/89)) |
-| 106 | `setgid` | ⚠️ saved-gid incomplete |
+| 105 | `setuid` | ✅ POSIX.1-2017 with saved-uid |
+| 106 | `setgid` | ✅ POSIX.1-2017 with saved-gid |
 | 107 | `geteuid` | ✅ |
 | 108 | `getegid` | ✅ |
 | 110 | `getppid` | ✅ |
+| 115 | `seteuid` | ✅ |
+| 116 | `setegid` | ✅ |
+| 117 | `setresuid` | ✅ |
+| 118 | `getresuid` | ✅ |
+| 119 | `setresgid` | ✅ |
+| 120 | `getresgid` | ✅ |
 | 213 | `epoll_create` | ✅ |
 | 217 | `getdents64` | ✅ |
 | 228 | `clock_gettime` | ✅ |
