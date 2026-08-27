@@ -245,8 +245,7 @@ fn test_libc_small_object_allocator() {
 
             let mut old_capacity = 0;
             let mut is_small = false;
-            for i in 0..self.arena_count {
-                let rec = self.arena_records[i];
+            for rec in self.arena_records.iter().take(self.arena_count) {
                 if ptr >= rec.start && ptr < rec.end {
                     old_capacity = SIZE_CLASSES[rec.class_idx];
                     is_small = true;
