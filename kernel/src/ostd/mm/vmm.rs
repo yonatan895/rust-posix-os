@@ -5,7 +5,7 @@
 
 use super::address_space::AddressSpace;
 use super::flags::PageFlags;
-use super::pmm::{PAGE_SIZE, alloc_frame, free_frame};
+use super::pmm::{PAGE_SIZE, alloc_frame, free_frame, get_pmm_stats};
 use crate::ostd::sync::SpinLock;
 use alloc::vec::Vec;
 
@@ -215,11 +215,8 @@ impl VmSpace {
 
         let aligned_start = start & !0xFFF;
         let aligned_end = (end + PAGE_SIZE - 1) & !0xFFF;
-        let mut page_vaddr = aligned_start;
-        while page_vaddr < aligned_end {
-            self.unmap_page(page_vaddr);
-            page_vaddr += PAGE_SIZE;
-        }
+        let page_count = (aligned_end - aligned_start) / PAGE_SIZE;
+        self.unmap_range(aligned_start, page_count);
 
         let mut new_vmas = Vec::new();
         for vma in self.vmas.drain(..) {
@@ -342,6 +339,16 @@ impl VmSpace {
         }
     }
 
+    /// Unmaps a range of `count` consecutive 4 KiB pages starting at `start_virt` and frees their physical frames.
+    pub fn unmap_range(&mut self, start_virt: usize, count: usize) {
+        let aligned_start = start_virt & !0xFFF;
+        for i in 0..count {
+            if let Some(page_vaddr) = aligned_start.checked_add(i * PAGE_SIZE) {
+                self.unmap_page(page_vaddr);
+            }
+        }
+    }
+
     /// Translates a virtual address to its mapped physical address.
     pub fn translate(&self, virt_addr: usize) -> Option<usize> {
         #[cfg(target_arch = "x86_64")]
@@ -365,11 +372,32 @@ impl VmSpace {
         let aligned_end = (start_virt + size + PAGE_SIZE - 1) & !0xFFF;
         let page_count = (aligned_end - aligned_start) / PAGE_SIZE;
 
-        for i in 0..page_count {
-            let virt = aligned_start + i * PAGE_SIZE;
-            let phys = alloc_frame().ok_or("Out of physical frames")?;
+        let (_, free_frames) = get_pmm_stats();
+        if page_count > free_frames {
+            return Err("Out of physical frames");
+        }
+
+        for (pages_mapped, i) in (0..page_count).enumerate() {
+            let virt = match aligned_start.checked_add(i * PAGE_SIZE) {
+                Some(v) => v,
+                None => {
+                    self.unmap_range(aligned_start, pages_mapped);
+                    return Err("Virtual address overflow");
+                }
+            };
+            let phys = match alloc_frame() {
+                Some(f) => f,
+                None => {
+                    self.unmap_range(aligned_start, pages_mapped);
+                    return Err("Out of physical frames");
+                }
+            };
             zero_phys_frame(phys);
-            self.map_page(virt, phys, flags)?;
+            if let Err(e) = self.map_page(virt, phys, flags) {
+                free_frame(phys);
+                self.unmap_range(aligned_start, pages_mapped);
+                return Err(e);
+            }
         }
 
         let mut prot = posix_abi::PROT_READ as u32;

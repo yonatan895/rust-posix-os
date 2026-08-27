@@ -21,6 +21,11 @@ pub fn register_tests(runner: &mut TestRunner) {
         "mmap Address Bounds and Overflow Validation",
         test_mmap_bounds_and_overflow,
     );
+    runner.run_test(
+        "mm",
+        "mmap Partial Failure Rollback & Zero Leak",
+        test_mmap_rollback_on_partial_failure,
+    );
 }
 
 /// Representation of a Virtual Memory Area (VMA) range with protections and flags.
@@ -304,4 +309,183 @@ fn test_mmap_bounds_and_overflow() {
         Err(ENOMEM),
         "mmap with length exceeding USER_SPACE_END must return -ENOMEM"
     );
+}
+
+/// Tests that partial failure during mmap page allocation rolls back both physical frames and the bump pointer.
+fn test_mmap_rollback_on_partial_failure() {
+    const PAGE_SIZE: usize = 4096;
+    const DEFAULT_MMAP_BASE: usize = 0x0000_7000_0000_0000;
+    const USER_SPACE_END: usize = 0x0000_8000_0000_0000;
+
+    /// Mock physical memory allocator with a fixed frame pool.
+    struct MockPmm {
+        free_frames: usize,
+    }
+
+    impl MockPmm {
+        fn alloc_frame(&mut self) -> Option<usize> {
+            if self.free_frames > 0 {
+                self.free_frames -= 1;
+                Some(0x1000 + self.free_frames * PAGE_SIZE)
+            } else {
+                None
+            }
+        }
+
+        fn free_frame(&mut self, _phys: usize) {
+            self.free_frames += 1;
+        }
+    }
+
+    /// Mock virtual memory space tracking mapped page entries.
+    struct MockPagingSpace {
+        mapped_pages: BTreeMap<usize, usize>,
+    }
+
+    impl MockPagingSpace {
+        fn new() -> Self {
+            Self {
+                mapped_pages: BTreeMap::new(),
+            }
+        }
+
+        fn map_page(&mut self, virt: usize, phys: usize) {
+            self.mapped_pages.insert(virt, phys);
+        }
+
+        fn unmap_range(&mut self, pmm: &mut MockPmm, start_virt: usize, count: usize) {
+            let aligned_start = start_virt & !0xFFF;
+            for i in 0..count {
+                let va = aligned_start + i * PAGE_SIZE;
+                if let Some(phys) = self.mapped_pages.remove(&va) {
+                    pmm.free_frame(phys);
+                }
+            }
+        }
+    }
+
+    /// Mock process descriptor tracking mmap bump allocation state.
+    struct MockProcess {
+        mmap_next_vaddr: usize,
+        vm: MockPagingSpace,
+    }
+
+    let mut pmm = MockPmm { free_frames: 5 };
+    let mut proc = MockProcess {
+        mmap_next_vaddr: DEFAULT_MMAP_BASE,
+        vm: MockPagingSpace::new(),
+    };
+
+    // Helper simulating sys_mmap with rollback on partial failure
+    let simulate_mmap = |proc: &mut MockProcess,
+                         pmm: &mut MockPmm,
+                         addr: usize,
+                         length: usize|
+     -> Result<usize, i32> {
+        if length == 0 {
+            return Err(EINVAL);
+        }
+        if length > USER_SPACE_END {
+            return Err(ENOMEM);
+        }
+        let pages = length.div_ceil(PAGE_SIZE);
+        let byte_len = match pages.checked_mul(PAGE_SIZE) {
+            Some(len) => len,
+            None => return Err(ENOMEM),
+        };
+
+        if pages > pmm.free_frames {
+            return Err(ENOMEM);
+        }
+
+        let rollback_vaddr = proc.mmap_next_vaddr;
+        let is_anonymous_bump = addr == 0;
+
+        let vaddr = if is_anonymous_bump {
+            let base = proc.mmap_next_vaddr;
+            proc.mmap_next_vaddr = match proc.mmap_next_vaddr.checked_add(byte_len) {
+                Some(next) if next <= USER_SPACE_END => next,
+                _ => return Err(ENOMEM),
+            };
+            base
+        } else {
+            addr & !0xFFF
+        };
+
+        let _end_vaddr = match vaddr.checked_add(byte_len) {
+            Some(end) if end <= USER_SPACE_END => end,
+            _ => {
+                if is_anonymous_bump {
+                    proc.mmap_next_vaddr = rollback_vaddr;
+                }
+                return Err(ENOMEM);
+            }
+        };
+
+        for (pages_mapped, i) in (0..pages).enumerate() {
+            let page_vaddr = match vaddr.checked_add(i * PAGE_SIZE) {
+                Some(va) => va,
+                None => {
+                    proc.vm.unmap_range(pmm, vaddr, pages_mapped);
+                    if is_anonymous_bump {
+                        proc.mmap_next_vaddr = rollback_vaddr;
+                    }
+                    return Err(ENOMEM);
+                }
+            };
+            let frame = match pmm.alloc_frame() {
+                Some(f) => f,
+                None => {
+                    proc.vm.unmap_range(pmm, vaddr, pages_mapped);
+                    if is_anonymous_bump {
+                        proc.mmap_next_vaddr = rollback_vaddr;
+                    }
+                    return Err(ENOMEM);
+                }
+            };
+            proc.vm.map_page(page_vaddr, frame);
+        }
+
+        Ok(vaddr)
+    };
+
+    // 1. Initial State
+    assert_eq!(pmm.free_frames, 5);
+    assert_eq!(proc.mmap_next_vaddr, DEFAULT_MMAP_BASE);
+
+    // 2. Attempt mmap of 10 pages (40 KiB) when only 5 frames exist in PMM
+    let res = simulate_mmap(&mut proc, &mut pmm, 0, 10 * PAGE_SIZE);
+    assert_eq!(res, Err(ENOMEM), "Oversized mmap must fail with -ENOMEM");
+
+    // 3. Verify Rollback & Zero Frame Leak
+    assert_eq!(
+        pmm.free_frames, 5,
+        "PMM free frame count must be completely restored after failed mmap"
+    );
+    assert_eq!(
+        proc.mmap_next_vaddr, DEFAULT_MMAP_BASE,
+        "mmap_next_vaddr must be rolled back to pre-call base on failure"
+    );
+    assert!(
+        proc.vm.mapped_pages.is_empty(),
+        "All partially mapped pages must be unmapped on failure"
+    );
+
+    // 4. Perform a successful 4-page mmap
+    let res_success = simulate_mmap(&mut proc, &mut pmm, 0, 4 * PAGE_SIZE);
+    assert_eq!(
+        res_success,
+        Ok(DEFAULT_MMAP_BASE),
+        "Subsequent mmap must succeed starting at the original rolled-back base"
+    );
+    assert_eq!(
+        pmm.free_frames, 1,
+        "4 frames allocated from pool (1 remaining)"
+    );
+    assert_eq!(
+        proc.mmap_next_vaddr,
+        DEFAULT_MMAP_BASE + 4 * PAGE_SIZE,
+        "mmap_next_vaddr advances by exactly 4 pages"
+    );
+    assert_eq!(proc.vm.mapped_pages.len(), 4);
 }

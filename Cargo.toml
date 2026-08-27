@@ -17,6 +17,9 @@ rust-version = "1.88"
 authors = ["Rust POSIX OS Developers"]
 license = "MIT OR Apache-2.0"
 
+[workspace.lints.clippy]
+incompatible_msrv = "allow"
+
 [profile.dev]
 panic = "abort"
 
