@@ -363,6 +363,7 @@ pub unsafe fn list_directory_advanced(
 /// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
     let mut no_create = false;
+    let mut count = 0;
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
@@ -374,6 +375,7 @@ pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
         } {
             no_create = true;
         } else {
+            count += 1;
             let mut st = Stat::default();
             // SAFETY: Checking file existence via stat syscall.
             let exists = unsafe { stat(arg, &mut st) == 0 };
@@ -389,6 +391,10 @@ pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
             }
         }
     }
+    if count == 0 {
+        // SAFETY: Printing missing operand error to stderr.
+        unsafe { puts(b"touch: missing file operand\0".as_ptr()) };
+    }
 }
 
 /// Creates directories with support for `-p` (`--parents`).
@@ -398,6 +404,7 @@ pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
 /// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_mkdir(argc: usize, argv: &[*const u8; 16]) {
     let mut parents = false;
+    let mut count = 0;
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
@@ -408,29 +415,41 @@ pub unsafe fn handle_mkdir(argc: usize, argv: &[*const u8; 16]) {
             strcmp(arg, b"-p\0".as_ptr()) == 0 || strcmp(arg, b"--parents\0".as_ptr()) == 0
         } {
             parents = true;
-        } else if parents {
-            let mut sub = [0u8; 256];
-            // SAFETY: Calculating string length of argument.
-            let len = unsafe { strlen(arg).min(255) };
-            // SAFETY: Copying path slice to mutable stack buffer.
-            unsafe { core::ptr::copy_nonoverlapping(arg, sub.as_mut_ptr(), len) };
-            for j in 1..=len {
-                if j == len || sub[j] == b'/' {
-                    let old = sub[j];
-                    sub[j] = 0;
-                    // SAFETY: Creating parent directory component.
-                    let _ = unsafe { mkdir(sub.as_ptr(), 0o755) };
-                    sub[j] = old;
+        } else {
+            count += 1;
+            if parents {
+                let mut sub = [0u8; 256];
+                // SAFETY: Calculating string length of argument.
+                let len = unsafe { strlen(arg).min(255) };
+                // SAFETY: Copying path slice to mutable stack buffer.
+                unsafe { core::ptr::copy_nonoverlapping(arg, sub.as_mut_ptr(), len) };
+                for j in 1..=len {
+                    if j == len || sub[j] == b'/' {
+                        let old = sub[j];
+                        sub[j] = 0;
+                        // SAFETY: Creating parent directory component.
+                        let res = unsafe { mkdir(sub.as_ptr(), 0o755) };
+                        if res < 0 && res != -(EEXIST as i32) {
+                            // SAFETY: Printing error message on directory creation failure.
+                            unsafe { print_error(b"mkdir\0".as_ptr(), sub.as_ptr(), res) };
+                            break;
+                        }
+                        sub[j] = old;
+                    }
+                }
+            } else {
+                // SAFETY: Creating single directory.
+                let res = unsafe { mkdir(arg, 0o755) };
+                // SAFETY: Printing error message on directory creation failure.
+                if res < 0 {
+                    unsafe { print_error(b"mkdir\0".as_ptr(), arg, res) };
                 }
             }
-        } else {
-            // SAFETY: Creating single directory.
-            let res = unsafe { mkdir(arg, 0o755) };
-            // SAFETY: Printing error message on directory creation failure.
-            if res < 0 {
-                unsafe { print_error(b"mkdir\0".as_ptr(), arg, res) };
-            }
         }
+    }
+    if count == 0 {
+        // SAFETY: Printing missing operand error to stderr.
+        unsafe { puts(b"mkdir: missing operand\0".as_ptr()) };
     }
 }
 

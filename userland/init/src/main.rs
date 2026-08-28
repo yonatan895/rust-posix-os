@@ -347,23 +347,36 @@ unsafe fn run_saved_uid_credentials_tests() {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         if seteuid(1000) != 0
+            || getuid() != 0
             || geteuid() != 1000
             || getresuid(&mut r, &mut e, &mut s) != 0
+            || r != 0
             || e != 1000
+            || s != 0
         {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         if seteuid(2000) != -(EPERM as i32) {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
-        if seteuid(0) != 0 || geteuid() != 0 || getresuid(&mut r, &mut e, &mut s) != 0 || e != 0 {
+        if seteuid(0) != 0
+            || getuid() != 0
+            || geteuid() != 0
+            || getresuid(&mut r, &mut e, &mut s) != 0
+            || r != 0
+            || e != 0
+            || s != 0
+        {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }
         let (mut rg, mut eg, mut sg) = (0u32, 0u32, 0u32);
         if setresgid(0, 500, 0) != 0
+            || getgid() != 0
             || getegid() != 500
             || getresgid(&mut rg, &mut eg, &mut sg) != 0
+            || rg != 0
             || eg != 500
+            || sg != 0
         {
             FAILED_TESTS.fetch_add(1, core::sync::atomic::Ordering::Relaxed);
         }

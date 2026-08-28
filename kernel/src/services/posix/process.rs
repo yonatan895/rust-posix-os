@@ -521,12 +521,12 @@ fn next_unblocked_signal(pid: i32) -> Option<(i32, SigAction, SigSet)> {
     None
 }
 
-/// Checks pending signals and delivers or terminates the process before returning to user space.
+/// Checks pending unblocked signals on the return-to-userland path and delivers them.
 pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
-    let pid = match get_current_process() {
-        Some(p) => p.lock().pid,
-        None => return,
-    };
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
+    if pid <= 0 {
+        return;
+    }
 
     if let Some((sig, action, blocked)) = next_unblocked_signal(pid) {
         if action.sa_handler == SIG_DFL {
@@ -556,6 +556,7 @@ fn deliver_signal_to_user(
     r: &mut SyscallRegisters,
 ) {
     let frame_size = core::mem::size_of::<SignalFrame>();
+    // SysV AMD64 ABI: allocate below the 128-byte red zone, 16-byte aligned
     let new_rsp = (r.rsp.saturating_sub(RED_ZONE_SIZE + frame_size)) & !0xF;
 
     let frame = SignalFrame {
@@ -575,9 +576,9 @@ fn deliver_signal_to_user(
         rsi: r.rsi as u64,
         rdi: r.rdi as u64,
         rax: r.rax as u64,
-        rcx: r.rcx as u64,
-        r11: r.r11 as u64,
-        rsp: r.rsp as u64,
+        rcx: r.rcx as u64, // Saved user RIP
+        r11: r.r11 as u64, // Saved user RFLAGS
+        rsp: r.rsp as u64, // Saved original user RSP
     };
 
     let user_ptr = match UserPtr::<SignalFrame>::from_raw(new_rsp) {
@@ -628,6 +629,9 @@ fn terminate_cpu_bound_task(pid: i32, sig: i32) {
 }
 
 /// Checks pending signals when returning from an interrupt to ring 3 (user mode).
+///
+/// Modifies the hardware TrapFrame on the kernel stack so `iretq` lands in the
+/// user signal handler, or terminates CPU-bound tasks on `SIGKILL`/`SIGTERM`.
 pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
     if !frame.is_user_mode() {
         return false;
@@ -831,6 +835,8 @@ fn write_user_id(ptr: *mut u32, id: u32) -> Result<(), isize> {
 }
 
 /// Retrieves the real, effective, and saved user IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
 pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32) -> isize {
     let (uid, euid, suid) = match get_current_process() {
         Some(p) => {
@@ -852,6 +858,8 @@ pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32)
 }
 
 /// Retrieves the real, effective, and saved group IDs of the calling process.
+///
+/// NULL pointer arguments are permitted and skipped, allowing callers to query a subset of IDs.
 pub fn sys_getresgid(rgid_ptr: *mut u32, egid_ptr: *mut u32, sgid_ptr: *mut u32) -> isize {
     let (gid, egid, sgid) = match get_current_process() {
         Some(p) => {

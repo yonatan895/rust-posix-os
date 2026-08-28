@@ -37,6 +37,10 @@ struct MockVma {
     flags: u32,
 }
 
+/// Simplified test model of a virtual address space tracking VMA ranges.
+///
+/// Note: unlike the kernel's full `VmSpace`, `MockVmSpace` does not merge adjacent VMAs
+/// with identical protection flags, but `contains_range` evaluates contiguous multi-VMA coverage.
 struct MockVmSpace {
     vmas: Vec<MockVma>,
 }
