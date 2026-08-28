@@ -58,9 +58,10 @@ Spinlocks stay. When application processors exist:
 
 No code changes now; this names the split so ADR-0003 and future SMP work do not re-derive it.
 
-## Known contention (accepted, not fixed here)
+## Known contention (resolved)
 
-`get_current_process()` locks `PROCESS_TABLE` to clone an `Arc` at the top of nearly every syscall; `services/monitor.rs` adds background contention. Accepted short-term. Named future direction: per-CPU current pointer plus `Arc` clone without taking the table lock; the table lock is then used only for insert/remove/lookup-by-pid. That change is a separate PR and must update this ADR.
+- **`get_current_process()`**: Resolved in Issue #85. `get_current_process()` queries the Scheduler-tier current process slot (`CURRENT_PROCESS`) to clone an `Arc` reference without acquiring `PROCESS_TABLE`. The `PROCESS_TABLE` spinlock is now restricted exclusively to process insertion (`sys_fork`), removal (`sys_wait4`), and PID lookups (`sys_kill`).
+- **`sys_wait4` Lock Ordering**: Resolved in Issue #85. `sys_wait4` snapshots candidate `Arc` references under `PROCESS_TABLE`, drops the table lock, and inspects individual `Process` locks without holding `PROCESS_TABLE`, strictly adhering to ADR-0002 Rule L4.
 
 ## Consequences
 
