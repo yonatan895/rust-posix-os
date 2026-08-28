@@ -493,44 +493,46 @@ pub fn sys_rt_sigreturn(r: &mut SyscallRegisters) -> isize {
     r.rax as isize
 }
 
-/// Checks pending unblocked signals on the return-to-userland path and delivers them.
-pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
-    let pid = CURRENT_PID.load(Ordering::SeqCst);
-
+/// Scans pending unblocked signals and returns the next signal to be handled, if any.
+fn next_unblocked_signal(pid: i32) -> Option<(i32, SigAction, SigSet)> {
     let pending = SIGNALS.get_pending(pid);
     let blocked = SIGNALS.get_procmask(pid);
-    let unblocked_pending = pending & !blocked;
-    if unblocked_pending == 0 {
-        return;
+    let unblocked = pending & !blocked;
+    if unblocked == 0 {
+        return None;
     }
 
     for sig in SIG_MIN..=SIG_MAX {
-        if (unblocked_pending & (1 << (sig - 1))) != 0 {
+        if (unblocked & (1 << (sig - 1))) != 0 {
             let action = SIGNALS.get_action(pid, sig);
-
             if action.sa_handler == SIG_IGN
                 || (action.sa_handler == SIG_DFL && is_default_ignore(sig))
             {
                 SIGNALS.clear_pending(pid, sig);
                 continue;
             }
-
             if action.sa_handler == SIG_DFL && is_default_stop(sig) {
-                // POSIX stop-class signals under SIG_DFL pause the process.
-                // Leave pending bit set and skip delivery until job control is implemented.
                 continue;
             }
-
             SIGNALS.clear_pending(pid, sig);
+            return Some((sig, action, blocked));
+        }
+    }
+    None
+}
 
-            if action.sa_handler == SIG_DFL {
-                // Default action: Terminate
-                sys_exit_signal(sig);
-            }
+/// Checks pending unblocked signals on the return-to-userland path and delivers them.
+pub fn check_and_deliver_signals(r: &mut SyscallRegisters) {
+    let pid = CURRENT_PID.load(Ordering::SeqCst);
+    if pid <= 0 {
+        return;
+    }
 
-            // Custom user handler
+    if let Some((sig, action, blocked)) = next_unblocked_signal(pid) {
+        if action.sa_handler == SIG_DFL {
+            sys_exit_signal(sig);
+        } else {
             deliver_signal_to_user(pid, sig, action, blocked, r);
-            break;
         }
     }
 }
@@ -587,14 +589,12 @@ fn deliver_signal_to_user(
         sys_exit_signal(SIGSEGV);
     }
 
-    // Set up register context for signal handler execution
     r.rsp = new_rsp;
-    r.rcx = action.sa_handler; // RIP for sysretq
-    r.rdi = sig as usize; // Arg 1: signal number
-    r.rsi = 0; // Arg 2: siginfo (null)
-    r.rdx = new_rsp; // Arg 3: ucontext (points to SignalFrame)
+    r.rcx = action.sa_handler;
+    r.rdi = sig as usize;
+    r.rsi = 0;
+    r.rdx = new_rsp;
 
-    // Update process blocked signal mask
     update_signal_mask_and_disposition(pid, sig, &action, blocked);
 }
 
@@ -633,126 +633,118 @@ fn terminate_cpu_bound_task(pid: i32, sig: i32) {
 /// Modifies the hardware TrapFrame on the kernel stack so `iretq` lands in the
 /// user signal handler, or terminates CPU-bound tasks on `SIGKILL`/`SIGTERM`.
 pub fn check_and_deliver_signals_irq(frame: &mut TrapFrame, pid: i32) -> bool {
-    // Only deliver signals when returning to ring 3 (user mode)
     if !frame.is_user_mode() {
         return false;
     }
 
-    let pending = SIGNALS.get_pending(pid);
-    let blocked = SIGNALS.get_procmask(pid);
-    let unblocked_pending = pending & !blocked;
-    if unblocked_pending == 0 {
-        return false;
-    }
-
-    for sig in SIG_MIN..=SIG_MAX {
-        if (unblocked_pending & (1 << (sig - 1))) != 0 {
-            let action = SIGNALS.get_action(pid, sig);
-
-            if action.sa_handler == SIG_IGN
-                || (action.sa_handler == SIG_DFL && is_default_ignore(sig))
-            {
-                SIGNALS.clear_pending(pid, sig);
-                continue;
-            }
-
-            if action.sa_handler == SIG_DFL && is_default_stop(sig) {
-                continue;
-            }
-
-            SIGNALS.clear_pending(pid, sig);
-
-            if action.sa_handler == SIG_DFL {
-                // Default action: Terminate CPU-bound task
-                terminate_cpu_bound_task(pid, sig);
-                return true;
-            }
-
-            // Custom user handler: construct SignalFrame on user stack
-            let frame_size = core::mem::size_of::<SignalFrame>();
-            let new_rsp = (frame
-                .rsp
-                .saturating_sub(RED_ZONE_SIZE as u64 + frame_size as u64))
-                & !0xF;
-
-            let sig_frame = SignalFrame {
-                restorer: action.sa_restorer as u64,
-                signum: sig as u64,
-                old_mask: blocked,
-                r15: frame.r15,
-                r14: frame.r14,
-                r13: frame.r13,
-                r12: frame.r12,
-                rbp: frame.rbp,
-                rbx: frame.rbx,
-                r9: frame.r9,
-                r8: frame.r8,
-                r10: frame.r10,
-                rdx: frame.rdx,
-                rsi: frame.rsi,
-                rdi: frame.rdi,
-                rax: frame.rax,
-                rcx: frame.rip,
-                r11: frame.rflags,
-                rsp: frame.rsp,
-            };
-
-            let frame_write_ok =
-                if let Ok(user_ptr) = UserPtr::<SignalFrame>::from_raw(new_rsp as usize) {
-                    user_ptr.write(sig_frame).is_ok()
-                } else {
-                    false
-                };
-
-            if frame_write_ok {
-                frame.rsp = new_rsp;
-                frame.rip = action.sa_handler as u64;
-                frame.rdi = sig as u64;
-                frame.rsi = 0;
-                frame.rdx = new_rsp;
-
-                update_signal_mask_and_disposition(pid, sig, &action, blocked);
-                return false;
-            } else {
-                // Frame write failed: terminate with SIGSEGV matching syscall path
-                terminate_cpu_bound_task(pid, SIGSEGV);
-                return true;
-            }
+    if let Some((sig, action, blocked)) = next_unblocked_signal(pid) {
+        if action.sa_handler == SIG_DFL {
+            terminate_cpu_bound_task(pid, sig);
+            return true;
         }
-    }
 
-    false
+        let frame_size = core::mem::size_of::<SignalFrame>();
+        let new_rsp = (frame
+            .rsp
+            .saturating_sub(RED_ZONE_SIZE as u64 + frame_size as u64))
+            & !0xF;
+
+        let sig_frame = SignalFrame {
+            restorer: action.sa_restorer as u64,
+            signum: sig as u64,
+            old_mask: blocked,
+            r15: frame.r15,
+            r14: frame.r14,
+            r13: frame.r13,
+            r12: frame.r12,
+            rbp: frame.rbp,
+            rbx: frame.rbx,
+            r9: frame.r9,
+            r8: frame.r8,
+            r10: frame.r10,
+            rdx: frame.rdx,
+            rsi: frame.rsi,
+            rdi: frame.rdi,
+            rax: frame.rax,
+            rcx: frame.rip,
+            r11: frame.rflags,
+            rsp: frame.rsp,
+        };
+
+        let frame_write_ok = UserPtr::<SignalFrame>::from_raw(new_rsp as usize)
+            .map(|ptr| ptr.write(sig_frame).is_ok())
+            .unwrap_or(false);
+
+        if frame_write_ok {
+            frame.rsp = new_rsp;
+            frame.rip = action.sa_handler as u64;
+            frame.rdi = sig as u64;
+            frame.rsi = 0;
+            frame.rdx = new_rsp;
+            update_signal_mask_and_disposition(pid, sig, &action, blocked);
+            false
+        } else {
+            terminate_cpu_bound_task(pid, SIGSEGV);
+            true
+        }
+    } else {
+        false
+    }
 }
 
 /// Returns the real user ID of the calling process.
 pub fn sys_getuid() -> isize {
-    match get_current_process() {
-        Some(p) => p.lock().uid as isize,
-        None => 0,
-    }
+    get_current_process()
+        .map(|p| p.lock().uid as isize)
+        .unwrap_or(0)
 }
 
 /// Returns the effective user ID of the calling process.
 pub fn sys_geteuid() -> isize {
-    match get_current_process() {
-        Some(p) => p.lock().euid as isize,
-        None => 0,
-    }
+    get_current_process()
+        .map(|p| p.lock().euid as isize)
+        .unwrap_or(0)
 }
 
 /// Returns the real group ID of the calling process.
 pub fn sys_getgid() -> isize {
-    match get_current_process() {
-        Some(p) => p.lock().gid as isize,
-        None => 0,
-    }
+    get_current_process()
+        .map(|p| p.lock().gid as isize)
+        .unwrap_or(0)
 }
 
 /// Returns the effective group ID of the calling process.
 pub fn sys_getegid() -> isize {
-    match get_current_process() {
-        Some(p) => p.lock().egid as isize,
-        None => 0,
+    get_current_process()
+        .map(|p| p.lock().egid as isize)
+        .unwrap_or(0)
+}
+
+/// Helper for setting real, effective, and saved IDs with standard permission checks.
+fn update_res_ids(
+    r: u32,
+    e: u32,
+    s: u32,
+    cur_r: &mut u32,
+    cur_e: &mut u32,
+    cur_s: &mut u32,
+) -> isize {
+    const UNCHANGED: u32 = u32::MAX;
+    let is_root = *cur_e == 0;
+    let valid = |id: u32| id == UNCHANGED || id == *cur_r || id == *cur_e || id == *cur_s;
+    if is_root || (valid(r) && valid(e) && valid(s)) {
+        if r != UNCHANGED {
+            *cur_r = r;
+        }
+        if e != UNCHANGED {
+            *cur_e = e;
+        }
+        if s != UNCHANGED {
+            *cur_s = s;
+        }
+        0
+    } else {
+        -(EPERM as isize)
     }
 }
 
@@ -762,14 +754,14 @@ pub fn sys_setuid(uid: u32) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 {
-        proc.uid = uid;
-        proc.euid = uid;
-        proc.suid = uid;
+    let mut p = proc_lock.lock();
+    if p.euid == 0 {
+        p.uid = uid;
+        p.euid = uid;
+        p.suid = uid;
         0
-    } else if uid == proc.uid || uid == proc.suid {
-        proc.euid = uid;
+    } else if uid == p.uid || uid == p.suid {
+        p.euid = uid;
         0
     } else {
         -(EPERM as isize)
@@ -782,14 +774,14 @@ pub fn sys_setgid(gid: u32) -> isize {
         Some(p) => p,
         None => return -(ESRCH as isize),
     };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 {
-        proc.gid = gid;
-        proc.egid = gid;
-        proc.sgid = gid;
+    let mut p = proc_lock.lock();
+    if p.euid == 0 {
+        p.gid = gid;
+        p.egid = gid;
+        p.sgid = gid;
         0
-    } else if gid == proc.gid || gid == proc.sgid {
-        proc.egid = gid;
+    } else if gid == p.gid || gid == p.sgid {
+        p.egid = gid;
         0
     } else {
         -(EPERM as isize)
@@ -798,88 +790,48 @@ pub fn sys_setgid(gid: u32) -> isize {
 
 /// Sets the real, effective, and saved user IDs of the calling process.
 pub fn sys_setresuid(ruid: u32, euid: u32, suid: u32) -> isize {
-    const UNCHANGED: u32 = u32::MAX;
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 {
-        if ruid != UNCHANGED {
-            proc.uid = ruid;
-        }
-        if euid != UNCHANGED {
-            proc.euid = euid;
-        }
-        if suid != UNCHANGED {
-            proc.suid = suid;
-        }
-        0
-    } else {
-        let ruid_valid =
-            ruid == UNCHANGED || ruid == proc.uid || ruid == proc.euid || ruid == proc.suid;
-        let euid_valid =
-            euid == UNCHANGED || euid == proc.uid || euid == proc.euid || euid == proc.suid;
-        let suid_valid =
-            suid == UNCHANGED || suid == proc.uid || suid == proc.euid || suid == proc.suid;
-        if ruid_valid && euid_valid && suid_valid {
-            if ruid != UNCHANGED {
-                proc.uid = ruid;
+    match get_current_process() {
+        Some(p) => {
+            let mut proc = p.lock();
+            let (mut r, mut e, mut s) = (proc.uid, proc.euid, proc.suid);
+            let res = update_res_ids(ruid, euid, suid, &mut r, &mut e, &mut s);
+            if res == 0 {
+                proc.uid = r;
+                proc.euid = e;
+                proc.suid = s;
             }
-            if euid != UNCHANGED {
-                proc.euid = euid;
-            }
-            if suid != UNCHANGED {
-                proc.suid = suid;
-            }
-            0
-        } else {
-            -(EPERM as isize)
+            res
         }
+        None => -(ESRCH as isize),
     }
 }
 
 /// Sets the real, effective, and saved group IDs of the calling process.
 pub fn sys_setresgid(rgid: u32, egid: u32, sgid: u32) -> isize {
-    const UNCHANGED: u32 = u32::MAX;
-    let proc_lock = match get_current_process() {
-        Some(p) => p,
-        None => return -(ESRCH as isize),
-    };
-    let mut proc = proc_lock.lock();
-    if proc.euid == 0 {
-        if rgid != UNCHANGED {
-            proc.gid = rgid;
-        }
-        if egid != UNCHANGED {
-            proc.egid = egid;
-        }
-        if sgid != UNCHANGED {
-            proc.sgid = sgid;
-        }
-        0
-    } else {
-        let rgid_valid =
-            rgid == UNCHANGED || rgid == proc.gid || rgid == proc.egid || rgid == proc.sgid;
-        let egid_valid =
-            egid == UNCHANGED || egid == proc.gid || egid == proc.egid || egid == proc.sgid;
-        let sgid_valid =
-            sgid == UNCHANGED || sgid == proc.gid || sgid == proc.egid || sgid == proc.sgid;
-        if rgid_valid && egid_valid && sgid_valid {
-            if rgid != UNCHANGED {
-                proc.gid = rgid;
+    match get_current_process() {
+        Some(p) => {
+            let mut proc = p.lock();
+            let (mut r, mut e, mut s) = (proc.gid, proc.egid, proc.sgid);
+            let res = update_res_ids(rgid, egid, sgid, &mut r, &mut e, &mut s);
+            if res == 0 {
+                proc.gid = r;
+                proc.egid = e;
+                proc.sgid = s;
             }
-            if egid != UNCHANGED {
-                proc.egid = egid;
-            }
-            if sgid != UNCHANGED {
-                proc.sgid = sgid;
-            }
-            0
-        } else {
-            -(EPERM as isize)
+            res
         }
+        None => -(ESRCH as isize),
     }
+}
+
+/// Writes an ID to a user pointer if non-null.
+fn write_user_id(ptr: *mut u32, id: u32) -> Result<(), isize> {
+    if !ptr.is_null() {
+        let out =
+            UserPtr::<u32>::from_raw(ptr as usize).map_err(|e| -(map_user_error(e) as isize))?;
+        out.write(id).map_err(|e| -(map_user_error(e) as isize))?;
+    }
+    Ok(())
 }
 
 /// Retrieves the real, effective, and saved user IDs of the calling process.
@@ -893,33 +845,14 @@ pub fn sys_getresuid(ruid_ptr: *mut u32, euid_ptr: *mut u32, suid_ptr: *mut u32)
         }
         None => return -(ESRCH as isize),
     };
-
-    if !ruid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(ruid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(uid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(ruid_ptr, uid) {
+        return e;
     }
-    if !euid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(euid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(euid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(euid_ptr, euid) {
+        return e;
     }
-    if !suid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(suid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(suid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(suid_ptr, suid) {
+        return e;
     }
     0
 }
@@ -935,33 +868,14 @@ pub fn sys_getresgid(rgid_ptr: *mut u32, egid_ptr: *mut u32, sgid_ptr: *mut u32)
         }
         None => return -(ESRCH as isize),
     };
-
-    if !rgid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(rgid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(gid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(rgid_ptr, gid) {
+        return e;
     }
-    if !egid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(egid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(egid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(egid_ptr, egid) {
+        return e;
     }
-    if !sgid_ptr.is_null() {
-        let out = match UserPtr::<u32>::from_raw(sgid_ptr as usize) {
-            Ok(p) => p,
-            Err(e) => return -(map_user_error(e) as isize),
-        };
-        if let Err(e) = out.write(sgid) {
-            return -(map_user_error(e) as isize);
-        }
+    if let Err(e) = write_user_id(sgid_ptr, sgid) {
+        return e;
     }
     0
 }

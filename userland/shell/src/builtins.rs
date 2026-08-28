@@ -39,6 +39,95 @@ pub unsafe fn print_error(action: *const u8, target: *const u8, err: i32) {
     }
 }
 
+/// Returns a pointer to the final filename component of a path.
+///
+/// # Safety
+///
+/// `path` must be a valid pointer to a null-terminated C-string or null.
+pub unsafe fn get_basename(path: *const u8) -> *const u8 {
+    if path.is_null() {
+        return b"\0".as_ptr();
+    }
+    let mut last = path;
+    let mut ptr = path;
+    // SAFETY: Traverses null-terminated C string to locate last '/' component.
+    unsafe {
+        while *ptr != 0 {
+            if *ptr == b'/' && *ptr.add(1) != 0 {
+                last = ptr.add(1);
+            }
+            ptr = ptr.add(1);
+        }
+    }
+    last
+}
+
+/// Combines a parent directory and entry name into `out` buffer.
+///
+/// # Safety
+///
+/// `dir` and `name` must be valid null-terminated strings. `out` must have at least 256 bytes.
+pub unsafe fn join_path(dir: *const u8, name: *const u8, out: &mut [u8; 256]) -> *const u8 {
+    // SAFETY: Copies dir, optional slash, and name into out buffer safely within 256 bytes.
+    unsafe {
+        let dlen = strlen(dir);
+        let nlen = strlen(name);
+        let slash = if dlen > 0 && *dir.add(dlen - 1) != b'/' {
+            1
+        } else {
+            0
+        };
+        if dlen + slash + nlen < 255 {
+            core::ptr::copy_nonoverlapping(dir, out.as_mut_ptr(), dlen);
+            if slash == 1 {
+                out[dlen] = b'/';
+            }
+            core::ptr::copy_nonoverlapping(name, out.as_mut_ptr().add(dlen + slash), nlen);
+            out[dlen + slash + nlen] = 0;
+            out.as_ptr()
+        } else {
+            b"\0".as_ptr()
+        }
+    }
+}
+
+/// Iterates over directory entries in `dir` (skipping `.` and `..`) and invokes `cb` on each entry name.
+///
+/// # Safety
+///
+/// `dir` must be a valid null-terminated directory path.
+pub unsafe fn walk_dir<F: FnMut(*const u8)>(dir: *const u8, mut cb: F) {
+    // SAFETY: Opens directory and reads entries via SYS_GETDENTS64.
+    unsafe {
+        let fd = open(dir, O_RDONLY | O_DIRECTORY, 0);
+        if fd < 0 {
+            return;
+        }
+        let mut buf = [0u8; 4096];
+        loop {
+            let n = syscall::syscall3(
+                SYS_GETDENTS64,
+                fd as usize,
+                buf.as_mut_ptr() as usize,
+                buf.len(),
+            ) as isize;
+            if n <= 0 {
+                break;
+            }
+            let mut offset = 0;
+            while offset < n as usize {
+                let dirent = &*(buf.as_ptr().add(offset) as *const Dirent64);
+                let name = dirent.d_name.as_ptr();
+                if strcmp(name, b".\0".as_ptr()) != 0 && strcmp(name, b"..\0".as_ptr()) != 0 {
+                    cb(name);
+                }
+                offset += core::mem::size_of::<Dirent64>();
+            }
+        }
+        close(fd);
+    }
+}
+
 /// Changes the current working directory, supporting `~`, `-`, and relative/absolute paths.
 ///
 /// # Safety
@@ -47,9 +136,7 @@ pub unsafe fn print_error(action: *const u8, target: *const u8, err: i32) {
 pub unsafe fn handle_cd(argc: usize, argv: &[*const u8; 16]) {
     let mut current_cwd = [0u8; 128];
     // SAFETY: Gets current working directory into buffer.
-    unsafe {
-        getcwd(current_cwd.as_mut_ptr(), current_cwd.len());
-    }
+    unsafe { getcwd(current_cwd.as_mut_ptr(), current_cwd.len()) };
     let is_dash =
         argc > 1 && !argv[1].is_null() && unsafe { strcmp(argv[1], b"-\0".as_ptr()) } == 0;
     let target =
@@ -71,7 +158,7 @@ pub unsafe fn handle_cd(argc: usize, argv: &[*const u8; 16]) {
         // SAFETY: Prints error message to stdout.
         unsafe { print_error(b"cd\0".as_ptr(), target, res) };
     } else {
-        // SAFETY: Accesses and updates OLDPWD_BUF static buffer in single-threaded shell execution context.
+        // SAFETY: Updates OLDPWD_BUF static buffer.
         unsafe {
             let cur_len = strlen(current_cwd.as_ptr()).min(127);
             core::ptr::copy_nonoverlapping(
@@ -107,10 +194,8 @@ pub unsafe fn handle_ls(argc: usize, argv: &[*const u8; 16]) {
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Inspects flags string in argv[i].
-        let is_flag = unsafe { *arg == b'-' && *arg.add(1) != 0 };
-        if is_flag {
-            // SAFETY: Parses flag characters up to null terminator.
+        // SAFETY: Parses flag characters.
+        if unsafe { *arg == b'-' && *arg.add(1) != 0 } {
             unsafe {
                 let mut ptr = arg.add(1);
                 while *ptr != 0 {
@@ -159,14 +244,13 @@ pub unsafe fn list_directory_advanced(
     long_format: bool,
     human: bool,
 ) {
-    // SAFETY: Opens directory path with O_RDONLY | O_DIRECTORY.
+    // SAFETY: Opens directory path.
     let fd = unsafe { open(path, O_RDONLY | O_DIRECTORY, 0) };
     if fd < 0 {
         let mut st = Stat::default();
-        // SAFETY: If path is a regular file, stats and prints file line.
+        // SAFETY: Handles regular file argument.
         if unsafe { stat(path, &mut st) } == 0 {
             if long_format {
-                // SAFETY: Formats long stat line.
                 unsafe {
                     printf(
                         b"%c%s  %6d  %s\n\0".as_ptr(),
@@ -178,10 +262,10 @@ pub unsafe fn list_directory_advanced(
                         b"rw-r--r--\0".as_ptr(),
                         st.st_size as i32,
                         path,
-                    );
-                }
+                    )
+                };
             } else {
-                // SAFETY: Prints simple filename.
+                // SAFETY: Printing single path entry to stdout.
                 unsafe { printf(b"  %s\n\0".as_ptr(), path) };
             }
             return;
@@ -206,51 +290,34 @@ pub unsafe fn list_directory_advanced(
         }
         let mut offset = 0;
         while offset < n as usize {
-            // SAFETY: Accesses Dirent64 struct within kernel-populated buffer.
+            // SAFETY: Reads Dirent64 entry.
+            // SAFETY: Reading Dirent64 from buffer slice offset.
             let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const Dirent64) };
             let name_ptr = dirent.d_name.as_ptr();
-            // SAFETY: Checks whether file is hidden.
+            // SAFETY: Dereferencing d_name first byte.
             let is_dot = unsafe { !show_all && *name_ptr == b'.' };
-            if is_dot {
-                offset += core::mem::size_of::<Dirent64>();
-                continue;
-            }
-            let suffix = if dirent.d_type == DT_DIR {
-                b"/\0".as_ptr()
-            } else {
-                b"\0".as_ptr()
-            };
-            if long_format {
-                let mut fullpath = [0u8; 256];
-                // SAFETY: Computes lengths and formats subpath buffer.
-                unsafe {
-                    let path_len = strlen(path);
-                    let name_len = strlen(name_ptr);
-                    let need_slash = if path_len > 0 && *path.add(path_len - 1) != b'/' {
-                        1
-                    } else {
-                        0
-                    };
-                    if path_len + need_slash + name_len < 255 {
-                        core::ptr::copy_nonoverlapping(path, fullpath.as_mut_ptr(), path_len);
-                        if need_slash == 1 {
-                            fullpath[path_len] = b'/';
-                        }
-                        core::ptr::copy_nonoverlapping(
-                            name_ptr,
-                            fullpath.as_mut_ptr().add(path_len + need_slash),
-                            name_len,
-                        );
-                        fullpath[path_len + need_slash + name_len] = 0;
-                        let mut st = Stat::default();
-                        if stat(fullpath.as_ptr(), &mut st) == 0 {
-                            let type_char = if dirent.d_type == DT_DIR { b'd' } else { b'-' };
-                            let mode_str = if dirent.d_type == DT_DIR {
-                                b"rwxr-xr-x\0".as_ptr()
-                            } else {
-                                b"rw-r--r--\0".as_ptr()
-                            };
-                            if human && st.st_size >= 1024 {
+            if !is_dot {
+                let suffix = if dirent.d_type == DT_DIR {
+                    b"/\0".as_ptr()
+                } else {
+                    b"\0".as_ptr()
+                };
+                if long_format {
+                    let mut fullpath = [0u8; 256];
+                    // SAFETY: Joining valid directory path and entry name.
+                    let subpath = unsafe { join_path(path, name_ptr, &mut fullpath) };
+                    let mut st = Stat::default();
+                    // SAFETY: Querying stat metadata for directory entry.
+                    if unsafe { stat(subpath, &mut st) } == 0 {
+                        let type_char = if dirent.d_type == DT_DIR { b'd' } else { b'-' };
+                        let mode_str = if dirent.d_type == DT_DIR {
+                            b"rwxr-xr-x\0".as_ptr()
+                        } else {
+                            b"rw-r--r--\0".as_ptr()
+                        };
+                        if human && st.st_size >= 1024 {
+                            // SAFETY: Printing human-readable long format listing to stdout.
+                            unsafe {
                                 printf(
                                     b"%c%s  %4dK  %s%s\n\0".as_ptr(),
                                     type_char as i32,
@@ -258,8 +325,11 @@ pub unsafe fn list_directory_advanced(
                                     ((st.st_size + 1023) / 1024) as i32,
                                     name_ptr,
                                     suffix,
-                                );
-                            } else {
+                                )
+                            };
+                        } else {
+                            // SAFETY: Printing standard long format listing to stdout.
+                            unsafe {
                                 printf(
                                     b"%c%s  %6d  %s%s\n\0".as_ptr(),
                                     type_char as i32,
@@ -267,16 +337,17 @@ pub unsafe fn list_directory_advanced(
                                     st.st_size as i32,
                                     name_ptr,
                                     suffix,
-                                );
-                            }
-                        } else {
-                            printf(b"  %s%s\n\0".as_ptr(), name_ptr, suffix);
+                                )
+                            };
                         }
+                    } else {
+                        // SAFETY: Printing fallback entry name to stdout.
+                        unsafe { printf(b"  %s%s\n\0".as_ptr(), name_ptr, suffix) };
                     }
+                } else {
+                    // SAFETY: Printing entry name to stdout.
+                    unsafe { printf(b"  %s%s\n\0".as_ptr(), name_ptr, suffix) };
                 }
-            } else {
-                // SAFETY: Prints simple filename.
-                unsafe { printf(b"  %s%s\n\0".as_ptr(), name_ptr, suffix) };
             }
             offset += core::mem::size_of::<Dirent64>();
         }
@@ -292,122 +363,117 @@ pub unsafe fn list_directory_advanced(
 /// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_touch(argc: usize, argv: &[*const u8; 16]) {
     let mut no_create = false;
-    let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
-    let mut path_count = 0;
-
+    let mut count = 0;
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Compares flag arguments.
+        // SAFETY: Checking command line flag string.
         if unsafe {
             strcmp(arg, b"-c\0".as_ptr()) == 0 || strcmp(arg, b"--no-create\0".as_ptr()) == 0
         } {
             no_create = true;
-        } else if path_count < 8 {
-            paths[path_count] = arg;
-            path_count += 1;
+        } else {
+            count += 1;
+            let mut st = Stat::default();
+            // SAFETY: Checking file existence via stat syscall.
+            let exists = unsafe { stat(arg, &mut st) == 0 };
+            if !exists && !no_create {
+                // SAFETY: Creates new empty file.
+                let fd = unsafe { open(arg, O_CREAT | O_WRONLY | O_TRUNC, 0o644) };
+                // SAFETY: Closing open file descriptor or reporting error.
+                if fd >= 0 {
+                    unsafe { close(fd) };
+                } else {
+                    unsafe { print_error(b"touch\0".as_ptr(), arg, fd) };
+                }
+            }
         }
     }
-
-    if path_count == 0 {
-        // SAFETY: Prints error to stdout.
+    if count == 0 {
+        // SAFETY: Printing missing operand error to stderr.
         unsafe { puts(b"touch: missing file operand\0".as_ptr()) };
-        return;
-    }
-
-    for p in 0..path_count {
-        let flags = if no_create { O_RDWR } else { O_RDWR | O_CREAT };
-        // SAFETY: Opens or creates file.
-        let fd = unsafe { open(paths[p], flags, 0o644) };
-        if fd >= 0 {
-            // SAFETY: Closes opened file descriptor.
-            unsafe { close(fd) };
-        } else if !no_create {
-            // SAFETY: Prints error message to stdout.
-            unsafe { print_error(b"touch\0".as_ptr(), paths[p], fd) };
-        }
     }
 }
 
-/// Creates directories with support for `-p` (`--parents`) recursive path creation.
+/// Creates directories with support for `-p` (`--parents`).
 ///
 /// # Safety
 ///
 /// `argv` pointers up to `argc` must be valid null-terminated C-strings or null.
 pub unsafe fn handle_mkdir(argc: usize, argv: &[*const u8; 16]) {
-    let mut create_parents = false;
-    let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
-    let mut path_count = 0;
-
+    let mut parents = false;
+    let mut count = 0;
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Compares flag strings.
+        // SAFETY: Checking command line flag string.
         if unsafe {
             strcmp(arg, b"-p\0".as_ptr()) == 0 || strcmp(arg, b"--parents\0".as_ptr()) == 0
         } {
-            create_parents = true;
-        } else if path_count < 8 {
-            paths[path_count] = arg;
-            path_count += 1;
-        }
-    }
-    if path_count == 0 {
-        // SAFETY: Prints error to stdout.
-        unsafe { puts(b"mkdir: missing operand\0".as_ptr()) };
-        return;
-    }
-    for p in 0..path_count {
-        if create_parents {
-            // SAFETY: Recursively creates parent directories.
-            unsafe { mkdir_p(paths[p]) };
+            parents = true;
         } else {
-            // SAFETY: Invokes mkdir syscall.
-            let res = unsafe { mkdir(paths[p], 0o755) };
-            if res < 0 {
-                // SAFETY: Prints error to stdout.
-                unsafe { print_error(b"mkdir: cannot create directory\0".as_ptr(), paths[p], res) };
+            count += 1;
+            if parents {
+                let mut sub = [0u8; 256];
+                // SAFETY: Calculating string length of argument.
+                let len = unsafe { strlen(arg).min(255) };
+                // SAFETY: Copying path slice to mutable stack buffer.
+                unsafe { core::ptr::copy_nonoverlapping(arg, sub.as_mut_ptr(), len) };
+                for j in 1..=len {
+                    if j == len || sub[j] == b'/' {
+                        let old = sub[j];
+                        sub[j] = 0;
+                        // SAFETY: Creating parent directory component.
+                        let res = unsafe { mkdir(sub.as_ptr(), 0o755) };
+                        if res < 0 && res != -(EEXIST as i32) {
+                            // SAFETY: Printing error message on directory creation failure.
+                            unsafe { print_error(b"mkdir\0".as_ptr(), sub.as_ptr(), res) };
+                            break;
+                        }
+                        sub[j] = old;
+                    }
+                }
+            } else {
+                // SAFETY: Creating single directory.
+                let res = unsafe { mkdir(arg, 0o755) };
+                // SAFETY: Printing error message on directory creation failure.
+                if res < 0 {
+                    unsafe { print_error(b"mkdir\0".as_ptr(), arg, res) };
+                }
             }
         }
     }
+    if count == 0 {
+        // SAFETY: Printing missing operand error to stderr.
+        unsafe { puts(b"mkdir: missing operand\0".as_ptr()) };
+    }
 }
 
-/// Recursively creates parent directories along a path.
+/// Unlinks a file or recursively removes directory trees.
 ///
 /// # Safety
 ///
 /// `path` must be a valid pointer to a null-terminated C-string.
-pub unsafe fn mkdir_p(path: *const u8) {
-    // SAFETY: Computes length of path.
-    let len = unsafe { strlen(path) };
-    let mut subpath = [0u8; 256];
-    if len >= 255 {
-        return;
-    }
-    for i in 0..len {
-        // SAFETY: Reads byte from path.
-        let b = unsafe { *path.add(i) };
-        subpath[i] = b;
-        if (b == b'/' && i > 0) || i == len - 1 {
-            subpath[i + 1] = 0;
-            // SAFETY: Invokes mkdir syscall for prefix directory.
-            let res = unsafe { mkdir(subpath.as_ptr(), 0o755) };
-            if res < 0 && res != -EEXIST {
-                let mut st = Stat::default();
-                // SAFETY: Stats directory prefix to confirm existing directory.
-                let is_not_dir =
-                    unsafe { stat(subpath.as_ptr(), &mut st) != 0 || (st.st_mode & S_IFDIR == 0) };
-                if is_not_dir {
-                    // SAFETY: Prints error to stdout.
-                    unsafe { print_error(b"mkdir -p\0".as_ptr(), subpath.as_ptr(), res) };
-                    return;
-                }
-            }
+pub unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
+    if recursive {
+        let mut subpath = [0u8; 256];
+        // SAFETY: Walks directory entries recursively.
+        unsafe {
+            walk_dir(path, |name| {
+                let full = join_path(path, name, &mut subpath);
+                remove_path(full, true, force);
+            });
         }
+    }
+    // SAFETY: Issues unlink syscall to delete file or directory.
+    let res = unsafe { unlink(path) };
+    if res < 0 && !force {
+        // SAFETY: Reporting unlink failure to stderr.
+        unsafe { print_error(b"rm\0".as_ptr(), path, res) };
     }
 }
 
@@ -420,16 +486,16 @@ pub unsafe fn handle_rm(argc: usize, argv: &[*const u8; 16]) {
     let mut recursive = false;
     let mut force = false;
     let mut paths: [*const u8; 8] = [core::ptr::null(); 8];
-    let mut path_count = 0;
+    let mut count = 0;
+
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Checks flag argument.
-        let is_flag = unsafe { *arg == b'-' && *arg.add(1) != 0 };
-        if is_flag {
-            // SAFETY: Parses flag characters.
+        // SAFETY: Checking if argument starts with '-' option flag.
+        if unsafe { *arg == b'-' && *arg.add(1) != 0 } {
+            // SAFETY: Parsing character flags in option argument.
             unsafe {
                 let mut ptr = arg.add(1);
                 while *ptr != 0 {
@@ -441,125 +507,20 @@ pub unsafe fn handle_rm(argc: usize, argv: &[*const u8; 16]) {
                     ptr = ptr.add(1);
                 }
             }
-        } else if path_count < 8 {
-            paths[path_count] = arg;
-            path_count += 1;
+        } else if count < 8 {
+            paths[count] = arg;
+            count += 1;
         }
     }
-    if path_count == 0 {
-        if !force {
-            // SAFETY: Prints error to stdout.
-            unsafe { puts(b"rm: missing operand\0".as_ptr()) };
-        }
+    if count == 0 && !force {
+        // SAFETY: Reporting missing operand error to stderr.
+        unsafe { puts(b"rm: missing operand\0".as_ptr()) };
         return;
     }
-    for p in 0..path_count {
-        // SAFETY: Unlinks or recursively removes path.
+    for p in 0..count {
+        // SAFETY: Invoking remove_path on valid operand path.
         unsafe { remove_path(paths[p], recursive, force) };
     }
-}
-
-/// Unlinks a file or recursively removes directory trees.
-///
-/// # Safety
-///
-/// `path` must be a valid pointer to a null-terminated C-string.
-pub unsafe fn remove_path(path: *const u8, recursive: bool, force: bool) {
-    if recursive {
-        // SAFETY: Opens directory for recursive cleanup.
-        let fd = unsafe { open(path, O_RDONLY | O_DIRECTORY, 0) };
-        if fd >= 0 {
-            let mut buf = [0u8; 4096];
-            loop {
-                // SAFETY: Reads directory entries via SYS_GETDENTS64.
-                let n = unsafe {
-                    syscall::syscall3(
-                        SYS_GETDENTS64,
-                        fd as usize,
-                        buf.as_mut_ptr() as usize,
-                        buf.len(),
-                    ) as isize
-                };
-                if n <= 0 {
-                    break;
-                }
-                let mut offset = 0;
-                while offset < n as usize {
-                    // SAFETY: Accesses Dirent64 within kernel buffer.
-                    let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const Dirent64) };
-                    let name_ptr = dirent.d_name.as_ptr();
-                    // SAFETY: Compares entry against "." and "..".
-                    let is_special = unsafe {
-                        strcmp(name_ptr, b".\0".as_ptr()) == 0
-                            || strcmp(name_ptr, b"..\0".as_ptr()) == 0
-                    };
-                    if !is_special {
-                        let mut subpath = [0u8; 256];
-                        // SAFETY: Constructs recursive subpath string.
-                        unsafe {
-                            let path_len = strlen(path);
-                            let name_len = strlen(name_ptr);
-                            let need_slash = if path_len > 0 && *path.add(path_len - 1) != b'/' {
-                                1
-                            } else {
-                                0
-                            };
-                            if path_len + need_slash + name_len < 255 {
-                                core::ptr::copy_nonoverlapping(
-                                    path,
-                                    subpath.as_mut_ptr(),
-                                    path_len,
-                                );
-                                if need_slash == 1 {
-                                    subpath[path_len] = b'/';
-                                }
-                                core::ptr::copy_nonoverlapping(
-                                    name_ptr,
-                                    subpath.as_mut_ptr().add(path_len + need_slash),
-                                    name_len,
-                                );
-                                subpath[path_len + need_slash + name_len] = 0;
-                                remove_path(subpath.as_ptr(), true, force);
-                            }
-                        }
-                    }
-                    offset += core::mem::size_of::<Dirent64>();
-                }
-            }
-            // SAFETY: Closes directory file descriptor.
-            unsafe { close(fd) };
-        }
-    }
-    // SAFETY: Issues unlink syscall to delete file or directory node.
-    let res = unsafe { unlink(path) };
-    if res < 0 && !force {
-        // SAFETY: Prints error message to stdout.
-        unsafe { print_error(b"rm\0".as_ptr(), path, res) };
-    }
-}
-
-/// Returns a pointer to the final filename component of a path.
-///
-/// # Safety
-///
-/// `path` must be a valid pointer to a null-terminated C-string or null.
-pub unsafe fn get_basename(path: *const u8) -> *const u8 {
-    if path.is_null() {
-        return b"\0".as_ptr();
-    }
-
-    let mut last_slash = path;
-    let mut ptr = path;
-    // SAFETY: Traverses null-terminated C string to locate last '/' component.
-    unsafe {
-        while *ptr != 0 {
-            if *ptr == b'/' && *ptr.add(1) != 0 {
-                last_slash = ptr.add(1);
-            }
-            ptr = ptr.add(1);
-        }
-    }
-    last_slash
 }
 
 /// Copies a single file from source to destination path.
@@ -568,19 +529,19 @@ pub unsafe fn get_basename(path: *const u8) -> *const u8 {
 ///
 /// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
-    // SAFETY: Opens source file for reading.
+    // SAFETY: Opening source file in read-only mode.
     let in_fd = unsafe { open(src, O_RDONLY, 0) };
     if in_fd < 0 {
+        // SAFETY: Printing error message for source file open failure.
         if !force {
-            // SAFETY: Prints error message.
             unsafe { print_error(b"cp\0".as_ptr(), src, in_fd) };
         }
         return in_fd;
     }
-    // SAFETY: Opens/creates destination file for writing.
+    // SAFETY: Creating destination file in write-only mode.
     let out_fd = unsafe { open(dest, O_WRONLY | O_CREAT | O_TRUNC, 0o644) };
     if out_fd < 0 {
-        // SAFETY: Closes in_fd and prints error message.
+        // SAFETY: Closing open source file descriptor and printing error message.
         unsafe {
             close(in_fd);
             if !force {
@@ -591,15 +552,15 @@ pub unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
     }
     let mut buf = [0u8; 1024];
     loop {
-        // SAFETY: Reads from source file into buffer.
+        // SAFETY: Reading chunk from source file into stack buffer.
         let n = unsafe { read(in_fd, buf.as_mut_ptr(), buf.len()) };
         if n <= 0 {
             break;
         }
-        // SAFETY: Writes buffer to destination file.
+        // SAFETY: Writing read chunk into destination file.
         unsafe { write(out_fd, buf.as_ptr(), n as usize) };
     }
-    // SAFETY: Closes file descriptors.
+    // SAFETY: Closing open source and destination file descriptors.
     unsafe {
         close(in_fd);
         close(out_fd);
@@ -614,116 +575,41 @@ pub unsafe fn copy_file(src: *const u8, dest: *const u8, force: bool) -> i32 {
 /// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn copy_path(src: *const u8, dest: *const u8, recursive: bool, force: bool) -> i32 {
     let mut st = Stat::default();
-    // SAFETY: Queries source path metadata.
+    // SAFETY: Checking source file/directory metadata via stat.
     let res = unsafe { stat(src, &mut st) };
     if res != 0 {
+        // SAFETY: Printing error message on stat failure.
         if !force {
-            // SAFETY: Prints error to stdout.
             unsafe { print_error(b"cp\0".as_ptr(), src, res) };
         }
         return res;
     }
     if (st.st_mode & S_IFDIR) != 0 {
         if !recursive {
-            // SAFETY: Prints error indicating -r is required.
+            // SAFETY: Printing omission warning for directory when -r not specified.
             unsafe {
                 printf(
                     b"cp: -r not specified; omitting directory '%s'\n\0".as_ptr(),
                     src,
-                );
-            }
+                )
+            };
             return -EISDIR;
         }
-        // SAFETY: Creates destination directory.
+        // SAFETY: Creating target directory.
         let _ = unsafe { mkdir(dest, 0o755) };
-        // SAFETY: Opens source directory for traversal.
-        let fd = unsafe { open(src, O_RDONLY | O_DIRECTORY, 0) };
-        if fd >= 0 {
-            let mut buf = [0u8; 4096];
-            loop {
-                // SAFETY: Reads directory entries via SYS_GETDENTS64.
-                let n = unsafe {
-                    syscall::syscall3(
-                        SYS_GETDENTS64,
-                        fd as usize,
-                        buf.as_mut_ptr() as usize,
-                        buf.len(),
-                    ) as isize
-                };
-                if n <= 0 {
-                    break;
-                }
-                let mut offset = 0;
-                while offset < n as usize {
-                    // SAFETY: Accesses Dirent64 within kernel buffer.
-                    let dirent = unsafe { &*(buf.as_ptr().add(offset) as *const Dirent64) };
-                    let name_ptr = dirent.d_name.as_ptr();
-                    // SAFETY: Checks for "." and "..".
-                    let is_special = unsafe {
-                        strcmp(name_ptr, b".\0".as_ptr()) == 0
-                            || strcmp(name_ptr, b"..\0".as_ptr()) == 0
-                    };
-                    if !is_special {
-                        let mut sub_src = [0u8; 256];
-                        let mut sub_dest = [0u8; 256];
-                        // SAFETY: Constructs source and destination recursive paths.
-                        unsafe {
-                            let src_len = strlen(src);
-                            let dest_len = strlen(dest);
-                            let name_len = strlen(name_ptr);
-                            let src_slash = if src_len > 0 && *src.add(src_len - 1) != b'/' {
-                                1
-                            } else {
-                                0
-                            };
-                            let dest_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' {
-                                1
-                            } else {
-                                0
-                            };
-
-                            if src_len + src_slash + name_len < 255
-                                && dest_len + dest_slash + name_len < 255
-                            {
-                                core::ptr::copy_nonoverlapping(src, sub_src.as_mut_ptr(), src_len);
-                                if src_slash == 1 {
-                                    sub_src[src_len] = b'/';
-                                }
-                                core::ptr::copy_nonoverlapping(
-                                    name_ptr,
-                                    sub_src.as_mut_ptr().add(src_len + src_slash),
-                                    name_len,
-                                );
-                                sub_src[src_len + src_slash + name_len] = 0;
-
-                                core::ptr::copy_nonoverlapping(
-                                    dest,
-                                    sub_dest.as_mut_ptr(),
-                                    dest_len,
-                                );
-                                if dest_slash == 1 {
-                                    sub_dest[dest_len] = b'/';
-                                }
-                                core::ptr::copy_nonoverlapping(
-                                    name_ptr,
-                                    sub_dest.as_mut_ptr().add(dest_len + dest_slash),
-                                    name_len,
-                                );
-                                sub_dest[dest_len + dest_slash + name_len] = 0;
-
-                                copy_path(sub_src.as_ptr(), sub_dest.as_ptr(), true, force);
-                            }
-                        }
-                    }
-                    offset += core::mem::size_of::<Dirent64>();
-                }
-            }
-            // SAFETY: Closes directory file descriptor.
-            unsafe { close(fd) };
+        let mut sub_src = [0u8; 256];
+        let mut sub_dest = [0u8; 256];
+        // SAFETY: Walking source directory entries for recursive copying.
+        unsafe {
+            walk_dir(src, |name| {
+                let s = join_path(src, name, &mut sub_src);
+                let d = join_path(dest, name, &mut sub_dest);
+                copy_path(s, d, true, force);
+            });
         }
         0
     } else {
-        // SAFETY: Copies regular file.
+        // SAFETY: Copying single regular file.
         unsafe { copy_file(src, dest, force) }
     }
 }
@@ -737,17 +623,16 @@ pub unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
     let mut recursive = false;
     let mut force = false;
     let mut operands: [*const u8; 16] = [core::ptr::null(); 16];
-    let mut operand_count = 0;
+    let mut count = 0;
 
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Checks flag argument.
-        let is_flag = unsafe { *arg == b'-' && *arg.add(1) != 0 };
-        if is_flag {
-            // SAFETY: Parses flag characters.
+        // SAFETY: Checking if argument is a command line flag.
+        if unsafe { *arg == b'-' && *arg.add(1) != 0 } {
+            // SAFETY: Parsing flag options for cp.
             unsafe {
                 let mut ptr = arg.add(1);
                 while *ptr != 0 {
@@ -759,72 +644,38 @@ pub unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
                     ptr = ptr.add(1);
                 }
             }
-        } else if operand_count < 16 {
-            operands[operand_count] = arg;
-            operand_count += 1;
+        } else if count < 16 {
+            operands[count] = arg;
+            count += 1;
         }
     }
-
-    if operand_count == 0 {
-        // SAFETY: Prints error to stdout.
+    if count < 2 {
+        // SAFETY: Printing missing operand error to stderr.
         unsafe { puts(b"cp: missing file operand\0".as_ptr()) };
         return;
     }
-    if operand_count == 1 {
-        // SAFETY: Prints error to stdout.
-        unsafe {
-            printf(
-                b"cp: missing destination file operand after '%s'\n\0".as_ptr(),
-                operands[0],
-            );
-        }
-        return;
-    }
-
-    let dest = operands[operand_count - 1];
+    let dest = operands[count - 1];
     let mut dest_st = Stat::default();
-    // SAFETY: Checks if destination is an existing directory.
+    // SAFETY: Checking if destination path is an existing directory.
     let dest_is_dir = unsafe { stat(dest, &mut dest_st) == 0 && (dest_st.st_mode & S_IFDIR) != 0 };
 
-    if operand_count > 2 && !dest_is_dir {
-        // SAFETY: Prints error to stdout.
+    if count > 2 && !dest_is_dir {
+        // SAFETY: Printing error message when multiple sources specified without directory target.
         unsafe { printf(b"cp: target '%s' is not a directory\n\0".as_ptr(), dest) };
         return;
     }
-
-    if operand_count == 2 && !dest_is_dir {
-        // SAFETY: Copies single file to target destination path.
+    if count == 2 && !dest_is_dir {
+        // SAFETY: Copying single source to target destination.
         unsafe { copy_path(operands[0], dest, recursive, force) };
     } else {
-        for i in 0..operand_count - 1 {
-            let src = operands[i];
-            // SAFETY: Extracts basename of source file.
-            let base = unsafe { get_basename(src) };
-            let mut full_target = [0u8; 256];
-            // SAFETY: Constructs full destination path under target directory.
-            unsafe {
-                let dest_len = strlen(dest);
-                let base_len = strlen(base);
-                let need_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' {
-                    1
-                } else {
-                    0
-                };
-
-                if dest_len + need_slash + base_len < 255 {
-                    core::ptr::copy_nonoverlapping(dest, full_target.as_mut_ptr(), dest_len);
-                    if need_slash == 1 {
-                        full_target[dest_len] = b'/';
-                    }
-                    core::ptr::copy_nonoverlapping(
-                        base,
-                        full_target.as_mut_ptr().add(dest_len + need_slash),
-                        base_len,
-                    );
-                    full_target[dest_len + need_slash + base_len] = 0;
-                    copy_path(src, full_target.as_ptr(), recursive, force);
-                }
-            }
+        let mut target_buf = [0u8; 256];
+        for i in 0..count - 1 {
+            // SAFETY: Extracting basename of source operand.
+            let base = unsafe { get_basename(operands[i]) };
+            // SAFETY: Joining destination directory and basename.
+            let full = unsafe { join_path(dest, base, &mut target_buf) };
+            // SAFETY: Copying operand into destination directory.
+            unsafe { copy_path(operands[i], full, recursive, force) };
         }
     }
 }
@@ -835,20 +686,20 @@ pub unsafe fn handle_cp(argc: usize, argv: &[*const u8; 16]) {
 ///
 /// `src` and `dest` must be valid pointers to null-terminated C-strings.
 pub unsafe fn move_path(src: *const u8, dest: *const u8, force: bool) -> i32 {
-    // SAFETY: Attempts atomic rename syscall first.
+    // SAFETY: Attempting atomic rename syscall first.
     let res = unsafe { rename(src, dest) };
     if res == 0 {
         return 0;
     }
-    // SAFETY: Falls back to recursive copy and remove.
+    // SAFETY: Falling back to recursive copy and delete on cross-device move.
     let cp_res = unsafe { copy_path(src, dest, true, force) };
     if cp_res == 0 {
-        // SAFETY: Removes source path on successful copy.
+        // SAFETY: Unlinking source path after successful copy.
         unsafe { remove_path(src, true, true) };
         0
     } else {
+        // SAFETY: Printing error message on move failure.
         if !force {
-            // SAFETY: Prints error to stdout.
             unsafe { print_error(b"mv\0".as_ptr(), src, res) };
         }
         res
@@ -863,93 +714,57 @@ pub unsafe fn move_path(src: *const u8, dest: *const u8, force: bool) -> i32 {
 pub unsafe fn handle_mv(argc: usize, argv: &[*const u8; 16]) {
     let mut force = false;
     let mut operands: [*const u8; 16] = [core::ptr::null(); 16];
-    let mut operand_count = 0;
+    let mut count = 0;
 
     for i in 1..argc {
         let arg = argv[i];
         if arg.is_null() {
             continue;
         }
-        // SAFETY: Checks flag argument.
-        let is_flag = unsafe { *arg == b'-' && *arg.add(1) != 0 };
-        if is_flag {
-            // SAFETY: Parses flag characters.
+        // SAFETY: Checking if argument is a command line flag.
+        if unsafe { *arg == b'-' && *arg.add(1) != 0 } {
+            // SAFETY: Parsing flag options for mv.
             unsafe {
                 let mut ptr = arg.add(1);
                 while *ptr != 0 {
-                    match *ptr {
-                        b'f' => force = true,
-                        _ => {}
+                    if *ptr == b'f' {
+                        force = true;
                     }
                     ptr = ptr.add(1);
                 }
             }
-        } else if operand_count < 16 {
-            operands[operand_count] = arg;
-            operand_count += 1;
+        } else if count < 16 {
+            operands[count] = arg;
+            count += 1;
         }
     }
-
-    if operand_count == 0 {
-        // SAFETY: Prints error to stdout.
+    if count < 2 {
+        // SAFETY: Printing missing operand error to stderr.
         unsafe { puts(b"mv: missing file operand\0".as_ptr()) };
         return;
     }
-    if operand_count == 1 {
-        // SAFETY: Prints error to stdout.
-        unsafe {
-            printf(
-                b"mv: missing destination file operand after '%s'\n\0".as_ptr(),
-                operands[0],
-            );
-        }
-        return;
-    }
-
-    let dest = operands[operand_count - 1];
+    let dest = operands[count - 1];
     let mut dest_st = Stat::default();
-    // SAFETY: Checks if destination is a directory.
+    // SAFETY: Checking if destination path is an existing directory.
     let dest_is_dir = unsafe { stat(dest, &mut dest_st) == 0 && (dest_st.st_mode & S_IFDIR) != 0 };
 
-    if operand_count > 2 && !dest_is_dir {
-        // SAFETY: Prints error to stdout.
+    if count > 2 && !dest_is_dir {
+        // SAFETY: Printing error message when multiple sources specified without directory target.
         unsafe { printf(b"mv: target '%s' is not a directory\n\0".as_ptr(), dest) };
         return;
     }
-
-    if operand_count == 2 && !dest_is_dir {
-        // SAFETY: Moves single file to destination.
+    if count == 2 && !dest_is_dir {
+        // SAFETY: Moving single source to target destination.
         unsafe { move_path(operands[0], dest, force) };
     } else {
-        for i in 0..operand_count - 1 {
-            let src = operands[i];
-            // SAFETY: Extracts basename of source file.
-            let base = unsafe { get_basename(src) };
-            let mut full_target = [0u8; 256];
-            // SAFETY: Constructs full destination path under target directory and moves file.
-            unsafe {
-                let dest_len = strlen(dest);
-                let base_len = strlen(base);
-                let need_slash = if dest_len > 0 && *dest.add(dest_len - 1) != b'/' {
-                    1
-                } else {
-                    0
-                };
-
-                if dest_len + need_slash + base_len < 255 {
-                    core::ptr::copy_nonoverlapping(dest, full_target.as_mut_ptr(), dest_len);
-                    if need_slash == 1 {
-                        full_target[dest_len] = b'/';
-                    }
-                    core::ptr::copy_nonoverlapping(
-                        base,
-                        full_target.as_mut_ptr().add(dest_len + need_slash),
-                        base_len,
-                    );
-                    full_target[dest_len + need_slash + base_len] = 0;
-                    move_path(src, full_target.as_ptr(), force);
-                }
-            }
+        let mut target_buf = [0u8; 256];
+        for i in 0..count - 1 {
+            // SAFETY: Extracting basename of source operand.
+            let base = unsafe { get_basename(operands[i]) };
+            // SAFETY: Joining destination directory and basename.
+            let full = unsafe { join_path(dest, base, &mut target_buf) };
+            // SAFETY: Moving operand into destination directory.
+            unsafe { move_path(operands[i], full, force) };
         }
     }
 }
