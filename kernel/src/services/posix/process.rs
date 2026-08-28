@@ -2,10 +2,12 @@
 
 use super::{copy_user_path, map_user_error};
 use crate::ostd::mm::{USER_STR_MAX, UserPtr};
+use crate::ostd::sync::SpinLock;
 use crate::ostd::task::{SyscallRegisters, TrapFrame};
 use crate::services::ipc::SIGNALS;
 use crate::services::process::elf::load_elf;
 use crate::services::process::*;
+use alloc::sync::Arc;
 use core::sync::atomic::Ordering;
 use posix_abi::*;
 
@@ -190,6 +192,9 @@ fn encode_wait_status(exit_code: i32, killed_by_sig: Option<i32>) -> i32 {
 }
 
 /// Waits for child process state changes (termination or stop).
+///
+/// Complies with ADR-0002 L4 lock ordering: snapshots candidate `Arc` handles under `PROCESS_TABLE`,
+/// drops the table lock, and inspects individual `Process` locks without holding `PROCESS_TABLE`.
 pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
     let calling_pid = CURRENT_PID.load(Ordering::SeqCst);
 
@@ -199,75 +204,73 @@ pub fn sys_wait4(pid: i32, status_ptr: *mut i32, options: i32) -> isize {
         let mut exit_status = 0;
         let mut should_switch = false;
 
-        {
-            let mut table = PROCESS_TABLE.lock();
-
+        // Phase 1: Snapshot candidate child processes under PROCESS_TABLE lock (Tier 1)
+        let candidates: alloc::vec::Vec<(i32, Arc<SpinLock<Process>>)> = {
+            let table = PROCESS_TABLE.lock();
             if pid == -1 || pid == 0 || pid < -1 {
-                // Wait for any child where ppid == calling_pid
-                for (&p, proc_arc) in table.iter() {
-                    let proc = proc_arc.lock();
-                    if proc.ppid == calling_pid {
-                        has_children = true;
-                        if proc.state == ProcessState::Zombie {
-                            reaped_pid = Some(p);
-                            exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
-                            break;
-                        }
-                    }
-                }
+                table.iter().map(|(&p, arc)| (p, arc.clone())).collect()
             } else {
-                // Wait for specific child pid
-                if let Some(proc_arc) = table.get(&pid) {
-                    let proc = proc_arc.lock();
-                    if proc.ppid == calling_pid {
-                        has_children = true;
-                        if proc.state == ProcessState::Zombie {
-                            reaped_pid = Some(pid);
-                            exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
-                        }
-                    } else {
-                        // Target is not a child of the calling process -> -ECHILD
-                        return -(ECHILD as isize);
-                    }
-                } else {
-                    // Target PID does not exist in table -> -ECHILD
-                    return -(ECHILD as isize);
+                match table.get(&pid) {
+                    Some(arc) => alloc::vec![(pid, arc.clone())],
+                    None => alloc::vec![],
+                }
+            }
+        }; // PROCESS_TABLE lock released before acquiring Process locks (ADR-0002 L4)
+
+        if pid > 0 && candidates.is_empty() {
+            return -(ECHILD as isize);
+        }
+
+        // Phase 2: Inspect candidate child processes without holding PROCESS_TABLE
+        for &(p, ref proc_arc) in &candidates {
+            let proc = proc_arc.lock();
+            if proc.ppid == calling_pid {
+                has_children = true;
+                if proc.state == ProcessState::Zombie {
+                    reaped_pid = Some(p);
+                    exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
+                    break;
+                }
+            }
+        }
+
+        if !has_children {
+            return -(ECHILD as isize);
+        }
+
+        if let Some(target) = reaped_pid {
+            let mut table = PROCESS_TABLE.lock();
+            table.remove(&target);
+        } else {
+            if options & WNOHANG != 0 {
+                return 0;
+            }
+
+            // Mark current process as Blocked
+            crate::services::scheduler::mark_current_blocked();
+
+            // Re-check candidates to close lost-wakeup race with concurrent sys_exit
+            let mut zombie_found = false;
+            for &(p, ref proc_arc) in &candidates {
+                let proc = proc_arc.lock();
+                if proc.ppid == calling_pid && proc.state == ProcessState::Zombie {
+                    zombie_found = true;
+                    reaped_pid = Some(p);
+                    exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
+                    break;
                 }
             }
 
-            if let Some(target) = reaped_pid {
-                table.remove(&target);
-            } else if has_children {
-                if options & WNOHANG != 0 {
-                    return 0;
-                }
-                // Mark current process as Blocked under table lock
-                crate::services::scheduler::mark_current_blocked();
-
-                // Re-check to close lost-wakeup race with sys_exit
-                let mut zombie_found = false;
-                for (&p, proc_arc) in table.iter() {
-                    let proc = proc_arc.lock();
-                    if proc.ppid == calling_pid && proc.state == ProcessState::Zombie {
-                        zombie_found = true;
-                        reaped_pid = Some(p);
-                        exit_status = encode_wait_status(proc.exit_code, proc.killed_by_sig);
-                        break;
-                    }
-                }
-
-                if zombie_found {
-                    crate::services::scheduler::mark_current_running();
-                    if let Some(target) = reaped_pid {
-                        table.remove(&target);
-                    }
-                } else {
-                    should_switch = true;
+            if zombie_found {
+                crate::services::scheduler::mark_current_running();
+                if let Some(target) = reaped_pid {
+                    let mut table = PROCESS_TABLE.lock();
+                    table.remove(&target);
                 }
             } else {
-                return -(ECHILD as isize);
+                should_switch = true;
             }
-        } // PROCESS_TABLE lock dropped before writing to user memory or switching
+        }
 
         if let Some(target) = reaped_pid {
             SIGNALS.cleanup_process(target);

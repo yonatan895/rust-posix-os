@@ -216,8 +216,7 @@ pub fn alloc_pid() -> i32 {
     }
 }
 
-/// Looks up the currently active process from the global process table.
+/// Retrieves an `Arc` reference to the currently running process on the local CPU without taking `PROCESS_TABLE`.
 pub fn get_current_process() -> Option<Arc<SpinLock<Process>>> {
-    let pid = CURRENT_PID.load(Ordering::SeqCst);
-    PROCESS_TABLE.lock().get(&pid).cloned()
+    crate::services::scheduler::CURRENT_PROCESS.lock().clone()
 }
